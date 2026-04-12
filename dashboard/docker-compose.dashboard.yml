@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  verda-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: verda-dashboard-gradio
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+      - /tmp/.cache:size=64m,mode=0700
+      - /tmp/mpl:size=16m,mode=0700
+    environment:
+      GRADIO_ANALYTICS_ENABLED: "False"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      DO_NOT_TRACK: "1"
+      HOME: /tmp
+      XDG_CACHE_HOME: /tmp/.cache
+      MPLCONFIGDIR: /tmp/mpl
+      DSTACK_SERVER_URL: "http://host.docker.internal:3000"
+      DSTACK_SERVER_ADMIN_TOKEN: "${DSTACK_SERVER_ADMIN_TOKEN}"
+      MLFLOW_URL: "http://mlflow:5000"
+      TRAINER_CONTAINER: "${TRAINER_CONTAINER:-minimind-trainer}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - ./artifacts-pull:/artifacts-pull:ro
+      - ./:/tunnel:ro
+    ports:
+      - "7860:7860"
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - verda-mlflow
+
+networks:
+  verda-mlflow:
+    external: true
+    name: verda-mlflow

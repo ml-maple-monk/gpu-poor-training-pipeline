@@ -294,15 +294,54 @@ cmd_remote() {
     log "[run.sh] Remote training complete"
 }
 
+# ── Subcommand: dashboard ─────────────────────────────────────────────────────
+cmd_dashboard() {
+    local action="${1:-up}"
+    shift || true
+    local compose_file="$REPO_ROOT/dashboard/docker-compose.dashboard.yml"
+
+    if [ ! -f "$compose_file" ]; then
+        die "dashboard/docker-compose.dashboard.yml not found. Run from repo root."
+    fi
+
+    # Ensure verda-mlflow network exists (create if absent)
+    if ! docker network inspect verda-mlflow >/dev/null 2>&1; then
+        log "Creating external network 'verda-mlflow'..."
+        docker network create verda-mlflow || true
+    fi
+
+    case "$action" in
+        up)
+            log "Starting Verda Dashboard..."
+            if [ -z "${DSTACK_SERVER_ADMIN_TOKEN:-}" ]; then
+                log "WARN: DSTACK_SERVER_ADMIN_TOKEN not set — dstack panels will be degraded"
+            fi
+            docker compose -f "$compose_file" up -d --build "$@"
+            log "Dashboard available at http://localhost:7860"
+            ;;
+        down)
+            log "Stopping Verda Dashboard..."
+            docker compose -f "$compose_file" down "$@"
+            ;;
+        logs)
+            docker compose -f "$compose_file" logs -f "$@"
+            ;;
+        *)
+            die "Unknown dashboard action: $action  (try: up | down | logs)"
+            ;;
+    esac
+}
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 SUBCOMMAND="${1:-}"
 shift || true
 
 case "$SUBCOMMAND" in
-    setup)    cmd_setup ;;
-    local)    cmd_local "$@" ;;
-    remote)   cmd_remote "$@" ;;
-    teardown) cmd_teardown ;;
+    setup)     cmd_setup ;;
+    local)     cmd_local "$@" ;;
+    remote)    cmd_remote "$@" ;;
+    teardown)  cmd_teardown ;;
+    dashboard) cmd_dashboard "$@" ;;
     "")
         echo "Usage: ./run.sh <subcommand> [options]"
         echo ""
@@ -311,6 +350,7 @@ case "$SUBCOMMAND" in
         echo "  local [args...]     Local docker-compose training"
         echo "  remote [flags]      Remote training on Verda via dstack"
         echo "  teardown            Kill tunnel, stop dstack runs"
+        echo "  dashboard [action]  Manage the Gradio dashboard (up|down|logs)"
         echo ""
         echo "Remote flags:"
         echo "  --pull-artifacts    Pull checkpoints after run"
@@ -320,6 +360,6 @@ case "$SUBCOMMAND" in
         exit 1
         ;;
     *)
-        die "Unknown subcommand: $SUBCOMMAND  (try: setup | local | remote | teardown)"
+        die "Unknown subcommand: $SUBCOMMAND  (try: setup | local | remote | teardown | dashboard)"
         ;;
 esac

@@ -1,7 +1,8 @@
-# pretrain.dstack.yml — dstack task for minimind pretraining on Verda H100
+# pretrain.dstack.yml — dstack task for minimind pretraining on Verda spot
 #
 # Usage (via run.sh remote — do not invoke directly):
-#   IMAGE_SHA=<git-short-sha> GH_USER=<github-user> \
+#   IMAGE_SHA=<git-short-sha> \
+#   VCR_USERNAME=<verda-registry-user> VCR_PASSWORD=<token> \
 #   HF_TOKEN=<token> MLFLOW_TRACKING_URI=<cf-tunnel-url> \
 #   dstack apply -f dstack/pretrain.dstack.yml -y
 #
@@ -11,17 +12,22 @@
 type: task
 name: verda-minimind-pretrain
 
-image: ghcr.io/${{ env.GH_USER }}/verda-minimind:${{ env.IMAGE_SHA }}
+# Verda Container Registry (vccr.io) — colocated with Verda compute,
+# so pulls are fast and don't traverse the public internet.
+image: vccr.io/f53909d3-a071-4826-8635-a62417ffc867/verda-minimind:${{ env.IMAGE_SHA }}
+registry_auth:
+  username: ${{ env.VCR_USERNAME }}
+  password: ${{ env.VCR_PASSWORD }}
 
 env:
   # Required — injected by run.sh remote from host files
   - HF_TOKEN
   - MLFLOW_TRACKING_URI
   # Optional overrides with defaults
-  - MLFLOW_EXPERIMENT_NAME=minimind-pretrain
+  - MLFLOW_EXPERIMENT_NAME=minimind-pretrain-remote
   - MLFLOW_ARTIFACT_UPLOAD=0
   - VERDA_PROFILE=remote
-  - DSTACK_RUN_NAME=${{ run.run_name }}
+  - DSTACK_RUN_NAME=verda-minimind-pretrain
   # Dataset/output path overrides (rarely changed)
   - OUT_DIR=/workspace/out
   - HF_DATASET_REPO=jingyaogong/minimind_dataset
@@ -32,13 +38,12 @@ commands:
 
 resources:
   gpu:
-    # Primary: H100 80GB; fallback: A100 80GB
-    # dstack will try H100 first; if no capacity, falls back to A100
-    name: [H100, A100]
+    # Any H100/H200/A100 spot; dstack picks by price within max_price
+    name: [H100, H200, A100]
     count: 1
 
 spot_policy: spot
-max_price: 2.0        # USD/hr — H100 spot ~$2/hr; A100 ~$1.5/hr
+max_price: 1.5        # USD/hr — H200 spot ~$1.19; A100 80 ~$0.45; H100 spot ~$0.80
 max_duration: 10m     # safety cap for demo runs
 
 retry:
@@ -48,11 +53,8 @@ retry:
     - interruption
   duration: 30m       # max total retry window
 
-# ── Private GHCR variant ──────────────────────────────────────────────────────
-# Uncomment if you set the GHCR package to private.
-# Requires a dstack secret named GH_TOKEN:
-#   dstack secret add GH_TOKEN < gh_token
-#
+# ── Alternative registry: GHCR (public or private) ────────────────────────────
+# image: ghcr.io/${{ env.GH_USER }}/verda-minimind:${{ env.IMAGE_SHA }}
 # registry_auth:
 #   username: ${{ env.GH_USER }}
-#   password: ${{ secrets.GH_TOKEN }}
+#   password: ${{ env.GH_TOKEN }}

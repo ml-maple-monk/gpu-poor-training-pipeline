@@ -25,3 +25,4 @@ data/*
 __pycache__/
 .pytest_cache/
 .omx/
+dstack/.*rendered*.yml

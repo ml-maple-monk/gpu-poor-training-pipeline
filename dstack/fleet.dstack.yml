@@ -1,0 +1,13 @@
+type: fleet
+name: verda-spot
+nodes:
+  min: 0
+  max: 2
+resources:
+  gpu:
+    vendor: nvidia
+    name: [H100, H200, A100]
+    count: 1
+backends: [verda]
+spot_policy: spot
+max_price: 1.5
