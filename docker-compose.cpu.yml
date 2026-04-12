@@ -1,9 +1,6 @@
 services:
   verda-local:
-    deploy:
-      resources:
-        reservations:
-          devices: []
+    deploy: !reset null
     environment:
       ALLOW_DEGRADED: "1"
       VERDA_FIDELITY: "degraded-no-gpu"
