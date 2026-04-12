@@ -1,0 +1,57 @@
+# .dockerignore for training/Dockerfile.remote
+# Excludes large/sensitive/irrelevant files from the Docker build context.
+
+# Dataset files (not baked into image — downloaded at container start via HF)
+minimind/dataset/*.jsonl
+minimind/dataset/*.bin
+minimind/dataset/*.arrow
+data/
+artifacts-pull/
+
+# Git history (minimind must keep .git dir for git apply to work — exclude only root .git)
+.git/
+
+# OMC state and plans
+.omc/
+
+# Secret and token files — must NEVER enter image
+secrets
+hf_token
+gh_token
+gh_user
+.env
+.env.*
+!.env.example.*
+
+# Local compose files and mlflow stack (not needed in remote image)
+docker-compose*.yml
+training/mlflow-stack/
+
+# Python artifacts
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+training/.venv/
+**/.venv/
+
+# Editor and OS noise
+.DS_Store
+**/*.swp
+**/*.swo
+.idea/
+.vscode/
+
+# dstack files (host-side tooling, not needed in image)
+dstack/
+
+# Log files
+*.log
+.dstack-server.log
+.cf-tunnel.*
+.run-ids
+
+# Other local scripts not needed in image
+Makefile
+scripts/
+app/

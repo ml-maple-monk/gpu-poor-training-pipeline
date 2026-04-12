@@ -1,0 +1,58 @@
+# pretrain.dstack.yml — dstack task for minimind pretraining on Verda H100
+#
+# Usage (via run.sh remote — do not invoke directly):
+#   IMAGE_SHA=<git-short-sha> GH_USER=<github-user> \
+#   HF_TOKEN=<token> MLFLOW_TRACKING_URI=<cf-tunnel-url> \
+#   dstack apply -f dstack/pretrain.dstack.yml -y
+#
+# No `files:` stanza — the image is the source of truth.
+# Dataset is downloaded at container start via HF_TOKEN.
+
+type: task
+name: verda-minimind-pretrain
+
+image: ghcr.io/${{ env.GH_USER }}/verda-minimind:${{ env.IMAGE_SHA }}
+
+env:
+  # Required — injected by run.sh remote from host files
+  - HF_TOKEN
+  - MLFLOW_TRACKING_URI
+  # Optional overrides with defaults
+  - MLFLOW_EXPERIMENT_NAME=minimind-pretrain
+  - MLFLOW_ARTIFACT_UPLOAD=0
+  - VERDA_PROFILE=remote
+  - DSTACK_RUN_NAME=${{ run.run_name }}
+  # Dataset/output path overrides (rarely changed)
+  - OUT_DIR=/workspace/out
+  - HF_DATASET_REPO=jingyaogong/minimind_dataset
+  - HF_DATASET_FILENAME=pretrain_t2t_mini.jsonl
+
+commands:
+  - bash /opt/minimind/training/remote-entrypoint.sh
+
+resources:
+  gpu:
+    # Primary: H100 80GB; fallback: A100 80GB
+    # dstack will try H100 first; if no capacity, falls back to A100
+    name: [H100, A100]
+    count: 1
+
+spot_policy: spot
+max_price: 2.0        # USD/hr — H100 spot ~$2/hr; A100 ~$1.5/hr
+max_duration: 10m     # safety cap for demo runs
+
+retry:
+  # Retry on infrastructure events only — NOT on training errors (exit != 0)
+  on_events:
+    - no-capacity
+    - interruption
+  duration: 30m       # max total retry window
+
+# ── Private GHCR variant ──────────────────────────────────────────────────────
+# Uncomment if you set the GHCR package to private.
+# Requires a dstack secret named GH_TOKEN:
+#   dstack secret add GH_TOKEN < gh_token
+#
+# registry_auth:
+#   username: ${{ env.GH_USER }}
+#   password: ${{ secrets.GH_TOKEN }}

@@ -1,5 +1,14 @@
 secrets
 hf_token
+gh_token
+gh_user
+.omc/state/gh_user.cache
+artifacts-pull/
+.dstack-server.log
+.cf-tunnel.log
+.cf-tunnel.url
+.cf-tunnel.pid
+.run-ids
 minimind/
 training/.venv/
 .claude/

@@ -98,3 +98,113 @@ See [PARITY.md](./PARITY.md) for a measured comparison between Verda documented 
 - **[pass](https://www.passwordstore.org/)** — GPG-based password store; scriptable via `pass show verda/secrets`
 
 Until migrated, ensure `./secrets` is in `.gitignore` (already configured), has mode 600, and is never committed or transmitted.
+
+---
+
+## Remote training on Verda via dstack
+
+Run minimind pretraining on a Verda H100 spot instance, with live metrics streaming to your local MLflow via a Cloudflare Quick Tunnel.
+
+### Prerequisites
+
+| Requirement | Install hint |
+|---|---|
+| **GitHub PAT** with `write:packages` scope | [github.com/settings/tokens](https://github.com/settings/tokens) — classic token, tick `write:packages`. If your org enforces SSO, click "Authorize" next to your org after creation. |
+| **cloudflared** | `curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared` |
+| **dstack** | `pip install --user dstack` |
+| **docker** | Already required for local training |
+| **rsync** | `sudo apt install rsync` |
+
+### Credential files (all gitignored, mode 600)
+
+```bash
+# GitHub PAT (write:packages)
+echo "ghp_YOUR_TOKEN" > gh_token && chmod 600 gh_token
+
+# Hugging Face token (read access to dataset repos)
+echo "hf_YOUR_TOKEN" > hf_token && chmod 600 hf_token
+
+# Verda credentials — already present from local setup
+# Format in ./secrets:
+#   Secret: <client_secret>
+#   CliendID : <client_id>   (note: Verda UI typo is preserved)
+```
+
+### Walkthrough
+
+```bash
+# Step 1 — setup: preflight + dstack config
+./run.sh setup
+
+# Step 2 — start MLflow stack (if not already running)
+docker compose -f training/mlflow-stack/docker-compose.mlflow.yml up -d
+curl http://localhost:5000/health   # should return OK
+
+# Step 3 — launch remote training
+#   Builds image → pushes to GHCR → starts CF tunnel → submits dstack task
+./run.sh remote
+
+# With optional artifact pull (rsync checkpoints after run completes)
+./run.sh remote --pull-artifacts
+
+# Skip rebuild if image is already pushed
+./run.sh remote --skip-build
+
+# Step 4 — teardown (kill tunnel, stop any tracked runs)
+./run.sh teardown
+```
+
+### Making the GHCR package public
+
+After the first `build-and-push.sh` run, the package is set public automatically via:
+
+```bash
+curl -X PATCH \
+  -H "Authorization: Bearer $(cat gh_token)" \
+  -H "Accept: application/vnd.github+json" \
+  https://api.github.com/user/packages/container/verda-minimind/visibility \
+  -d '{"visibility":"public"}'
+```
+
+Manual fallback: `https://github.com/users/YOUR_USER/packages/container/verda-minimind/settings`
+
+### Private GHCR variant
+
+If you need to keep the image private, uncomment the `registry_auth` block in `dstack/pretrain.dstack.yml` and add a dstack secret:
+
+```bash
+dstack secret add GH_TOKEN < gh_token
+```
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `preflight.sh` fails: `gh_token not found` | `echo TOKEN > gh_token && chmod 600 gh_token` |
+| `preflight.sh` fails: `dstack not found` | `pip install --user dstack` |
+| `preflight.sh` fails: `cloudflared not found` | See install hint in Prerequisites table above |
+| MLflow not responding at :5000 | `docker compose -f training/mlflow-stack/docker-compose.mlflow.yml up -d` |
+| CF tunnel URL not appearing in 30s | Check `.cf-tunnel.log`; cloudflared may be rate-limited — retry after 60s |
+| `dstack apply` times out (exit 124) | Pull budget (180s) exceeded; run is stopped automatically; retry with `--skip-build` |
+| Checkpoint missing after preemption | Accepted trade-off — spot H100 can be reclaimed; re-run to continue |
+| `docker push` fails: denied | Re-run `build-and-push.sh`; token may have expired or package visibility changed |
+| `dstack server` log shows auth error | Re-run `./run.sh setup` to refresh `~/.dstack/server/config.yml` |
+
+### How it works
+
+```
+run.sh remote
+  ├── preflight.sh (tools + tokens)
+  ├── MLflow health check (:5000)
+  ├── dstack server health + autostart
+  ├── build-and-push.sh → ghcr.io/USER/verda-minimind:SHA
+  ├── run-tunnel.sh → .cf-tunnel.url (ephemeral CF Quick Tunnel)
+  ├── dstack apply pretrain.dstack.yml (timeout 180s)
+  │     └── worker: remote-entrypoint.sh
+  │           ├── download pretrain_t2t_mini.jsonl from HF
+  │           └── python train_pretrain.py → metrics → MLflow via tunnel
+  ├── [--pull-artifacts] dstack ssh → tar | tar to artifacts-pull/RUN_NAME/
+  └── EXIT trap → kill tunnel, dstack stop runs
+```
+
+See `training/remote-README.md` for a condensed operator cheat sheet.
