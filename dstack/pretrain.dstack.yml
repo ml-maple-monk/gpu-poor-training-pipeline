@@ -36,10 +36,11 @@ env:
 commands:
   - bash /opt/minimind/training/remote-entrypoint.sh
 
-# Expose container SSH (sshd launched by remote-entrypoint.sh if pubkey baked in).
-# dstack forwards 2222 (local) → 22 (container) when `dstack attach` is used.
-ports:
-  - "2222:22"
+# SSH: dstack-runner already runs sshd on :10022 inside the container with
+# AuthorizedKeysFile honoring /root/.ssh/authorized_keys. Our WSL2 pubkey is
+# baked in via Dockerfile.remote's SSH_PUBKEY ARG, so:
+#   ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes verda-minimind-pretrain
+# works after `dstack attach`. No custom sshd, no port 22 forward needed.
 
 resources:
   gpu:
