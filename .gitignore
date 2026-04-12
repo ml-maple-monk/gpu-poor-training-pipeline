@@ -3,6 +3,8 @@ hf_token
 minimind/
 training/.venv/
 .claude/
+**/.omc/state/
+**/.claude/
 .omc/state/
 .env.inference
 .env.mgmt
