@@ -35,6 +35,22 @@ echo "  Date UTC                 = $(date -u -Iseconds)"
 python3 -c "import torch; print(f'  torch={torch.__version__}  cuda={torch.cuda.is_available()}  device={torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"cpu\"}')" || true
 echo "================================================================"
 
+# ── Start sshd if a pubkey is present (baked in at build via SSH_PUBKEY ARG) ──
+if [ -s /root/.ssh/authorized_keys ] && command -v /usr/sbin/sshd >/dev/null 2>&1; then
+    # Generate host keys if missing, then daemonize.
+    ssh-keygen -A >/dev/null 2>&1 || true
+    mkdir -p /var/run/sshd
+    /usr/sbin/sshd -D -p "${SSH_PORT:-22}" \
+        -o PermitRootLogin=prohibit-password \
+        -o PasswordAuthentication=no \
+        -o StrictModes=no \
+        -o AllowTcpForwarding=yes \
+        > /tmp/sshd.log 2>&1 &
+    echo "[remote-entrypoint] sshd started on port ${SSH_PORT:-22} (pid=$!) — pubkey authorized"
+else
+    echo "[remote-entrypoint] sshd skipped (no /root/.ssh/authorized_keys or sshd not installed)"
+fi
+
 # ── Prepare directories ───────────────────────────────────────────────────────
 mkdir -p "$DATA_DIR" "$OUT_DIR"
 

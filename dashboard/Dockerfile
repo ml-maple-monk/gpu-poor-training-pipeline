@@ -17,6 +17,7 @@ ENV GRADIO_ANALYTICS_ENABLED=False \
 # so docker.io is NOT installed in the image (saves ~200MB and avoids split package issue)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libglib2.0-0 \
+        openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Non-root user ────────────────────────────────────────────────────────────
@@ -27,12 +28,15 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# ── Copy source ──────────────────────────────────────────────────────────────
+# ── Copy source + entrypoint ────────────────────────────────────────────────
 COPY src/ ./src/
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # ── Run as non-root ──────────────────────────────────────────────────────────
 USER app
 
 EXPOSE 7860
 
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["python", "-m", "src.app"]

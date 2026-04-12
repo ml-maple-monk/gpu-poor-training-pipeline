@@ -17,8 +17,18 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TOKENIZERS_PARALLELISM=false
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git curl coreutils rsync \
-    && rm -rf /var/lib/apt/lists/*
+        git curl coreutils rsync openssh-server \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/run/sshd /root/.ssh \
+    && chmod 700 /root/.ssh
+
+# Inject operator's SSH pubkey at build time (ARG) — empty value disables sshd.
+ARG SSH_PUBKEY=""
+RUN if [ -n "$SSH_PUBKEY" ]; then \
+        echo "$SSH_PUBKEY" > /root/.ssh/authorized_keys && \
+        chmod 600 /root/.ssh/authorized_keys; \
+    fi
+EXPOSE 22
 
 # Install Python dependencies
 COPY training/requirements.train.txt /tmp/requirements.train.txt

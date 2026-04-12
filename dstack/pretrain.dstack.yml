@@ -36,6 +36,11 @@ env:
 commands:
   - bash /opt/minimind/training/remote-entrypoint.sh
 
+# Expose container SSH (sshd launched by remote-entrypoint.sh if pubkey baked in).
+# dstack forwards 2222 (local) → 22 (container) when `dstack attach` is used.
+ports:
+  - "2222:22"
+
 resources:
   gpu:
     # Any H100/H200/A100 spot; dstack picks by price within max_price
@@ -45,6 +50,7 @@ resources:
 spot_policy: spot
 max_price: 1.5        # USD/hr — H200 spot ~$1.19; A100 80 ~$0.45; H100 spot ~$0.80
 max_duration: 10m     # safety cap for demo runs
+idle_duration: 0s     # terminate the instance the moment the task exits (no idle billing)
 
 retry:
   # Retry on infrastructure events only — NOT on training errors (exit != 0)

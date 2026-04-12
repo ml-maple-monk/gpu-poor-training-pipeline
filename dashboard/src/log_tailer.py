@@ -7,7 +7,9 @@ dstack mode: httpx.stream('POST', /api/runs/get_logs, ...) via safe_dstack_strea
 from __future__ import annotations
 
 import logging
+import os
 import signal
+import subprocess
 import threading
 import time
 from typing import Literal, Optional
@@ -20,6 +22,27 @@ from .safe_exec import safe_docker
 log = logging.getLogger(__name__)
 
 _RING_SIZE = 500
+_DSTACK_CLI = "/home/geeyang/.dstack-cli-venv/bin/dstack"
+_ALLOWED_DSTACK_CLI_VERBS = frozenset({"logs", "ps", "attach"})
+
+
+def _safe_dstack_cli(argv: list[str]) -> subprocess.Popen:
+    """Spawn dstack CLI with argv[0] in a whitelist of read-only verbs."""
+    if not argv or argv[0] not in _ALLOWED_DSTACK_CLI_VERBS:
+        raise ValueError(f"dstack CLI verb {argv[:1]!r} not in whitelist")
+    return subprocess.Popen(
+        [_DSTACK_CLI] + argv,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        env={
+            **os.environ,
+            "DSTACK_PROJECT": os.environ.get("DSTACK_PROJECT", "main"),
+            "DSTACK_SERVER": os.environ.get("DSTACK_SERVER", "http://host.docker.internal:3000"),
+            "DSTACK_TOKEN": os.environ.get("DSTACK_TOKEN", ""),
+        },
+    )
 
 
 class LogTailer:
@@ -107,11 +130,64 @@ class LogTailer:
             self._run_dstack()
 
     def _run_docker(self) -> None:
+        last_missing_notice_seq = -1
         while True:
             with self._lock:
                 if not self._running:
                     return
                 target = self.target
+
+            # Precheck: is the container present at all? Avoid thrashing
+            # "Error response from daemon: No such container" lines.
+            inspect_rc = None
+            try:
+                ins = safe_docker(["inspect", target])
+                _ = ins.communicate(timeout=5)
+                inspect_rc = ins.returncode
+            except Exception:
+                inspect_rc = 1
+            if inspect_rc != 0:
+                # Local container absent. If a REMOTE_RUN_NAME is configured,
+                # stream the remote Verda run's logs via the mounted dstack CLI.
+                remote_run = os.environ.get("REMOTE_RUN_NAME", "").strip()
+                if remote_run and os.path.exists(_DSTACK_CLI):
+                    _, cur = self.ring.snapshot()
+                    if cur != last_missing_notice_seq:
+                        self.ring.append(
+                            f"[remote] streaming dstack logs for run '{remote_run}' "
+                            f"(local container '{target}' idle)"
+                        )
+                        _, last_missing_notice_seq = self.ring.snapshot()
+                    try:
+                        rproc = _safe_dstack_cli(["attach", "--logs", remote_run])
+                        with self._lock:
+                            self._proc = rproc
+                        for line in rproc.stdout:  # type: ignore[union-attr]
+                            with self._lock:
+                                if not self._running:
+                                    break
+                            self.ring.append(redact(line.rstrip("\n")))
+                        rproc.wait()
+                    except Exception as exc:
+                        log.warning("dstack CLI log tailer error: %s", exc)
+                    finally:
+                        with self._lock:
+                            self._proc = None
+                    if self.shutdown_event.wait(timeout=5):
+                        return
+                    continue
+                # No remote run configured either — tidy notice + 30s backoff.
+                _, cur = self.ring.snapshot()
+                if cur != last_missing_notice_seq:
+                    self.ring.append(
+                        f"[local trainer idle] container '{target}' not running — "
+                        f"training may be remote (see dstack runs panel)"
+                    )
+                    _, last_missing_notice_seq = self.ring.snapshot()
+                if self.shutdown_event.wait(timeout=30):
+                    return
+                continue
+
             try:
                 proc = safe_docker(["logs", "-f", "--tail", "500", target])
                 with self._lock:
