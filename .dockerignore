@@ -1,0 +1,14 @@
+secrets
+.env*
+data/
+.git/
+.omc/
+__pycache__
+*.pyc
+.pytest_cache
+.gitignore
+PARITY.md
+README.md
+scripts/
+Makefile
+docker-compose*.yml

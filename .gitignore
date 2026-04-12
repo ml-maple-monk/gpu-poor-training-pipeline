@@ -1,0 +1,11 @@
+secrets
+.omc/state/
+.env.inference
+.env.mgmt
+.env
+data/*
+!data/.placeholder
+*.log
+*.pyc
+__pycache__/
+.pytest_cache/

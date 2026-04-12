@@ -1,0 +1,4 @@
+fastapi>=0.110
+uvicorn[standard]>=0.27
+# install separately if needed for real GPU workload; CUDA build must match base image
+# torch>=2.0
