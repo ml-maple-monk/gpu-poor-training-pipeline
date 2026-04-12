@@ -1,0 +1,9 @@
+transformers==4.57.6
+datasets==3.6.0
+jsonlines==4.0.0
+numpy==1.26.4
+huggingface_hub>=0.24.0
+# MLflow client + system-metrics (psutil + pynvml for NVIDIA GPU telemetry)
+mlflow==2.17.2
+psutil==5.9.8
+nvidia-ml-py==12.560.30

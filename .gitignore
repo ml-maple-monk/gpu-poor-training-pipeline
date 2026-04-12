@@ -1,4 +1,8 @@
 secrets
+hf_token
+minimind/
+training/.venv/
+.claude/
 .omc/state/
 .env.inference
 .env.mgmt
@@ -9,3 +13,4 @@ data/*
 *.pyc
 __pycache__/
 .pytest_cache/
+.omx/
