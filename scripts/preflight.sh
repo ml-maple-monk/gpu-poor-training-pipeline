@@ -35,7 +35,7 @@ elif ! nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | grep -q .
 fi
 
 # 4. Docker compose GPU reservation survives config parse
-if ! docker compose config 2>/dev/null | grep -A2 'resources:' | grep -q 'nvidia'; then
+if ! docker compose config 2>/dev/null | grep -q 'driver: nvidia'; then
     fail "docker compose config does not show nvidia GPU reservation — check docker-compose.yml and nvidia-container-toolkit"
 fi
 
@@ -54,6 +54,7 @@ done
 # 6. Clock skew check (WSL2 only — tolerate absence outside WSL)
 if command -v powershell.exe &>/dev/null; then
     WIN_TS=$(powershell.exe -NoProfile -Command "Get-Date -UFormat %s" 2>/dev/null | tr -d '[:space:][:cntrl:]') || WIN_TS=""
+    WIN_TS=${WIN_TS%.*}  # strip fractional seconds — bash can't do float arithmetic
     if [ -n "$WIN_TS" ]; then
         LINUX_TS=$(date -u +%s)
         SKEW=$(( LINUX_TS - WIN_TS ))
