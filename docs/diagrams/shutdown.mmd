@@ -1,0 +1,15 @@
+sequenceDiagram
+    participant SIG as SIGTERM
+    participant APP as app.py
+    participant LT as LogTailer
+    participant WK as Workers
+
+    SIG->>APP: signal
+    APP->>APP: shutdown_event.set()
+    APP->>LT: shutdown (SIGTERM then SIGKILL after grace)
+    APP->>WK: Thread.join (per_worker_budget)
+    alt all threads exited
+        APP->>APP: sys.exit(0)
+    else survivors exist
+        APP->>APP: log WARN and sys.exit(1)
+    end

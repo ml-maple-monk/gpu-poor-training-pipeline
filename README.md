@@ -94,36 +94,11 @@ Prints the resolved `dstack apply` shape (image, env, GPU filter, time cap) with
 
 ## Architecture
 
-```mermaid
-flowchart TD
-    DEV["developer"] --> CLI["gpupoor CLI<br/>src/gpupoor/cli.py"]
-    DEV --> RUN["run.sh"]
-    DEV --> MAKE["Makefile targets"]
-    RUN --> CLI
+<p align="center">
+  <img src="docs/diagrams/architecture.png" alt="gpupoor architecture — CLI dispatches one TOML RunConfig through ops, services, and one of the two backends (local or dstack)" width="820">
+</p>
 
-    CLI --> CFG["config.py<br/>TOML to RunConfig<br/>strict-keys"]
-
-    CFG --> OPS["ops/<br/>doctor, smoke, secrets<br/>leak-scan, check-anchors"]
-    CFG --> BACKEND{"backend.kind"}
-    CFG --> SERVICES["services/<br/>mlflow, dashboard, emulator"]
-
-    BACKEND -- local --> LOCAL["backends/local.py<br/>docker compose"]
-    BACKEND -- dstack --> DSTACK["backends/dstack.py<br/>launch_remote"]
-
-    LOCAL --> DOCKER["Docker"]
-    DSTACK --> DCLI["dstack CLI"]
-    DSTACK --> TUNNEL["Cloudflare tunnel<br/>cf-tunnel.url"]
-    DCLI --> VERDA["Verda fleet"]
-
-    SERVICES --> MLFLOW["MLflow<br/>port 5000"]
-    SERVICES --> DASH["Dashboard (Gradio)<br/>port 7860"]
-    TUNNEL --> MLFLOW
-
-    DASH --> COLLECTORS["7 collectors"]
-    COLLECTORS --> MLFLOW
-    COLLECTORS --> DCLI
-    COLLECTORS --> DOCKER
-```
+<sub><a href="./docs/diagrams/architecture.mmd">source (Mermaid)</a></sub>
 
 **Core contract:** the CLI loads one TOML into a `RunConfig` dataclass, resolves the `backend.kind`, and hands off to either the local or dstack backend. Everything else — MLflow, the dashboard, secrets scanning — is an `ops` or `services` helper invocable from the same CLI.
 
@@ -131,36 +106,11 @@ flowchart TD
 
 ## Remote launch flow
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant U as User
-    participant CLI as gpupoor CLI
-    participant D as dstack backend
-    participant O as ops
-    participant T as tunnel and dstack
-    participant V as Verda fleet
+<p align="center">
+  <img src="docs/diagrams/launch-sequence.png" alt="Remote launch sequence — preflight, build, tunnel, dstack apply, wait, success or cleanup" width="820">
+</p>
 
-    U->>CLI: launch dstack config.toml
-    CLI->>CLI: load_run_config (strict TOML)
-    CLI->>D: launch_remote(config, skip_build, dry_run)
-    D->>O: run_preflight (doctor, secrets, mlflow probe)
-    Note over D: abort early on any FAIL
-    D->>D: build and push image (unless skip-build)
-    D->>T: start Cloudflare tunnel
-    T-->>D: cf-tunnel.url
-    D->>T: dstack apply -f rendered.yml
-    T->>V: schedule run
-    V-->>T: state = running
-    D->>D: track_run (flock on .run-ids)
-    D->>D: wait_for_run_start (poll ps)
-    alt success
-        D-->>U: remote running, tunnel kept alive
-    else failure
-        D->>T: kill_tunnel (verify proc comm)
-        D-->>U: error and cleanup
-    end
-```
+<sub><a href="./docs/diagrams/launch-sequence.mmd">source (Mermaid)</a></sub>
 
 Source of truth: [`src/gpupoor/backends/dstack.py`](./src/gpupoor/backends/dstack.py) (`launch_remote`, `ensure_dstack_server`, `track_run`, `kill_tunnel`).
 
@@ -170,22 +120,11 @@ Source of truth: [`src/gpupoor/backends/dstack.py`](./src/gpupoor/backends/dstac
 
 The dashboard is a Gradio app that polls 7 sources on independent cadences and renders them into panels. Every external call is gated.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant W as CollectorWorker
-    participant G as safe_exec gates
-    participant S as External source
+<p align="center">
+  <img src="docs/diagrams/dashboard-poll.png" alt="Dashboard poll loop — every collector tick goes through argv or endpoint allowlists before touching any external source" width="720">
+</p>
 
-    loop every cadence_s
-        W->>G: argv or endpoint allowlist check
-        G-->>W: ValueError on unsafe input
-        W->>S: httpx get or subprocess Popen
-        S-->>W: raw payload
-        W->>W: update AppState under lock
-        W->>W: shutdown_event.wait(cadence)
-    end
-```
+<sub><a href="./docs/diagrams/dashboard-poll.mmd">source (Mermaid)</a></sub>
 
 | Source               | Collector                                | Cadence | Gate                               |
 | -------------------- | ---------------------------------------- | ------: | ---------------------------------- |
@@ -201,23 +140,11 @@ Log tailers run alongside collectors and use the same gates; `attach` is bound t
 
 ### Shutdown (SIGTERM)
 
-```mermaid
-sequenceDiagram
-    participant SIG as SIGTERM
-    participant APP as app.py
-    participant LT as LogTailer
-    participant WK as Workers
+<p align="center">
+  <img src="docs/diagrams/shutdown.png" alt="Shutdown sequence — SIGTERM sets the shutdown event, escalates log tailers to SIGKILL after grace, joins workers, exits with code 0 if all threads cleared or 1 if any survived" width="720">
+</p>
 
-    SIG->>APP: signal
-    APP->>APP: shutdown_event.set()
-    APP->>LT: shutdown (SIGTERM then SIGKILL after grace)
-    APP->>WK: Thread.join (per_worker_budget)
-    alt all threads exited
-        APP->>APP: sys.exit(0)
-    else survivors exist
-        APP->>APP: log WARN and sys.exit(1)
-    end
-```
+<sub><a href="./docs/diagrams/shutdown.mmd">source (Mermaid)</a></sub>
 
 The 35-second grace budget is split across live workers. Details: [`infrastructure/dashboard/src/app.py`](./infrastructure/dashboard/src/app.py) (`_shutdown_sequence`).
 
@@ -295,6 +222,19 @@ make mutants-baseline
 ```
 
 **PR-required checks are `quality` and `tests`.** Live, containerized, and remote-dependent lanes stay in the non-blocking `live-checks` workflow. Promotion criteria are tracked in `.omx/plans/prd-repo-guardrails.md`.
+
+### Regenerating the diagrams
+
+Diagram sources live in [`docs/diagrams/`](./docs/diagrams/) as Mermaid (`.mmd`) files. Rendered PNGs are committed alongside them so the README displays on any GitHub view (Mermaid rendering can be flaky). Regenerate after an edit:
+
+```bash
+npx @mermaid-js/mermaid-cli \
+  -i docs/diagrams/architecture.mmd \
+  -o docs/diagrams/architecture.png \
+  -s 3 -b white
+```
+
+`-s 3` renders at 3x for crisp display on retina screens.
 
 ### Environment files
 

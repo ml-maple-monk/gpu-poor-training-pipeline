@@ -1,0 +1,28 @@
+flowchart TD
+    DEV["developer"] --> CLI["gpupoor CLI<br/>src/gpupoor/cli.py"]
+    DEV --> RUN["run.sh"]
+    DEV --> MAKE["Makefile targets"]
+    RUN --> CLI
+
+    CLI --> CFG["config.py<br/>TOML to RunConfig<br/>strict-keys"]
+
+    CFG --> OPS["ops/<br/>doctor, smoke, secrets<br/>leak-scan, check-anchors"]
+    CFG --> BACKEND{"backend.kind"}
+    CFG --> SERVICES["services/<br/>mlflow, dashboard, emulator"]
+
+    BACKEND -- local --> LOCAL["backends/local.py<br/>docker compose"]
+    BACKEND -- dstack --> DSTACK["backends/dstack.py<br/>launch_remote"]
+
+    LOCAL --> DOCKER["Docker"]
+    DSTACK --> DCLI["dstack CLI"]
+    DSTACK --> TUNNEL["Cloudflare tunnel<br/>cf-tunnel.url"]
+    DCLI --> VERDA["Verda fleet"]
+
+    SERVICES --> MLFLOW["MLflow<br/>port 5000"]
+    SERVICES --> DASH["Dashboard (Gradio)<br/>port 7860"]
+    TUNNEL --> MLFLOW
+
+    DASH --> COLLECTORS["7 collectors"]
+    COLLECTORS --> MLFLOW
+    COLLECTORS --> DCLI
+    COLLECTORS --> DOCKER
