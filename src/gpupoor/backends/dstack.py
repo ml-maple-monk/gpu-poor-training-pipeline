@@ -111,14 +111,23 @@ def render_task(settings: dict[str, str], config: RunConfig, image_sha: str) -> 
     return rendered_task
 
 
-def dstack_latest_run_name(dstack_bin: str) -> str:
+def dstack_has_run(dstack_bin: str, run_name: str) -> bool:
+    """Return True if dstack ps reports a run with the given name.
+
+    Filtering by name avoids trusting runs[0] as "the run we just
+    launched". The dstack account may be shared across concurrent
+    launches and the CLI's run ordering is not contractually stable.
+    """
+    if not run_name:
+        return False
     output = subprocess.check_output([dstack_bin, "ps", "--json"], text=True)
     data = json.loads(output)
     runs = data.get("runs", []) if isinstance(data, dict) else data
-    if not runs:
-        return ""
-    run = runs[0]
-    return run.get("run_name") or (run.get("run_spec") or {}).get("run_name") or ""
+    for run in runs:
+        candidate = run.get("run_name") or (run.get("run_spec") or {}).get("run_name") or ""
+        if candidate == run_name:
+            return True
+    return False
 
 
 def dstack_run_status_triplet(dstack_bin: str, run_name: str) -> tuple[str, str, str]:
@@ -323,13 +332,18 @@ def launch_remote(
                 [dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], result.returncode
             )
 
-        run_name = dstack_latest_run_name(dstack_bin)
-        if run_name:
+        run_name = config.name
+        if dstack_has_run(dstack_bin, run_name):
             track_run(run_name)
             wait_for_run_start(
                 dstack_bin, run_name, max_wait=config.remote.run_start_timeout_seconds
             )
             launched_remote_run = True
+        else:
+            print(
+                f"[gpupoor] WARN: dstack apply reported success but run '{run_name}' "
+                "is not visible in dstack ps; skipping track/wait"
+            )
         if use_pull_artifacts:
             print("[gpupoor] WARN: pull-artifacts is still manual on the current dstack CLI")
     finally:

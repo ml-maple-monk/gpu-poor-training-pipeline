@@ -118,9 +118,7 @@ def test_launch_remote_keeps_tunnel_alive_after_success(
         lambda settings, config, image_sha: fake_repo_path(".tmp", "task.yml"),
     )
     monkeypatch.setattr(dstack, "read_required_secret", lambda filename: "hf-token")
-    monkeypatch.setattr(
-        dstack, "dstack_latest_run_name", lambda dstack_bin: "verda-minimind-pretrain"
-    )
+    monkeypatch.setattr(dstack, "dstack_has_run", lambda dstack_bin, run_name: True)
     wait_limits: list[int] = []
     monkeypatch.setattr(
         dstack, "wait_for_run_start", lambda *args, **kwargs: wait_limits.append(kwargs["max_wait"])
@@ -188,9 +186,7 @@ def test_launch_remote_cleans_up_tunnel_when_startup_fails(
         lambda settings, config, image_sha: fake_repo_path(".tmp", "task.yml"),
     )
     monkeypatch.setattr(dstack, "read_required_secret", lambda filename: "hf-token")
-    monkeypatch.setattr(
-        dstack, "dstack_latest_run_name", lambda dstack_bin: "verda-minimind-pretrain"
-    )
+    monkeypatch.setattr(dstack, "dstack_has_run", lambda dstack_bin, run_name: True)
     monkeypatch.setattr(
         dstack,
         "wait_for_run_start",
@@ -223,3 +219,66 @@ def test_wait_for_run_start_tolerates_retrying_no_capacity(monkeypatch: pytest.M
     monkeypatch.setattr(dstack.time, "sleep", lambda seconds: None)
 
     dstack.wait_for_run_start("dstack", "verda-remote-10m", max_wait=20)
+
+
+def _fake_ps_output(run_names: list[str]) -> str:
+    import json as _json
+
+    runs = [{"run_name": name} for name in run_names]
+    return _json.dumps({"runs": runs})
+
+
+def test_dstack_has_run_matches_by_name_not_order(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Filter by expected name instead of trusting runs[0]."""
+    output = _fake_ps_output(
+        [
+            "someone-else-run",
+            "verda-remote-10m",
+            "third-party-run",
+        ]
+    )
+    monkeypatch.setattr(
+        dstack.subprocess, "check_output", lambda *args, **kwargs: output
+    )
+
+    assert dstack.dstack_has_run("dstack", "verda-remote-10m") is True
+
+
+def test_dstack_has_run_returns_false_when_name_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    output = _fake_ps_output(["someone-else-run", "third-party-run"])
+    monkeypatch.setattr(
+        dstack.subprocess, "check_output", lambda *args, **kwargs: output
+    )
+
+    assert dstack.dstack_has_run("dstack", "verda-remote-10m") is False
+
+
+def test_dstack_has_run_returns_false_for_empty_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        dstack.subprocess,
+        "check_output",
+        lambda *args, **kwargs: _fake_ps_output([]),
+    )
+
+    assert dstack.dstack_has_run("dstack", "verda-remote-10m") is False
+
+
+def test_dstack_has_run_rejects_empty_name() -> None:
+    assert dstack.dstack_has_run("dstack", "") is False
+
+
+def test_dstack_has_run_reads_run_name_from_run_spec(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json as _json
+
+    payload = _json.dumps(
+        {
+            "runs": [
+                {"run_spec": {"run_name": "verda-remote-10m"}},
+            ]
+        }
+    )
+    monkeypatch.setattr(
+        dstack.subprocess, "check_output", lambda *args, **kwargs: payload
+    )
+
+    assert dstack.dstack_has_run("dstack", "verda-remote-10m") is True
