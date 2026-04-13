@@ -14,6 +14,8 @@ import threading
 import time
 from typing import Literal
 
+import httpx
+
 from .collectors.dstack_logs import stream_dstack_logs
 from .dstack_project import infer_dstack_project
 from .redact import redact
@@ -94,17 +96,45 @@ class LogTailer:
         self._terminate_source()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                # Per-tailer shutdown is best-effort; the app-level SIGTERM
+                # handler is responsible for process-wide exit decisions.
+                log.warning(
+                    "LogTailer[%s/%s] thread did not exit within shutdown budget",
+                    self.mode,
+                    self.target,
+                )
         log.debug("LogTailer[%s/%s] shut down", self.mode, self.target)
 
     def swap(self, new_target: str) -> None:
-        """Replace the current target. Shuts old source, starts new one."""
+        """Replace the current target. Shuts old source, starts new one.
+
+        Raises:
+            RuntimeError: if the old tailer thread cannot be joined even after
+                a second SIGTERM -> SIGKILL escalation. Raising is preferable
+                to silently resetting ``self.ring`` while the old thread is
+                still alive and could race on it.
+        """
         log.debug("LogTailer swap %s -> %s", self.target, new_target)
         with self._lock:
             self._running = False
         self._terminate_source()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=3)
-        # Reset for new target
+            if self._thread.is_alive():
+                # First teardown wasn't enough — escalate once more and retry.
+                log.warning(
+                    "LogTailer[%s/%s] old thread still alive after join(3s); escalating",
+                    self.mode,
+                    self.target,
+                )
+                self._terminate_source()
+                self._thread.join(timeout=2)
+                if self._thread.is_alive():
+                    raise RuntimeError(
+                        "log tailer thread refused to exit within swap budget"
+                    )
+        # Reset for new target (safe now: old thread is confirmed gone).
         with self._lock:
             self.target = new_target
             self.ring = RingBuffer(maxlen=_RING_SIZE)
@@ -252,20 +282,62 @@ class LogTailer:
                     return
             time.sleep(2)
 
-    def _terminate_source(self) -> None:
-        """Terminate the active subprocess or httpx stream."""
+    def _terminate_source(self, sigterm_timeout: float = 3.0) -> None:
+        """Terminate the active subprocess or httpx stream.
+
+        Single chokepoint for tearing down whichever source is active:
+          * docker/remote-CLI mode: SIGTERM -> wait ``sigterm_timeout`` seconds
+            -> SIGKILL if still alive.
+          * dstack streaming mode: close the httpx streaming context manager
+            (``__exit__``) so the underlying client is also released, not just
+            the response.
+
+        Exceptions from OS-level signal delivery and httpx teardown are logged
+        but never raised — this method is called from shutdown paths where the
+        caller has nothing useful to do on failure.
+        """
         with self._lock:
             proc = self._proc
+            httpx_cm = self._httpx_cm
             httpx_resp = self._httpx_resp
 
         if proc is not None:
             try:
                 proc.send_signal(signal.SIGTERM)
-            except Exception:
-                pass
+            except OSError as exc:
+                log.debug("SIGTERM send failed: %s", exc)
+            # Wait for graceful exit; escalate to SIGKILL if still alive.
+            deadline = time.monotonic() + sigterm_timeout
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.05)
+            if proc.poll() is None:
+                log.warning(
+                    "LogTailer child (pid=%s) ignored SIGTERM; escalating to SIGKILL",
+                    getattr(proc, "pid", "?"),
+                )
+                try:
+                    proc.kill()
+                except OSError as exc:
+                    log.debug("SIGKILL send failed: %s", exc)
 
-        if httpx_resp is not None:
+        if httpx_cm is not None:
+            # Closing the context manager releases both the response *and* the
+            # underlying httpx.Client. Calling _httpx_resp.close() alone would
+            # leak the client.
+            try:
+                httpx_cm.__exit__(None, None, None)
+            except httpx.HTTPError as exc:
+                log.debug("httpx context __exit__ raised: %s", exc)
+            except OSError as exc:
+                log.debug("httpx context __exit__ raised OSError: %s", exc)
+        elif httpx_resp is not None:
+            # No context manager recorded but we still have a response handle:
+            # close it defensively so the socket doesn't linger.
             try:
                 httpx_resp.close()
-            except Exception:
-                pass
+            except httpx.HTTPError as exc:
+                log.debug("httpx response close raised: %s", exc)
+            except OSError as exc:
+                log.debug("httpx response close raised OSError: %s", exc)
