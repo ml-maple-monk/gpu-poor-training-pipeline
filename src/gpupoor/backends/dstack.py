@@ -7,8 +7,6 @@ import os
 import platform
 import subprocess
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 try:
@@ -26,14 +24,14 @@ from gpupoor.config import (
 )
 from gpupoor.subprocess_utils import CommandError, bash_script, log_command, run_command
 from gpupoor.utils import repo_path
+from gpupoor.utils.http import http_ok
 
-
-def http_ok(url: str, *, timeout_seconds: int = 5) -> bool:
-    try:
-        with urllib.request.urlopen(url, timeout=timeout_seconds) as response:
-            return response.status == 200
-    except (urllib.error.URLError, OSError, TimeoutError):
-        return False
+__all__ = [
+    "ensure_dstack_server",
+    "http_ok",
+    "launch_remote",
+    "teardown_remote_state",
+]
 
 
 def ensure_dstack_server(

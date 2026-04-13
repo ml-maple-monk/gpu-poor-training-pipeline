@@ -8,6 +8,7 @@ from gpupoor.config import RunConfig
 from gpupoor.recipes.minimind import ensure_local_dataset
 from gpupoor.subprocess_utils import run_command
 from gpupoor.utils import repo_path
+from gpupoor.utils.compose import build_compose_cmd
 
 
 def _train_compose() -> Path:
@@ -19,20 +20,16 @@ def _mlflow_compose() -> Path:
 
 
 def local_training_command(extra_args: list[str] | None = None) -> list[str]:
-    return [
-        "docker",
-        "compose",
-        "-f",
-        str(_train_compose()),
-        "-f",
-        str(_mlflow_compose()),
+    return build_compose_cmd(
+        _train_compose(),
         "run",
         "--build",
         "--rm",
         "minimind-trainer",
         "/workspace/run-train.sh",
         *(extra_args or []),
-    ]
+        extra_files=[_mlflow_compose()],
+    )
 
 
 def _container_data_path(path: Path) -> str:

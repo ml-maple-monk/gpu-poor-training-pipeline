@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import os
 import subprocess
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 from gpupoor.config import DoctorConfig, SmokeConfig
@@ -15,6 +12,9 @@ from gpupoor.ops.doctor import run_preflight
 from gpupoor.ops.secrets import leak_scan
 from gpupoor.subprocess_utils import run_command
 from gpupoor.utils import repo_path
+from gpupoor.utils.compose import build_compose_cmd
+from gpupoor.utils.env_files import load_hf_token
+from gpupoor.utils.http import wait_for_health
 
 
 class SmokeReporter:
@@ -84,31 +84,18 @@ def _down_flags(settings: SmokeConfig) -> list[str]:
 
 
 def _runtime_env() -> dict[str, str]:
-    if os.environ.get("HF_TOKEN"):
-        return {}
-    token_file = repo_path("hf_token")
-    if token_file.is_file():
-        return {"HF_TOKEN": token_file.read_text(encoding="utf-8").strip()}
-    return {}
+    return load_hf_token(repo_path("hf_token"))
 
 
 def _compose_command(*, cpu: bool, extra_files: list[Path] | None = None) -> list[str]:
-    command = [
-        "docker",
-        "compose",
-        "-f",
-        str(repo_path("infrastructure", "local-emulator", "compose", "docker-compose.yml")),
-    ]
+    overlays: list[Path] = []
     if cpu:
-        command.extend(
-            [
-                "-f",
-                str(repo_path("infrastructure", "local-emulator", "compose", "docker-compose.cpu.yml")),
-            ]
-        )
-    for extra_file in extra_files or []:
-        command.extend(["-f", str(extra_file)])
-    return command
+        overlays.append(repo_path("infrastructure", "local-emulator", "compose", "docker-compose.cpu.yml"))
+    overlays.extend(extra_files or [])
+    return build_compose_cmd(
+        repo_path("infrastructure", "local-emulator", "compose", "docker-compose.yml"),
+        extra_files=overlays,
+    )
 
 
 def _build_local_image(base_image: str) -> str:
@@ -135,22 +122,14 @@ def _build_local_image(base_image: str) -> str:
 
 def _wait_for_health(port: int, *, expected: int, timeout_seconds: int) -> None:
     url = f"http://127.0.0.1:{port}/health"
-    last_code = "000"
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        try:
-            with urllib.request.urlopen(url, timeout=2) as response:
-                if response.status == expected:
-                    return
-                last_code = str(response.status)
-        except urllib.error.HTTPError as exc:
-            last_code = str(exc.code)
-            if exc.code == expected:
-                return
-        except Exception:
-            last_code = "000"
-        time.sleep(1)
-    raise RuntimeError(f"{url} did not return {expected} within {timeout_seconds}s (last={last_code})")
+    if wait_for_health(
+        url,
+        total_timeout_seconds=timeout_seconds,
+        per_check_timeout_seconds=2,
+        expected_status=expected,
+    ):
+        return
+    raise RuntimeError(f"{url} did not return {expected} within {timeout_seconds}s (last=000)")
 
 
 def _probe_uid_gid(compose: list[str], reporter: SmokeReporter) -> None:
