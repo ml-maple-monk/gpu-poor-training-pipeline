@@ -11,6 +11,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX fallback (Windows)
+    fcntl = None  # type: ignore[assignment]
+
 from gpupoor import ops
 from gpupoor.config import (
     BackendConfig,
@@ -19,7 +24,7 @@ from gpupoor.config import (
     load_remote_settings,
     require_remote_settings,
 )
-from gpupoor.subprocess_utils import CommandError, bash_script, run_command
+from gpupoor.subprocess_utils import CommandError, bash_script, log_command, run_command
 from gpupoor.utils import repo_path
 
 
@@ -72,7 +77,14 @@ def ensure_dstack_server(
             # subsequent health poll still decides whether startup succeeded.
             pass
 
-    for _ in range(start_timeout_seconds):
+    # Wall-clock deadline instead of iteration count. The old
+    # `for _ in range(start_timeout_seconds)` implicitly assumed each
+    # iteration costs ~1s, but http_ok's internal timeout (several seconds
+    # on registry stalls) stretched the real wait well past the knob's name.
+    # Honor the knob literally: stop probing once start_timeout_seconds of
+    # wall-clock time has elapsed, regardless of how many probes fit in it.
+    deadline = time.monotonic() + start_timeout_seconds
+    while time.monotonic() < deadline:
         if http_ok(health_url, timeout_seconds=health_timeout_seconds):
             print("[gpupoor] dstack server healthy")
             return
@@ -222,7 +234,15 @@ def track_run(run_name: str) -> None:
     if not run_name:
         return
     run_ids_file = repo_path(".run-ids")
+    # Hold an exclusive advisory lock while appending so concurrent launches
+    # (two `dstack apply` invocations racing to tag the .run-ids sidecar)
+    # don't shred each other's lines. `with open(...)` on close releases the
+    # lock implicitly via file descriptor close. Guard fcntl for non-POSIX
+    # where flock is unavailable; on Windows the lock degrades to best-effort
+    # (same as prior behavior), but POSIX deployments get real ordering.
     with run_ids_file.open("a", encoding="utf-8") as handle:
+        if fcntl is not None and hasattr(fcntl, "flock"):
+            fcntl.flock(handle, fcntl.LOCK_EX)
         handle.write(f"{run_name}\n")
 
 
@@ -358,9 +378,24 @@ def launch_remote(
                 "TIME_CAP_SECONDS": str(config.recipe.time_cap_seconds),
             }
         )
-        result = run_command([dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], env=apply_env, check=False)
+        # Bypass run_command here to pass a subprocess-level timeout.
+        # `dstack apply` can hang indefinitely on registry auth or network
+        # stalls; without a timeout the CLI freezes with no liveness signal.
+        # Budget: the existing run-start window plus a 60s buffer covers
+        # dstack's own internal retries without inventing a new knob.
+        apply_cmd = [dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"]
+        log_command(apply_cmd)
+        apply_timeout = config.remote.run_start_timeout_seconds + 60
+        apply_run_env = os.environ.copy()
+        apply_run_env.update({key: value for key, value in apply_env.items() if value is not None})
+        result = subprocess.run(
+            apply_cmd,
+            env=apply_run_env,
+            check=False,
+            timeout=apply_timeout,
+        )
         if result.returncode != 0:
-            raise CommandError([dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], result.returncode)
+            raise CommandError(apply_cmd, result.returncode)
 
         run_name = config.name
         if dstack_has_run(dstack_bin, run_name):

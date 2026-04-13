@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from gpupoor import config as config_module
-from gpupoor.config import ConfigError, load_remote_settings, load_run_config
+from gpupoor.config import ConfigError, find_dstack_bin, load_remote_settings, load_run_config
 from gpupoor.utils import repo as repo_utils
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -238,3 +239,28 @@ def test_repo_root_candidates_prefer_package_over_cwd(monkeypatch: pytest.Monkey
     assert package_index < cwd_index, (
         "__file__ ancestry must be searched before cwd to keep the running package authoritative"
     )
+
+
+def test_find_dstack_bin_times_out_on_hanging_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hanging `dstack --version` must not freeze CLI startup.
+
+    Contract: find_dstack_bin raises RuntimeError("No working dstack CLI
+    found") when no candidate succeeds. A TimeoutExpired on a candidate is
+    treated the same as a non-zero returncode: skip and try the next
+    candidate. When every candidate times out, the loop falls through to
+    the existing RuntimeError.
+    """
+    monkeypatch.setenv("DSTACK_BIN", "/tmp/fake-dstack")
+    monkeypatch.setattr(config_module.os, "access", lambda path, mode: True)
+
+    def fake_run(*args: object, **kwargs: object) -> object:
+        assert kwargs.get("timeout") == 5, (
+            "find_dstack_bin must pass timeout=5 to subprocess.run"
+        )
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=5)
+
+    monkeypatch.setattr(config_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(config_module.shutil, "which", lambda name: None)
+
+    with pytest.raises(RuntimeError, match="No working dstack CLI found"):
+        find_dstack_bin()

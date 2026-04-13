@@ -244,12 +244,18 @@ def find_dstack_bin() -> str:
             continue
         if not os.access(candidate, os.X_OK):
             continue
-        result = subprocess.run(
-            [candidate, "--version"],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        try:
+            result = subprocess.run(
+                [candidate, "--version"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                # A hung `dstack --version` must not freeze CLI startup; skip
+                # and try the next candidate on timeout.
+                timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            continue
         if result.returncode == 0:
             return candidate
     raise RuntimeError("No working dstack CLI found")
