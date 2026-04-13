@@ -8,6 +8,10 @@ import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from gpupoor.utils.logging import get_logger
+
+log = get_logger(__name__)
+
 
 class CommandError(RuntimeError):
     """Raised when an external command fails."""
@@ -28,7 +32,7 @@ def _merged_env(extra_env: Mapping[str, str] | None = None) -> dict[str, str]:
 
 def log_command(command: Sequence[str]) -> None:
     rendered = " ".join(shlex.quote(part) for part in command)
-    print(f"[gpupoor] $ {rendered}")
+    log.info("$ %s", rendered)
 
 
 def run_command(
@@ -37,14 +41,32 @@ def run_command(
     cwd: Path | None = None,
     env: Mapping[str, str] | None = None,
     check: bool = True,
-) -> subprocess.CompletedProcess[None]:
-    """Run a subprocess while streaming stdout/stderr."""
-    log_command(command)
+    timeout: float | None = None,
+    capture_output: bool = False,
+    quiet: bool = False,
+) -> subprocess.CompletedProcess:
+    """Run a subprocess, optionally capturing stdout/stderr.
+
+    By default, stdout/stderr stream to the parent process and the
+    returned ``CompletedProcess`` has ``stdout``/``stderr`` set to
+    ``None``. When ``capture_output=True`` the helper captures both
+    streams as text and returns them on the ``CompletedProcess``.
+
+    Set ``quiet=True`` to suppress the ``$ argv`` log line for probe
+    callers that must stay silent (e.g., doctor preflight checks
+    where any extra log output would break the dry-run golden
+    fixture). Default behavior is unchanged.
+    """
+    if not quiet:
+        log_command(command)
     completed = subprocess.run(
         list(command),
         cwd=str(cwd) if cwd else None,
         env=_merged_env(env),
         check=False,
+        timeout=timeout,
+        capture_output=capture_output,
+        text=True if capture_output else None,
     )
     if check and completed.returncode != 0:
         raise CommandError(command, completed.returncode)
@@ -57,6 +79,6 @@ def bash_script(
     cwd: Path | None = None,
     env: Mapping[str, str] | None = None,
     check: bool = True,
-) -> subprocess.CompletedProcess[None]:
+) -> subprocess.CompletedProcess:
     """Run a bash helper script."""
     return run_command(["bash", str(script), *args], cwd=cwd, env=env, check=check)

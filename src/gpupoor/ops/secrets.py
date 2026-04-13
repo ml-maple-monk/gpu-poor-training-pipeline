@@ -125,7 +125,7 @@ def resolve_image_name(image: str) -> str:
 
 
 def _scan_output(command: list[str]) -> str:
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    completed = run_command(command, check=False, capture_output=True)
     return (completed.stdout or "") + (completed.stderr or "")
 
 

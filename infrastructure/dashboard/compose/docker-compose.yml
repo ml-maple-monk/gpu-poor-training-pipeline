@@ -29,6 +29,10 @@ services:
       DSTACK_PROJECT: "${DSTACK_PROJECT:-dashboard}"
       DSTACK_SERVER: "http://host.docker.internal:3000"
       DSTACK_TOKEN: "${DSTACK_SERVER_ADMIN_TOKEN}"
+      # Absolute path to the dstack CLI inside the container. Must match the
+      # bind-mount target below. Override via $DSTACK_CLI_PATH in the host env
+      # if the host's isolated venv lives elsewhere.
+      DSTACK_CLI_PATH: "${DSTACK_CLI_PATH:-/home/geeyang/.dstack-cli-venv/bin/dstack}"
       # dstack imports GitPython which probes for `git` on PATH; suppress noise
       # since the dashboard doesn't need git operations.
       GIT_PYTHON_REFRESH: "quiet"

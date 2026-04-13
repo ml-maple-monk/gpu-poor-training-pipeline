@@ -17,7 +17,7 @@ def _run(cmd: list[str], timeout: float = 5.0) -> str:
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return result.stdout.strip()
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return ""
 
 
@@ -69,7 +69,7 @@ def _parse_meminfo() -> dict:
         used_gb = total_gb - avail_gb
         pct = (used_gb / total_gb * 100) if total_gb > 0 else 0.0
         return {"total_gb": total_gb, "used_gb": used_gb, "pct": pct}
-    except Exception:
+    except (OSError, ValueError):
         return {"total_gb": 0.0, "used_gb": 0.0, "pct": 0.0}
 
 
@@ -90,7 +90,7 @@ def collect_system() -> tuple[SystemSnapshot, SourceStatus]:
             m = re.search(r"(\d+\.\d+)\s*id", top_out)
             if m:
                 cpu_pct = 100.0 - float(m.group(1))
-        except Exception:
+        except ValueError:
             pass
 
         snap = SystemSnapshot(
@@ -109,6 +109,6 @@ def collect_system() -> tuple[SystemSnapshot, SourceStatus]:
             nvidia_smi_available=bool(nv),
         )
         return snap, SourceStatus.OK
-    except Exception as exc:
+    except (OSError, ValueError, KeyError, TypeError) as exc:
         log.warning("system collect failed: %s", exc)
         return SystemSnapshot(), SourceStatus.ERROR

@@ -58,7 +58,7 @@ def collect_mlflow_recent(max_results: int = 20) -> tuple[list[MLflowRun], Sourc
                 )
             )
         return runs, SourceStatus.OK
-    except Exception as exc:
+    except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
         log.warning("mlflow_recent collect failed: %s", exc)
         return [], SourceStatus.ERROR
 
@@ -80,7 +80,7 @@ def collect_live_metrics(
             if not runs_raw:
                 return {}, SourceStatus.OK
             run_id = runs_raw[0]["info"]["run_id"]
-        except Exception as exc:
+        except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
             log.warning("mlflow live_metrics: could not find running run: %s", exc)
             return {}, SourceStatus.ERROR
 
@@ -106,9 +106,9 @@ def collect_live_metrics(
                 hist_resp.raise_for_status()
                 history = hist_resp.json().get("metrics", [])
                 result[key] = [(m.get("step", i), m["value"]) for i, m in enumerate(history)]
-            except Exception:
+            except (requests.RequestException, ValueError, KeyError, TypeError):
                 pass
         return result, SourceStatus.OK
-    except Exception as exc:
+    except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
         log.warning("mlflow live_metrics collect failed: %s", exc)
         return {}, SourceStatus.ERROR

@@ -10,7 +10,7 @@ from typing import Any
 # ── Data model dataclasses ──────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(slots=True)
 class TrainingSnapshot:
     container_id: str = ""
     container_name: str = ""
@@ -26,7 +26,7 @@ class TrainingSnapshot:
     last_seen: datetime | None = None
 
 
-@dataclass
+@dataclass(slots=True)
 class DstackRun:
     run_name: str = ""
     status: str = "unknown"
@@ -39,7 +39,7 @@ class DstackRun:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(slots=True)
 class VerdaOffer:
     gpu_name: str = ""
     price_per_hour: float = 0.0
@@ -50,7 +50,7 @@ class VerdaOffer:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(slots=True)
 class MLflowRun:
     run_id: str = ""
     run_name: str = ""
@@ -63,7 +63,7 @@ class MLflowRun:
     tags: dict[str, str] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(slots=True)
 class SystemSnapshot:
     hostname: str = ""
     cpu_count: int = 0
@@ -80,7 +80,7 @@ class SystemSnapshot:
     nvidia_smi_available: bool = False
 
 
-@dataclass
+@dataclass(slots=True)
 class Artifact:
     name: str = ""
     path: str = ""
@@ -91,7 +91,7 @@ class Artifact:
 # ── AppState ────────────────────────────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(slots=True)
 class AppState:
     """Shared mutable state. ALL mutations happen under `lock`."""
 

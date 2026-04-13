@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import subprocess
 import time
-import urllib.request
 from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX fallback (Windows)
+    fcntl = None  # type: ignore[assignment]
 
 from gpupoor import ops
 from gpupoor.config import (
@@ -19,14 +24,17 @@ from gpupoor.config import (
 )
 from gpupoor.subprocess_utils import CommandError, bash_script, run_command
 from gpupoor.utils import repo_path
+from gpupoor.utils.http import http_ok
+from gpupoor.utils.logging import get_logger
 
+log = get_logger(__name__)
 
-def http_ok(url: str, *, timeout_seconds: int = 5) -> bool:
-    try:
-        with urllib.request.urlopen(url, timeout=timeout_seconds) as response:
-            return response.status == 200
-    except Exception:
-        return False
+__all__ = [
+    "ensure_dstack_server",
+    "http_ok",
+    "launch_remote",
+    "teardown_remote_state",
+]
 
 
 def ensure_dstack_server(
@@ -38,7 +46,7 @@ def ensure_dstack_server(
     dry_run: bool,
 ) -> None:
     if http_ok(health_url, timeout_seconds=health_timeout_seconds):
-        print("[gpupoor] dstack server already running")
+        log.info("dstack server already running")
         return
 
     log_file = repo_path(".dstack-server.log")
@@ -46,7 +54,7 @@ def ensure_dstack_server(
         print(f"[DRY-RUN] Would run: {dstack_bin} server >> {log_file} 2>&1 &")
         return
 
-    print("[gpupoor] dstack server not running; starting it in background")
+    log.info("dstack server not running; starting it in background")
     with log_file.open("ab") as handle:
         # dstack >=0.20.16 prompts `Update the main project in ~/.dstack/config.yml?`
         # on first start. With no TTY the interactive `input()` raises EOFError and
@@ -61,15 +69,25 @@ def ensure_dstack_server(
             start_new_session=True,
         )
         try:
-            assert process.stdin is not None
+            if process.stdin is None:
+                raise RuntimeError("dstack server Popen did not return stdin")
             process.stdin.write(b"y\n")
             process.stdin.close()
-        except (BrokenPipeError, OSError):
+        except (BrokenPipeError, OSError, RuntimeError):
+            # Don't leak the Popen handle if the stdin handshake fails; the
+            # subsequent health poll still decides whether startup succeeded.
             pass
 
-    for _ in range(start_timeout_seconds):
+    # Wall-clock deadline instead of iteration count. The old
+    # `for _ in range(start_timeout_seconds)` implicitly assumed each
+    # iteration costs ~1s, but http_ok's internal timeout (several seconds
+    # on registry stalls) stretched the real wait well past the knob's name.
+    # Honor the knob literally: stop probing once start_timeout_seconds of
+    # wall-clock time has elapsed, regardless of how many probes fit in it.
+    deadline = time.monotonic() + start_timeout_seconds
+    while time.monotonic() < deadline:
         if http_ok(health_url, timeout_seconds=health_timeout_seconds):
-            print("[gpupoor] dstack server healthy")
+            log.info("dstack server healthy")
             return
         time.sleep(1)
     raise RuntimeError(f"dstack server did not become healthy; check {log_file}")
@@ -124,14 +142,7 @@ def render_task(settings: dict[str, str], config: RunConfig, image_sha: str) -> 
     # Task/GPU overrides: unset fields fall back to shell defaults so the
     # baseline example stays unchanged while targeted runs (e.g. B300) can
     # pick their own instance type from TOML.
-    if config.remote.gpu_names:
-        render_env["TASK_GPU_NAMES"] = "[" + ", ".join(config.remote.gpu_names) + "]"
-    if config.remote.gpu_count is not None:
-        render_env["TASK_GPU_COUNT"] = str(config.remote.gpu_count)
-    if config.remote.spot_policy:
-        render_env["TASK_SPOT_POLICY"] = config.remote.spot_policy
-    if config.remote.max_price is not None:
-        render_env["TASK_MAX_PRICE"] = str(config.remote.max_price)
+    render_env.update(config.remote.to_env())
     bash_script(
         repo_path("dstack", "scripts", "render-pretrain-task.sh"),
         str(rendered_task),
@@ -149,8 +160,17 @@ def dstack_has_run(dstack_bin: str, run_name: str) -> bool:
     """
     if not run_name:
         return False
-    output = subprocess.check_output([dstack_bin, "ps", "--json"], text=True)
-    data = json.loads(output)
+    command = [dstack_bin, "ps", "--json"]
+    try:
+        output = subprocess.check_output(command, text=True)
+    except subprocess.CalledProcessError as exc:
+        raise CommandError(command, exc.returncode) from exc
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError as exc:
+        # Surface as CommandError so the caller sees a uniform failure type
+        # and does not have to catch JSON-layer details at every call site.
+        raise CommandError(command, 0) from exc
     runs = data.get("runs", []) if isinstance(data, dict) else data
     for run in runs:
         candidate = run.get("run_name") or (run.get("run_spec") or {}).get("run_name") or ""
@@ -177,15 +197,18 @@ def dstack_run_status_triplet(dstack_bin: str, run_name: str) -> tuple[str, str,
 
 
 def wait_for_run_start(dstack_bin: str, run_name: str, *, max_wait: int = 480) -> None:
-    print(f"[gpupoor] Waiting for run '{run_name}' to leave startup states")
+    log.info("Waiting for run '%s' to leave startup states", run_name)
     elapsed = 0
     while elapsed < max_wait:
         run_status, job_status, termination_reason = dstack_run_status_triplet(dstack_bin, run_name)
         if run_status == "running" or job_status == "running":
-            print(f"[gpupoor] Run '{run_name}' is running")
+            log.info("Run '%s' is running", run_name)
             return
         if run_status in {"pending", "submitted"} and termination_reason == "failed_to_start_due_to_no_capacity":
-            print(f"[gpupoor] Run '{run_name}' is retrying after a no-capacity offer; waiting for the next submission")
+            log.info(
+                "Run '%s' is retrying after a no-capacity offer; waiting for the next submission",
+                run_name,
+            )
             time.sleep(10)
             elapsed += 10
             continue
@@ -208,7 +231,15 @@ def track_run(run_name: str) -> None:
     if not run_name:
         return
     run_ids_file = repo_path(".run-ids")
+    # Hold an exclusive advisory lock while appending so concurrent launches
+    # (two `dstack apply` invocations racing to tag the .run-ids sidecar)
+    # don't shred each other's lines. `with open(...)` on close releases the
+    # lock implicitly via file descriptor close. Guard fcntl for non-POSIX
+    # where flock is unavailable; on Windows the lock degrades to best-effort
+    # (same as prior behavior), but POSIX deployments get real ordering.
     with run_ids_file.open("a", encoding="utf-8") as handle:
+        if fcntl is not None and hasattr(fcntl, "flock"):
+            fcntl.flock(handle, fcntl.LOCK_EX)
         handle.write(f"{run_name}\n")
 
 
@@ -221,10 +252,35 @@ def kill_tunnel() -> None:
     except ValueError:
         pid = 0
     if pid:
-        try:
-            os.kill(pid, 15)
-        except OSError:
-            pass
+        should_kill = True
+        # On Linux, confirm the PID still belongs to cloudflared before
+        # signalling. PIDs recycle; a stale .cf-tunnel.pid could name any
+        # unrelated process (shell, editor, build) and we must not SIGTERM it.
+        if platform.system() == "Linux":
+            comm_path = Path(f"/proc/{pid}/comm")
+            try:
+                comm = comm_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                # /proc entry gone -> PID no longer exists; nothing to kill.
+                should_kill = False
+            else:
+                if comm != "cloudflared":
+                    # Original print went to stdout (no file=sys.stderr); preserve
+                    # that via log.info so captured-stdout callers still see it.
+                    # The "WARN:" marker stays in the message text.
+                    log.info(
+                        "WARN: .cf-tunnel.pid %s is '%s', not cloudflared; skipping kill",
+                        pid,
+                        comm,
+                    )
+                    should_kill = False
+        # On non-Linux (e.g. macOS), /proc is not available. Fall through and
+        # trust the pid file; this matches prior behavior on those platforms.
+        if should_kill:
+            try:
+                os.kill(pid, 15)
+            except OSError:
+                pass
     for suffix in (".cf-tunnel.pid", ".cf-tunnel.url", ".cf-tunnel.log"):
         path = repo_path(suffix)
         if path.exists():
@@ -279,7 +335,7 @@ def launch_remote(
         else:
             bash_script(repo_path("training", "scripts", "build-and-push.sh"))
     else:
-        print("[gpupoor] Skipping remote image build")
+        log.info("Skipping remote image build")
 
     if dry_run:
         print("[DRY-RUN] Would start the MLflow Cloudflare tunnel")
@@ -293,11 +349,11 @@ def launch_remote(
         else repo_path(".cf-tunnel.url").read_text(encoding="utf-8").strip()
     )
 
-    print(f"[gpupoor] Config: {config.source}")
-    print(f"[gpupoor] Backend: {config.backend.kind}")
-    print(f"[gpupoor] MLFLOW_URL={mlflow_url}")
-    print(f"[gpupoor] IMAGE_SHA={image_sha}")
-    print(f"[gpupoor] VCR_IMAGE_BASE={settings['VCR_IMAGE_BASE']}")
+    log.info("Config: %s", config.source)
+    log.info("Backend: %s", config.backend.kind)
+    log.info("MLFLOW_URL=%s", mlflow_url)
+    log.info("IMAGE_SHA=%s", image_sha)
+    log.info("VCR_IMAGE_BASE=%s", settings["VCR_IMAGE_BASE"])
 
     rendered_task = None
     started_tunnel = False
@@ -323,9 +379,14 @@ def launch_remote(
                 "TIME_CAP_SECONDS": str(config.recipe.time_cap_seconds),
             }
         )
-        result = run_command([dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], env=apply_env, check=False)
-        if result.returncode != 0:
-            raise CommandError([dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], result.returncode)
+        # `dstack apply` can hang indefinitely on registry auth or
+        # network stalls; without a timeout the CLI freezes with no
+        # liveness signal. Budget: the existing run-start window plus a
+        # 60s buffer covers dstack's own internal retries without
+        # inventing a new knob.
+        apply_cmd = [dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"]
+        apply_timeout = config.remote.run_start_timeout_seconds + 60
+        run_command(apply_cmd, env=apply_env, timeout=apply_timeout)
 
         run_name = config.name
         if dstack_has_run(dstack_bin, run_name):
@@ -333,15 +394,17 @@ def launch_remote(
             wait_for_run_start(dstack_bin, run_name, max_wait=config.remote.run_start_timeout_seconds)
             launched_remote_run = True
         else:
-            print(
-                f"[gpupoor] WARN: dstack apply reported success but run '{run_name}' "
-                "is not visible in dstack ps; skipping track/wait"
+            # Original print went to stdout (no file=sys.stderr); preserve via
+            # log.info so stream routing stays the same. "WARN:" stays in text.
+            log.info(
+                "WARN: dstack apply reported success but run '%s' is not visible in dstack ps; skipping track/wait",
+                run_name,
             )
     finally:
         if rendered_task and rendered_task.exists():
             rendered_task.unlink()
         if started_tunnel:
             if launched_remote_run:
-                print("[gpupoor] Keeping Cloudflare tunnel alive until teardown so remote MLflow stays reachable")
+                log.info("Keeping Cloudflare tunnel alive until teardown so remote MLflow stays reachable")
             else:
                 kill_tunnel()

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from gpupoor.backends import local
 from gpupoor.config import load_run_config
 
@@ -62,9 +64,5 @@ def test_local_training_rejects_paths_outside_data_mount(monkeypatch) -> None:
         lambda config: REPO_ROOT / "data" / "datasets" / "pretrain_t2t_mini.jsonl",
     )
 
-    try:
+    with pytest.raises(ValueError, match="Local training paths must live under"):
         local.run_training(config)
-    except ValueError as exc:
-        assert "Local training paths must live under" in str(exc)
-    else:
-        raise AssertionError("Expected local.run_training to reject a non-/data output path")

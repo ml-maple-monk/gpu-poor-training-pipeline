@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import httpx
+
 from ..errors import SourceStatus
 from ..safe_exec import safe_dstack_rest
 from ..state import VerdaOffer
@@ -66,7 +68,7 @@ def collect_verda_offers() -> tuple[list[VerdaOffer], SourceStatus]:
                         raw=o,
                     )
                 )
-        except Exception as exc:
+        except (httpx.HTTPError, ValueError, TypeError, KeyError) as exc:
             log.debug("verda offers for %s failed: %s", gpu_name, exc)
             last_status = SourceStatus.STALE
 

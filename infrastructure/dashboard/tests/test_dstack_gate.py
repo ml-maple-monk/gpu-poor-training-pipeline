@@ -6,11 +6,12 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.bootstrap import choose_access_path
+from src.bootstrap import _probe_dstack_cli, _probe_rest, choose_access_path
 
 
 @pytest.mark.parametrize("response_shape", [{"runs": []}, []], ids=["dict-runs", "bare-list"])
@@ -37,8 +38,8 @@ def test_choose_access_path_prefers_rest_when_a_token_exists(monkeypatch, respon
 @pytest.mark.parametrize(
     ("token", "rest_side_effect", "cli_works", "expected"),
     [
-        ("token123", Exception("connection refused"), True, "C2.1a"),
-        ("token123", Exception("refused"), False, "FAILED"),
+        ("token123", httpx.ConnectError("connection refused"), True, "C2.1"),
+        ("token123", httpx.ConnectError("refused"), False, "FAILED"),
         ("", None, False, "FAILED"),
     ],
     ids=["rest-fails-cli-recovers", "all-paths-fail", "no-token-skips-rest"],
@@ -60,3 +61,50 @@ def test_choose_access_path_falls_back_or_fails_closed(monkeypatch, token, rest_
     else:
         mock_rest.assert_not_called()
     assert path == expected
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ["just a string", 42, None, 3.14],
+    ids=["string", "int", "null", "float"],
+)
+def test_probe_rest_handles_non_dict_non_list_payload(payload):
+    """Proves a scalar/None JSON body does not raise AttributeError from
+    data.get(...); _probe_rest must treat it as a BAD_SHAPE and return False."""
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = payload
+
+    with patch("src.bootstrap.safe_dstack_rest", return_value=mock_resp):
+        assert _probe_rest() is False
+
+
+def test_probe_rest_handles_missing_runs_key():
+    """Proves a dict payload without the 'runs' key is rejected as BAD_SHAPE
+    without raising — the narrow except must cover the KeyError/TypeError path."""
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {"other": []}
+
+    with patch("src.bootstrap.safe_dstack_rest", return_value=mock_resp):
+        assert _probe_rest() is False
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        PermissionError("dstack binary not executable"),
+        FileNotFoundError("dstack not on PATH"),
+        __import__("subprocess").TimeoutExpired(cmd="dstack ps", timeout=10),
+    ],
+    ids=["permission-denied", "binary-missing", "probe-timeout"],
+)
+def test_probe_dstack_cli_handles_concrete_exceptions(exc):
+    """Proves the narrowed except tuple covers the realistic failure
+    set (OSError + subprocess.SubprocessError) without re-raising —
+    CS5 replaced the bare `except Exception` with this tighter set.
+
+    ``subprocess`` is imported inside the function under test, so we
+    patch ``subprocess.run`` at the stdlib level rather than on the
+    ``src.bootstrap`` module namespace.
+    """
+    with patch("subprocess.run", side_effect=exc):
+        assert _probe_dstack_cli() is False

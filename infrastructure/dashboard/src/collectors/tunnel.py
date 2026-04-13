@@ -20,6 +20,6 @@ def collect_tunnel_url() -> tuple[str, SourceStatus]:
         return "", SourceStatus.STALE
     except FileNotFoundError:
         return "", SourceStatus.STALE
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         log.warning("tunnel url collect failed: %s", exc)
         return "", SourceStatus.ERROR

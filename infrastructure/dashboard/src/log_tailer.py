@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import shutil
 import signal
 import subprocess
 import threading
 import time
 from typing import Literal
+
+import httpx
 
 from .collectors.dstack_logs import stream_dstack_logs
 from .dstack_project import infer_dstack_project
@@ -23,14 +27,102 @@ from .safe_exec import safe_docker
 log = logging.getLogger(__name__)
 
 _RING_SIZE = 500
-_DSTACK_CLI = "/home/geeyang/.dstack-cli-venv/bin/dstack"
-_ALLOWED_DSTACK_CLI_VERBS = frozenset({"logs", "ps", "attach"})
+# Resolve the dstack CLI path from env first, then $PATH, then the legacy
+# hardcoded user-scoped venv (kept as a last-resort fallback for existing
+# local setups). This removes the hardcoded /home/geeyang path from the
+# source tree — callers that need a specific binary set $DSTACK_CLI_PATH.
+_DSTACK_CLI = (
+    os.environ.get("DSTACK_CLI_PATH") or shutil.which("dstack") or "/home/geeyang/.dstack-cli-venv/bin/dstack"
+)
+# Per-verb argv shape allowlist — single source of truth for allowed dstack
+# CLI verbs and their argv shapes. "attach" is retained because it is bound
+# to ``--logs`` below (read-only); bare or ``--tty`` attach is rejected.
+#
+# Each entry has:
+#   * ``flags``: tokens (``-x`` / ``--xyz``) accepted for that verb.
+#     Anything starting with ``-`` outside this set is rejected.
+#   * ``positional``: maximum count of non-flag tokens (each of which
+#     must additionally pass ``_SAFE_TARGET_RE``).
+#   * ``required_flags``: tokens that MUST appear in argv — used to bind
+#     ``attach`` to ``--logs`` so interactive attach is impossible.
+_ALLOWED_DSTACK_ARGV: dict[str, dict[str, object]] = {
+    "logs": {
+        "flags": frozenset({"--follow", "-f", "--tail"}),
+        "positional": 1,
+        "required_flags": frozenset(),
+    },
+    "ps": {
+        "flags": frozenset({"--all", "-a", "--json"}),
+        "positional": 0,
+        "required_flags": frozenset(),
+    },
+    "attach": {
+        "flags": frozenset({"--logs"}),
+        "positional": 1,
+        "required_flags": frozenset({"--logs"}),
+    },
+}
+
+# Argv flag-smuggling defence: reject any target/run-name that could be
+# interpreted as a CLI flag (leading "-") or contains characters outside a
+# conservative safe set. Applied at call sites for `safe_docker(["logs", ...])`
+# and `_safe_dstack_cli(["attach", ...])`.
+_SAFE_TARGET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _assert_safe_target(value: str) -> str:
+    """Validate an argv value used as a docker container or dstack run name.
+
+    SECURITY: on rejection, only log a generic message — NEVER log the
+    rejected value itself, since it could be an attacker-controlled payload.
+    """
+    if not isinstance(value, str) or not _SAFE_TARGET_RE.match(value):
+        log.warning("rejected unsafe target (failed _SAFE_TARGET_RE)")
+        raise ValueError("unsafe target rejected")
+    return value
 
 
 def _safe_dstack_cli(argv: list[str]) -> subprocess.Popen:
-    """Spawn dstack CLI with argv[0] in a whitelist of read-only verbs."""
-    if not argv or argv[0] not in _ALLOWED_DSTACK_CLI_VERBS:
+    """Spawn dstack CLI with a per-verb argv shape allowlist.
+
+    The check enforces, in order:
+      1. Verb (argv[0]) must be a key in ``_ALLOWED_DSTACK_ARGV``.
+      2. Every flag-shaped token (``-x`` / ``--xyz``) must be in the
+         per-verb ``flags`` set — unknown flags are rejected so payloads
+         like ``--config=/etc/passwd`` cannot slip in.
+      3. Every non-flag positional must pass ``_SAFE_TARGET_RE`` and the
+         total positional count must not exceed the per-verb budget.
+
+    SECURITY: this binds ``attach`` to ``--logs`` only — interactive
+    attach (``attach run-foo`` with no flag, or ``--tty``) is rejected
+    before any subprocess is spawned.
+    """
+    if not argv or argv[0] not in _ALLOWED_DSTACK_ARGV:
         raise ValueError(f"dstack CLI verb {argv[:1]!r} not in whitelist")
+    spec = _ALLOWED_DSTACK_ARGV[argv[0]]
+    allowed_flags: frozenset[str] = spec["flags"]  # type: ignore[assignment]
+    required_flags: frozenset[str] = spec["required_flags"]  # type: ignore[assignment]
+    max_positional: int = spec["positional"]  # type: ignore[assignment]
+    seen_flags: set[str] = set()
+    positional_seen = 0
+    for arg in argv[1:]:
+        if arg.startswith("-"):
+            if arg not in allowed_flags:
+                # Don't echo the rejected flag — it could be attacker-controlled.
+                log.warning("rejected dstack CLI flag for verb %s", argv[0])
+                raise ValueError(f"dstack CLI flag not allowed for verb {argv[0]!r}")
+            seen_flags.add(arg)
+            continue
+        _assert_safe_target(arg)
+        positional_seen += 1
+        if positional_seen > max_positional:
+            raise ValueError(f"dstack CLI verb {argv[0]!r} accepts at most {max_positional} positional arg(s)")
+    missing = required_flags - seen_flags
+    if missing:
+        # SECURITY: `attach` requires `--logs` so interactive attach is
+        # impossible — bare `attach run-foo` would otherwise spawn an
+        # interactive session that exceeds the read-only contract.
+        raise ValueError(f"dstack CLI verb {argv[0]!r} missing required flag(s): {sorted(missing)!r}")
     env = {
         **os.environ,
         "DSTACK_SERVER": os.environ.get("DSTACK_SERVER", "http://host.docker.internal:3000"),
@@ -94,17 +186,43 @@ class LogTailer:
         self._terminate_source()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                # Per-tailer shutdown is best-effort; the app-level SIGTERM
+                # handler is responsible for process-wide exit decisions.
+                log.warning(
+                    "LogTailer[%s/%s] thread did not exit within shutdown budget",
+                    self.mode,
+                    self.target,
+                )
         log.debug("LogTailer[%s/%s] shut down", self.mode, self.target)
 
     def swap(self, new_target: str) -> None:
-        """Replace the current target. Shuts old source, starts new one."""
+        """Replace the current target. Shuts old source, starts new one.
+
+        Raises:
+            RuntimeError: if the old tailer thread cannot be joined even after
+                a second SIGTERM -> SIGKILL escalation. Raising is preferable
+                to silently resetting ``self.ring`` while the old thread is
+                still alive and could race on it.
+        """
         log.debug("LogTailer swap %s -> %s", self.target, new_target)
         with self._lock:
             self._running = False
         self._terminate_source()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=3)
-        # Reset for new target
+            if self._thread.is_alive():
+                # First teardown wasn't enough — escalate once more and retry.
+                log.warning(
+                    "LogTailer[%s/%s] old thread still alive after join(3s); escalating",
+                    self.mode,
+                    self.target,
+                )
+                self._terminate_source()
+                self._thread.join(timeout=2)
+                if self._thread.is_alive():
+                    raise RuntimeError("log tailer thread refused to exit within swap budget")
+        # Reset for new target (safe now: old thread is confirmed gone).
         with self._lock:
             self.target = new_target
             self.ring = RingBuffer(maxlen=_RING_SIZE)
@@ -142,20 +260,45 @@ class LogTailer:
                     return
                 target = self.target
 
+            # Validate the container name before any argv reaches docker. A
+            # ValueError here is a programming/config bug, not a transient
+            # failure — raise so the caller sees it rather than silently
+            # entering an idle-retry loop on an unsafe value.
+            _assert_safe_target(target)
+
             # Precheck: is the container present at all? Avoid thrashing
             # "Error response from daemon: No such container" lines.
             inspect_rc = None
+            ins = None
             try:
                 ins = safe_docker(["inspect", target])
                 _ = ins.communicate(timeout=5)
                 inspect_rc = ins.returncode
-            except Exception:
+            except subprocess.TimeoutExpired:
+                # Reap the leaked Popen: kill the child, then wait() so it
+                # doesn't become a zombie. Treat a hung inspect as "absent".
+                log.warning("docker inspect precheck timed out; killing child")
+                if ins is not None:
+                    try:
+                        ins.kill()
+                    except OSError as exc:
+                        log.debug("kill on inspect timeout failed: %s", exc)
+                    try:
+                        ins.wait(timeout=2)
+                    except (OSError, subprocess.SubprocessError) as exc:
+                        log.debug("wait after kill failed: %s", exc)
+                inspect_rc = 1
+            except (OSError, subprocess.SubprocessError) as exc:
+                log.debug("docker inspect precheck failed: %s", exc)
                 inspect_rc = 1
             if inspect_rc != 0:
                 # Local container absent. If a REMOTE_RUN_NAME is configured,
                 # stream the remote Verda run's logs via the mounted dstack CLI.
                 remote_run = os.environ.get("REMOTE_RUN_NAME", "").strip()
                 if remote_run and os.path.exists(_DSTACK_CLI):
+                    # Validate the run name before argv construction — reject
+                    # flag-like tokens (e.g. "--foo") up-front.
+                    _assert_safe_target(remote_run)
                     _, cur = self.ring.snapshot()
                     if cur != last_missing_notice_seq:
                         self.ring.append(
@@ -172,7 +315,7 @@ class LogTailer:
                                     break
                             self.ring.append(redact(line.rstrip("\n")))
                         rproc.wait()
-                    except Exception as exc:
+                    except (OSError, subprocess.SubprocessError, httpx.HTTPError) as exc:
                         log.warning("dstack CLI log tailer error: %s", exc)
                     finally:
                         with self._lock:
@@ -204,7 +347,7 @@ class LogTailer:
                     self.ring.append(redact(line.rstrip("\n")))
                 proc.wait()
                 log.debug("docker logs -f exited (rc=%d) for %s", proc.returncode, target)
-            except Exception as exc:
+            except (OSError, subprocess.SubprocessError, httpx.HTTPError) as exc:
                 log.warning("docker log tailer error for %s: %s", target, exc)
             finally:
                 with self._lock:
@@ -238,7 +381,7 @@ class LogTailer:
                         if line:
                             self.ring.append(redact(line))
                 log.debug("dstack log stream ended for %s", target)
-            except Exception as exc:
+            except (OSError, subprocess.SubprocessError, httpx.HTTPError) as exc:
                 log.warning("dstack log tailer error for %s: %s", target, exc)
             finally:
                 with self._lock:
@@ -252,20 +395,62 @@ class LogTailer:
                     return
             time.sleep(2)
 
-    def _terminate_source(self) -> None:
-        """Terminate the active subprocess or httpx stream."""
+    def _terminate_source(self, sigterm_timeout: float = 3.0) -> None:
+        """Terminate the active subprocess or httpx stream.
+
+        Single chokepoint for tearing down whichever source is active:
+          * docker/remote-CLI mode: SIGTERM -> wait ``sigterm_timeout`` seconds
+            -> SIGKILL if still alive.
+          * dstack streaming mode: close the httpx streaming context manager
+            (``__exit__``) so the underlying client is also released, not just
+            the response.
+
+        Exceptions from OS-level signal delivery and httpx teardown are logged
+        but never raised — this method is called from shutdown paths where the
+        caller has nothing useful to do on failure.
+        """
         with self._lock:
             proc = self._proc
+            httpx_cm = self._httpx_cm
             httpx_resp = self._httpx_resp
 
         if proc is not None:
             try:
                 proc.send_signal(signal.SIGTERM)
-            except Exception:
-                pass
+            except OSError as exc:
+                log.debug("SIGTERM send failed: %s", exc)
+            # Wait for graceful exit; escalate to SIGKILL if still alive.
+            deadline = time.monotonic() + sigterm_timeout
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    break
+                time.sleep(0.05)
+            if proc.poll() is None:
+                log.warning(
+                    "LogTailer child (pid=%s) ignored SIGTERM; escalating to SIGKILL",
+                    getattr(proc, "pid", "?"),
+                )
+                try:
+                    proc.kill()
+                except OSError as exc:
+                    log.debug("SIGKILL send failed: %s", exc)
 
-        if httpx_resp is not None:
+        if httpx_cm is not None:
+            # Closing the context manager releases both the response *and* the
+            # underlying httpx.Client. Calling _httpx_resp.close() alone would
+            # leak the client.
+            try:
+                httpx_cm.__exit__(None, None, None)
+            except httpx.HTTPError as exc:
+                log.debug("httpx context __exit__ raised: %s", exc)
+            except OSError as exc:
+                log.debug("httpx context __exit__ raised OSError: %s", exc)
+        elif httpx_resp is not None:
+            # No context manager recorded but we still have a response handle:
+            # close it defensively so the socket doesn't linger.
             try:
                 httpx_resp.close()
-            except Exception:
-                pass
+            except httpx.HTTPError as exc:
+                log.debug("httpx response close raised: %s", exc)
+            except OSError as exc:
+                log.debug("httpx response close raised OSError: %s", exc)

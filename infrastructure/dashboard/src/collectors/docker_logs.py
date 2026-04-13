@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 
 from ..errors import SourceStatus
 from ..safe_exec import safe_docker
@@ -41,6 +42,6 @@ def collect_training_snapshot(container_name: str) -> tuple[TrainingSnapshot, So
             ),
             SourceStatus.OK,
         )
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as exc:
         log.warning("docker inspect failed for %s: %s", container_name, exc)
         return TrainingSnapshot(container_name=container_name, status="error"), SourceStatus.ERROR

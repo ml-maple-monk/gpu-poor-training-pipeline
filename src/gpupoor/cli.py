@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 from dataclasses import replace
 
@@ -17,8 +16,12 @@ from gpupoor.config import (
     SmokeConfig,
     load_run_config,
 )
+from gpupoor.services import dashboard as dashboard_service
+from gpupoor.services import emulator as emulator_service
+from gpupoor.services import mlflow as mlflow_service
 from gpupoor.subprocess_utils import CommandError, bash_script, run_command
 from gpupoor.utils import repo_path
+from gpupoor.utils.logging import configure_root
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,6 +45,12 @@ def build_parser() -> argparse.ArgumentParser:
     smoke_parser.add_argument("--degraded-port", type=int, help="Port for the degraded-mode probe")
     smoke_parser.add_argument("--sigterm-timeout-seconds", type=int, help="SIGTERM exit budget for the emulator")
     smoke_parser.add_argument("--data-wait-timeout-seconds", type=int, help="WAIT_DATA_TIMEOUT value for probe F")
+    smoke_parser.add_argument(
+        "--prune-volumes",
+        action="store_true",
+        default=None,
+        help="Pass `-v` to `docker compose down` to wipe named volumes (destroys user data)",
+    )
     smoke_parser.add_argument("--skip-preflight", action="store_true", default=None, help="Skip preflight checks")
     smoke_parser.add_argument("--max-clock-skew-seconds", type=int, help="Override the WSL clock skew budget")
 
@@ -104,17 +113,13 @@ def tracked_fingerprint() -> str:
     diff-against-HEAD form captures content changes to tracked files,
     and including the HEAD sha catches actions that commit.
     """
-    head = subprocess.run(
+    head = run_command(
         ["git", "rev-parse", "HEAD"],
-        check=True,
         capture_output=True,
-        text=True,
     ).stdout.strip()
-    diff = subprocess.run(
+    diff = run_command(
         ["git", "diff", "HEAD", "--no-ext-diff", "--no-color"],
-        check=True,
         capture_output=True,
-        text=True,
     ).stdout
     return f"{head}\n---\n{diff}"
 
@@ -141,6 +146,7 @@ _SMOKE_OVERRIDE_KEYS = (
     "degraded_port",
     "sigterm_timeout_seconds",
     "data_wait_timeout_seconds",
+    "prune_volumes",
 )
 
 
@@ -245,8 +251,6 @@ def dispatch(args: argparse.Namespace) -> None:
 
     if args.command == "infra":
         if args.infra_target == "mlflow":
-            from gpupoor.services import mlflow as mlflow_service
-
             if args.action == "up":
                 mlflow_service.up(args.extra_args)
                 return
@@ -260,8 +264,6 @@ def dispatch(args: argparse.Namespace) -> None:
                 mlflow_service.tunnel(args.extra_args)
                 return
         if args.infra_target == "dashboard":
-            from gpupoor.services import dashboard as dashboard_service
-
             if args.action == "up":
                 dashboard_service.up(args.extra_args)
                 return
@@ -272,8 +274,6 @@ def dispatch(args: argparse.Namespace) -> None:
                 dashboard_service.logs(args.extra_args)
                 return
         if args.infra_target == "emulator":
-            from gpupoor.services import emulator as emulator_service
-
             if args.action == "up":
                 emulator_service.up(args.extra_args)
                 return
@@ -301,6 +301,7 @@ def dispatch(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_root()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import os
-import time
-import urllib.request
 from pathlib import Path
 
 from gpupoor.subprocess_utils import run_command
 from gpupoor.utils import repo_path
+from gpupoor.utils.compose import build_compose_cmd
+from gpupoor.utils.env_files import load_hf_token
+from gpupoor.utils.http import wait_for_health
 
 
 def _base_compose() -> Path:
@@ -25,19 +25,11 @@ def _nvcr_compose() -> Path:
 
 
 def _load_hf_token() -> dict[str, str]:
-    if os.environ.get("HF_TOKEN"):
-        return {}
-    token_file = repo_path("hf_token")
-    if token_file.is_file():
-        return {"HF_TOKEN": token_file.read_text(encoding="utf-8").strip()}
-    return {}
+    return load_hf_token(repo_path("hf_token"))
 
 
 def _compose_command(*extra_files: Path) -> list[str]:
-    command = ["docker", "compose", "-f", str(_base_compose())]
-    for file in extra_files:
-        command.extend(["-f", str(file)])
-    return command
+    return build_compose_cmd(_base_compose(), extra_files=extra_files)
 
 
 def up(extra_args: list[str] | None = None) -> None:
@@ -84,11 +76,11 @@ def _parse_health_args(extra_args: list[str] | None) -> tuple[int, int]:
 def health(extra_args: list[str] | None = None) -> None:
     port, timeout_seconds = _parse_health_args(extra_args)
     url = f"http://127.0.0.1:{port}/health"
-    for _ in range(timeout_seconds):
-        try:
-            with urllib.request.urlopen(url, timeout=2) as response:
-                print(f"Health: {response.status}")
-                return
-        except Exception:
-            time.sleep(1)
+    if wait_for_health(
+        url,
+        total_timeout_seconds=timeout_seconds,
+        per_check_timeout_seconds=2,
+    ):
+        print("Health: 200")
+        return
     raise RuntimeError(f"/health did not return 200 within {timeout_seconds}s")

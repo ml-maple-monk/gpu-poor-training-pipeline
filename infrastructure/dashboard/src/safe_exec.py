@@ -8,8 +8,10 @@ SECURITY CONTRACT:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
@@ -95,15 +97,21 @@ def safe_dstack_rest(
         return resp
 
 
+@contextlib.contextmanager
 def safe_dstack_stream(
     endpoint: str,
     *,
     json: dict[str, Any] | None = None,
     timeout: float = 30.0,
-) -> httpx.Response:
-    """Return a streaming httpx response for dstack log streaming.
+) -> Iterator[httpx.Response]:
+    """Yield a streaming httpx response for dstack log streaming.
 
-    Caller must use as context manager:
+    This is itself a context manager so BOTH the stream response AND the
+    underlying ``httpx.Client`` are released on exit — including when the
+    caller's ``with`` body raises. Previously the function only returned the
+    stream context manager and leaked the client.
+
+    Caller pattern (unchanged):
         with safe_dstack_stream("runs/get_logs", json={...}) as resp:
             for line in resp.iter_lines():
                 ...
@@ -111,4 +119,8 @@ def safe_dstack_stream(
     url = _assert_endpoint(endpoint)
     headers = {"Authorization": f"Bearer {_get_token()}"}
     client = httpx.Client(timeout=httpx.Timeout(timeout, read=None))
-    return client.stream("POST", url, headers=headers, json=json)
+    try:
+        with client.stream("POST", url, headers=headers, json=json) as resp:
+            yield resp
+    finally:
+        client.close()

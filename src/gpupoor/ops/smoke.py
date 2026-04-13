@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 from gpupoor.config import DoctorConfig, SmokeConfig
@@ -15,6 +11,9 @@ from gpupoor.ops.doctor import run_preflight
 from gpupoor.ops.secrets import leak_scan
 from gpupoor.subprocess_utils import run_command
 from gpupoor.utils import repo_path
+from gpupoor.utils.compose import build_compose_cmd
+from gpupoor.utils.env_files import load_hf_token
+from gpupoor.utils.http import wait_for_health
 
 
 class SmokeReporter:
@@ -64,7 +63,7 @@ def run_smoke(config: SmokeConfig | None = None, *, doctor: DoctorConfig | None 
             print(exc)
             reporter.failed += 1
     finally:
-        run_command([*compose, "down", "-v", "--remove-orphans"], check=False)
+        run_command([*compose, "down", *_down_flags(settings), "--remove-orphans"], check=False)
 
     print("")
     print(f"=== Smoke Results: {reporter.passed} passed, {reporter.failed} failed ===")
@@ -72,39 +71,37 @@ def run_smoke(config: SmokeConfig | None = None, *, doctor: DoctorConfig | None 
         raise RuntimeError("Smoke FAILED")
 
 
+def _down_flags(settings: SmokeConfig) -> list[str]:
+    """Return extra flags for `docker compose down`.
+
+    Volume pruning (`-v`) is opt-in: named volumes may hold user data, so
+    the default teardown only removes containers and networks. Callers that
+    explicitly set `prune_volumes=True` (or pass `--prune-volumes` on the
+    CLI) accept the data loss.
+    """
+    return ["-v"] if settings.prune_volumes else []
+
+
 def _runtime_env() -> dict[str, str]:
-    if os.environ.get("HF_TOKEN"):
-        return {}
-    token_file = repo_path("hf_token")
-    if token_file.is_file():
-        return {"HF_TOKEN": token_file.read_text(encoding="utf-8").strip()}
-    return {}
+    return load_hf_token(repo_path("hf_token"))
 
 
 def _compose_command(*, cpu: bool, extra_files: list[Path] | None = None) -> list[str]:
-    command = [
-        "docker",
-        "compose",
-        "-f",
-        str(repo_path("infrastructure", "local-emulator", "compose", "docker-compose.yml")),
-    ]
+    overlays: list[Path] = []
     if cpu:
-        command.extend(
-            [
-                "-f",
-                str(repo_path("infrastructure", "local-emulator", "compose", "docker-compose.cpu.yml")),
-            ]
-        )
-    for extra_file in extra_files or []:
-        command.extend(["-f", str(extra_file)])
-    return command
+        overlays.append(repo_path("infrastructure", "local-emulator", "compose", "docker-compose.cpu.yml"))
+    overlays.extend(extra_files or [])
+    return build_compose_cmd(
+        repo_path("infrastructure", "local-emulator", "compose", "docker-compose.yml"),
+        extra_files=overlays,
+    )
 
 
 def _build_local_image(base_image: str) -> str:
-    local_tag = subprocess.check_output(
+    local_tag = run_command(
         ["git", "-C", str(repo_path()), "rev-parse", "--short", "HEAD"],
-        text=True,
-    ).strip()
+        capture_output=True,
+    ).stdout.strip()
     local_image = f"verda-local:{local_tag or 'local'}"
     run_command(
         [
@@ -124,31 +121,22 @@ def _build_local_image(base_image: str) -> str:
 
 def _wait_for_health(port: int, *, expected: int, timeout_seconds: int) -> None:
     url = f"http://127.0.0.1:{port}/health"
-    last_code = "000"
-    deadline = time.time() + timeout_seconds
-    while time.time() < deadline:
-        try:
-            with urllib.request.urlopen(url, timeout=2) as response:
-                if response.status == expected:
-                    return
-                last_code = str(response.status)
-        except urllib.error.HTTPError as exc:
-            last_code = str(exc.code)
-            if exc.code == expected:
-                return
-        except Exception:
-            last_code = "000"
-        time.sleep(1)
-    raise RuntimeError(f"{url} did not return {expected} within {timeout_seconds}s (last={last_code})")
+    if wait_for_health(
+        url,
+        total_timeout_seconds=timeout_seconds,
+        per_check_timeout_seconds=2,
+        expected_status=expected,
+    ):
+        return
+    raise RuntimeError(f"{url} did not return {expected} within {timeout_seconds}s (last=000)")
 
 
 def _probe_uid_gid(compose: list[str], reporter: SmokeReporter) -> None:
     print("--- Probe A: /data UID/GID ---")
-    completed = subprocess.run(
+    completed = run_command(
         [*compose, "exec", "verda-local", "stat", "-c", "%u:%g", "/data"],
         check=False,
         capture_output=True,
-        text=True,
     )
     uid_gid = completed.stdout.strip()
     if uid_gid == "1000:1000":
@@ -159,7 +147,7 @@ def _probe_uid_gid(compose: list[str], reporter: SmokeReporter) -> None:
 
 def _probe_non_root_write(compose: list[str], reporter: SmokeReporter) -> None:
     print("--- Probe B: non-root write ---")
-    completed = subprocess.run(
+    completed = run_command(
         [
             *compose,
             "exec",
@@ -172,7 +160,6 @@ def _probe_non_root_write(compose: list[str], reporter: SmokeReporter) -> None:
         ],
         check=False,
         capture_output=True,
-        text=True,
     )
     if completed.returncode == 0:
         reporter.pass_probe("B", "non-root write to /data OK")
@@ -183,15 +170,14 @@ def _probe_non_root_write(compose: list[str], reporter: SmokeReporter) -> None:
 def _probe_sigterm_latency(compose: list[str], reporter: SmokeReporter, *, timeout_seconds: int) -> None:
     print("--- Probe C: SIGTERM latency ---")
     start = time.time()
-    subprocess.run([*compose, "kill", "-s", "TERM"], check=False, capture_output=True, text=True)
+    run_command([*compose, "kill", "-s", "TERM"], check=False, capture_output=True)
     deadline = time.time() + timeout_seconds + 5
     exited = False
     while time.time() < deadline:
-        completed = subprocess.run(
+        completed = run_command(
             [*compose, "ps", "--status", "exited", "-q"],
             check=False,
             capture_output=True,
-            text=True,
         )
         if completed.stdout.strip():
             exited = True
@@ -207,11 +193,10 @@ def _probe_sigterm_latency(compose: list[str], reporter: SmokeReporter, *, timeo
 
 def _probe_env_leak(compose: list[str], reporter: SmokeReporter) -> None:
     print("--- Probe D: trust-zone leak ---")
-    completed = subprocess.run(
+    completed = run_command(
         [*compose, "exec", "verda-local", "env"],
         check=False,
         capture_output=True,
-        text=True,
     )
     leaks = [
         line.strip()
@@ -245,10 +230,11 @@ def _probe_degraded_gating(runtime_env: dict[str, str], reporter: SmokeReporter,
 
         strict_env = {"APP_PORT": str(settings.strict_port), **runtime_env}
         degraded_env = {"APP_PORT": str(settings.degraded_port), **runtime_env}
+        down_flags = _down_flags(settings)
         try:
             run_command([*strict_compose, "up", "-d", "--build"], env=strict_env)
             _wait_for_health(settings.strict_port, expected=503, timeout_seconds=settings.health_timeout_seconds)
-            run_command([*strict_compose, "down", "-v", "--remove-orphans"], check=False, env=strict_env)
+            run_command([*strict_compose, "down", *down_flags, "--remove-orphans"], check=False, env=strict_env)
 
             run_command([*degraded_compose, "up", "-d", "--build"], env=degraded_env)
             _wait_for_health(
@@ -260,13 +246,13 @@ def _probe_degraded_gating(runtime_env: dict[str, str], reporter: SmokeReporter,
         except RuntimeError as exc:
             reporter.fail_probe("E", str(exc))
         finally:
-            run_command([*strict_compose, "down", "-v", "--remove-orphans"], check=False, env=strict_env)
-            run_command([*degraded_compose, "down", "-v", "--remove-orphans"], check=False, env=degraded_env)
+            run_command([*strict_compose, "down", *down_flags, "--remove-orphans"], check=False, env=strict_env)
+            run_command([*degraded_compose, "down", *down_flags, "--remove-orphans"], check=False, env=degraded_env)
 
 
 def _probe_data_wait_timeout(local_image: str, reporter: SmokeReporter, *, timeout_seconds: int) -> None:
     print("--- Probe F: /data wait timeout ---")
-    completed = subprocess.run(
+    completed = run_command(
         [
             "docker",
             "run",
@@ -279,7 +265,6 @@ def _probe_data_wait_timeout(local_image: str, reporter: SmokeReporter, *, timeo
         ],
         check=False,
         capture_output=True,
-        text=True,
     )
     if completed.returncode != 0:
         reporter.pass_probe("F", f"/data timeout exits non-zero (code={completed.returncode})")

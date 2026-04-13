@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import yaml
+
 _DEFAULT_DSTACK_PROJECT = "dashboard"
 
 
@@ -14,36 +16,39 @@ def _config_path(home: str | None = None) -> Path:
 
 
 def _parse_project_names(text: str) -> tuple[str | None, str | None]:
+    """Return (default_project_name, first_project_name) from a dstack config.
+
+    Uses ``yaml.safe_load`` instead of hand-rolled line parsing so
+    structural YAML quirks (quoting, block scalars, multi-document files,
+    BOMs) match what dstack itself sees. Malformed YAML and
+    unexpected shapes degrade gracefully to ``(None, None)`` so the
+    caller can fall through to the dashboard-local default alias.
+    """
+    if not text.strip():
+        return None, None
+    try:
+        document = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return None, None
+    if not isinstance(document, dict):
+        return None, None
+    projects = document.get("projects")
+    if not isinstance(projects, list):
+        return None, None
+
     default_name: str | None = None
     first_name: str | None = None
-    current_name: str | None = None
-    current_is_default = False
-
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
+    for entry in projects:
+        if not isinstance(entry, dict):
             continue
-        if line.startswith("- "):
-            if current_name and current_is_default and default_name is None:
-                default_name = current_name
-            current_name = None
-            current_is_default = False
-            line = line[2:].strip()
-        if line.startswith("name:"):
-            current_name = line.partition(":")[2].strip().strip("'\"")
-            if current_name and first_name is None:
-                first_name = current_name
-            if current_name and current_is_default and default_name is None:
-                default_name = current_name
+        raw_name = entry.get("name")
+        name = raw_name.strip() if isinstance(raw_name, str) else None
+        if not name:
             continue
-        if line.startswith("default:"):
-            value = line.partition(":")[2].strip().lower()
-            current_is_default = value == "true"
-            if current_name and current_is_default and default_name is None:
-                default_name = current_name
-
-    if current_name and current_is_default and default_name is None:
-        default_name = current_name
+        if first_name is None:
+            first_name = name
+        if default_name is None and entry.get("default") is True:
+            default_name = name
     return default_name, first_name
 
 

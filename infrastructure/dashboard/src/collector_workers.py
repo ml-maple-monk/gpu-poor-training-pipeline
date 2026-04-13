@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 
 from .collectors.docker_logs import collect_training_snapshot
 from .collectors.dstack_rest import collect_dstack_runs
@@ -83,7 +83,7 @@ def start_all_collectors(state: AppState) -> list[CollectorWorker]:
         snap, status = collect_training_snapshot(TRAINER_CONTAINER)
         with state.lock:
             state.training = snap
-            state.last_refreshed_at["training"] = datetime.utcnow()
+            state.last_refreshed_at["training"] = datetime.now(UTC)
             state.collector_health["training"] = status.value
 
     workers.append(CollectorWorker("training-2s", 2.0, _collect_training, ev))
@@ -93,7 +93,7 @@ def start_all_collectors(state: AppState) -> list[CollectorWorker]:
         metrics, status = collect_live_metrics()
         with state.lock:
             state.live_metrics = metrics
-            state.last_refreshed_at["live_metrics"] = datetime.utcnow()
+            state.last_refreshed_at["live_metrics"] = datetime.now(UTC)
             state.collector_health["live_metrics"] = status.value
 
     workers.append(CollectorWorker("live-metrics-2s", 2.0, _collect_live_metrics, ev))
@@ -103,7 +103,7 @@ def start_all_collectors(state: AppState) -> list[CollectorWorker]:
         runs, status = collect_dstack_runs()
         with state.lock:
             state.dstack_runs = runs
-            state.last_refreshed_at["dstack_runs"] = datetime.utcnow()
+            state.last_refreshed_at["dstack_runs"] = datetime.now(UTC)
             state.collector_health["dstack_runs"] = status.value
             # Auto-track active run for log following
             running = [r for r in runs if r.status in ("running", "provisioning", "RUNNING")]
@@ -117,7 +117,7 @@ def start_all_collectors(state: AppState) -> list[CollectorWorker]:
         snap, status = collect_system()
         with state.lock:
             state.system = snap
-            state.last_refreshed_at["system"] = datetime.utcnow()
+            state.last_refreshed_at["system"] = datetime.now(UTC)
             state.collector_health["system"] = status.value
 
     workers.append(CollectorWorker("system-5s", 5.0, _collect_system, ev))
@@ -127,7 +127,7 @@ def start_all_collectors(state: AppState) -> list[CollectorWorker]:
         runs, status = collect_mlflow_recent()
         with state.lock:
             state.mlflow_runs = runs
-            state.last_refreshed_at["mlflow_recent"] = datetime.utcnow()
+            state.last_refreshed_at["mlflow_recent"] = datetime.now(UTC)
             state.collector_health["mlflow_recent"] = status.value
 
     workers.append(CollectorWorker("mlflow-10s", 10.0, _collect_mlflow, ev))
@@ -137,7 +137,7 @@ def start_all_collectors(state: AppState) -> list[CollectorWorker]:
         url, status = collect_tunnel_url()
         with state.lock:
             state.tunnel_url = url
-            state.last_refreshed_at["tunnel"] = datetime.utcnow()
+            state.last_refreshed_at["tunnel"] = datetime.now(UTC)
             state.collector_health["tunnel"] = status.value
 
     workers.append(CollectorWorker("tunnel-10s", 10.0, _collect_tunnel, ev))
@@ -147,7 +147,7 @@ def start_all_collectors(state: AppState) -> list[CollectorWorker]:
         offers, status = collect_verda_offers()
         with state.lock:
             state.verda_offers = offers
-            state.last_refreshed_at["verda_offers"] = datetime.utcnow()
+            state.last_refreshed_at["verda_offers"] = datetime.now(UTC)
             state.collector_health["verda_offers"] = status.value
 
     workers.append(CollectorWorker("offers-30s", 30.0, _collect_offers, ev))

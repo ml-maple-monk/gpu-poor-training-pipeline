@@ -93,6 +93,9 @@ class SmokeConfig:
     degraded_port: int = 18002
     sigterm_timeout_seconds: int = 30
     data_wait_timeout_seconds: int = 2
+    # Explicit opt-in for `docker compose down -v`. Named volumes may hold
+    # user data; wiping them must be a conscious choice, not a default.
+    prune_volumes: bool = False
 
 
 @dataclass(slots=True)
@@ -110,6 +113,26 @@ class RemoteConfig:
     gpu_count: int | None = None
     spot_policy: str | None = None
     max_price: float | None = None
+
+    def to_env(self) -> dict[str, str]:
+        """Return TASK_* env vars for render-pretrain-task.sh.
+
+        Only fields the user set materialize as entries; unset fields
+        stay out of the dict so the shell defaults in
+        render-pretrain-task.sh keep their authority. Mirrors
+        ``MlflowConfig.to_env()`` so callers pick the dataclass API
+        instead of repeating the field-by-field mapping at call sites.
+        """
+        env: dict[str, str] = {}
+        if self.gpu_names:
+            env["TASK_GPU_NAMES"] = "[" + ", ".join(self.gpu_names) + "]"
+        if self.gpu_count is not None:
+            env["TASK_GPU_COUNT"] = str(self.gpu_count)
+        if self.spot_policy:
+            env["TASK_SPOT_POLICY"] = self.spot_policy
+        if self.max_price is not None:
+            env["TASK_MAX_PRICE"] = str(self.max_price)
+        return env
 
 
 @dataclass(slots=True)
@@ -244,12 +267,18 @@ def find_dstack_bin() -> str:
             continue
         if not os.access(candidate, os.X_OK):
             continue
-        result = subprocess.run(
-            [candidate, "--version"],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        try:
+            result = subprocess.run(
+                [candidate, "--version"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                # A hung `dstack --version` must not freeze CLI startup; skip
+                # and try the next candidate on timeout.
+                timeout=5,
+            )
+        except subprocess.TimeoutExpired:
+            continue
         if result.returncode == 0:
             return candidate
     raise RuntimeError("No working dstack CLI found")
@@ -280,6 +309,7 @@ _KNOWN_SMOKE = {
     "degraded_port",
     "sigterm_timeout_seconds",
     "data_wait_timeout_seconds",
+    "prune_volumes",
 }
 _KNOWN_REMOTE = {
     "env_file",
@@ -384,6 +414,7 @@ def load_run_config(path: str | Path) -> RunConfig:
         degraded_port=_require_int(smoke_data, "degraded_port", default=18002),
         sigterm_timeout_seconds=_require_int(smoke_data, "sigterm_timeout_seconds", default=30),
         data_wait_timeout_seconds=_require_int(smoke_data, "data_wait_timeout_seconds", default=2),
+        prune_volumes=_require_bool(smoke_data, "prune_volumes", default=False),
     )
     remote = RemoteConfig(
         env_file=_require_str(remote_data, "env_file", default=".env.remote"),

@@ -21,7 +21,9 @@ def test_run_non_mutating_rejects_tracked_changes(monkeypatch: pytest.MonkeyPatc
         cli.run_non_mutating("doctor", lambda: None)
 
 
-def test_run_non_mutating_detects_remutation_of_already_dirty_file(tmp_path: Path) -> None:
+def test_run_non_mutating_detects_remutation_of_already_dirty_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A re-edit of an already-M file must not slip past the guard.
 
     The old porcelain-only check would see ' M file.txt' both before
@@ -38,22 +40,16 @@ def test_run_non_mutating_detects_remutation_of_already_dirty_file(tmp_path: Pat
     _sp.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "seed"], check=True)
     target.write_text("already-dirty\n", encoding="utf-8")  # leaves worktree in M state
 
-    import os as _os
+    monkeypatch.chdir(tmp_path)
 
-    prev = _os.getcwd()
-    _os.chdir(tmp_path)
-    try:
+    def action() -> None:
+        target.write_text("remutated\n", encoding="utf-8")
 
-        def action() -> None:
-            target.write_text("remutated\n", encoding="utf-8")
-
-        with pytest.raises(RuntimeError, match="mutated tracked files"):
-            cli.run_non_mutating("label", action)
-    finally:
-        _os.chdir(prev)
+    with pytest.raises(RuntimeError, match="mutated tracked files"):
+        cli.run_non_mutating("label", action)
 
 
-def test_run_non_mutating_detects_commit_by_action(tmp_path: Path) -> None:
+def test_run_non_mutating_detects_commit_by_action(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An action that creates a new commit must be rejected even if the
     working tree ends up clean again."""
     import subprocess as _sp
@@ -66,21 +62,15 @@ def test_run_non_mutating_detects_commit_by_action(tmp_path: Path) -> None:
     _sp.run(["git", "-C", str(tmp_path), "add", "file.txt"], check=True)
     _sp.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "seed"], check=True)
 
-    import os as _os
+    monkeypatch.chdir(tmp_path)
 
-    prev = _os.getcwd()
-    _os.chdir(tmp_path)
-    try:
+    def action() -> None:
+        target.write_text("second\n", encoding="utf-8")
+        _sp.run(["git", "-C", str(tmp_path), "add", "file.txt"], check=True)
+        _sp.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "sneaky"], check=True)
 
-        def action() -> None:
-            target.write_text("second\n", encoding="utf-8")
-            _sp.run(["git", "-C", str(tmp_path), "add", "file.txt"], check=True)
-            _sp.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "sneaky"], check=True)
-
-        with pytest.raises(RuntimeError, match="mutated tracked files"):
-            cli.run_non_mutating("label", action)
-    finally:
-        _os.chdir(prev)
+    with pytest.raises(RuntimeError, match="mutated tracked files"):
+        cli.run_non_mutating("label", action)
 
 
 def test_doctor_delegates_to_package_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
