@@ -88,7 +88,9 @@ set -e
 
 echo "[remote-entrypoint] End UTC: $(date -u -Iseconds)"
 echo "[remote-entrypoint] Training exit code: $RC  (124 = reached ${TIME_CAP_SECONDS}s cap)"
-if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then
+# 124 = timeout's SIGTERM cap (expected end of the capped run).
+# 137 = SIGKILL (OOM, cgroup kill, external kill); propagate as failure.
+if [ "$RC" -eq 124 ]; then
     exit 0
 fi
 exit "$RC"
