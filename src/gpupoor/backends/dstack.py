@@ -397,8 +397,7 @@ def launch_remote(
             # Original print went to stdout (no file=sys.stderr); preserve via
             # log.info so stream routing stays the same. "WARN:" stays in text.
             log.info(
-                "WARN: dstack apply reported success but run '%s' "
-                "is not visible in dstack ps; skipping track/wait",
+                "WARN: dstack apply reported success but run '%s' is not visible in dstack ps; skipping track/wait",
                 run_name,
             )
     finally:

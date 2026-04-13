@@ -13,8 +13,6 @@ import sys
 import threading
 from typing import TYPE_CHECKING
 
-import gradio as gr
-
 from .bootstrap import choose_access_path
 from .collector_workers import start_all_collectors
 from .config import GRADIO_PORT, GRADIO_QUEUE_MAX_SIZE, TRAINER_CONTAINER
@@ -32,6 +30,8 @@ from .state import AppState, get_state
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    import gradio as gr
 
     from .collector_workers import CollectorWorker
 
@@ -139,6 +139,8 @@ def _setup_signal_handler(
 
 def build_app() -> gr.Blocks:
     """Build and return the Gradio Blocks app."""
+    import gradio as gr  # Lazy: keeps module import light for test lanes without gradio.
+
     global _state, _docker_tailer, _dstack_tailer, _workers
 
     # ── Bootstrap ────────────────────────────────────────────────────────────

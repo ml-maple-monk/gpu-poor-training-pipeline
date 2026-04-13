@@ -67,9 +67,7 @@ def test_run_command_logs_argv_by_default(caplog) -> None:
     caplog.set_level(logging.INFO, logger="gpupoor.subprocess_utils")
     run_command([sys.executable, "-c", "pass"])
     messages = [record.getMessage() for record in caplog.records]
-    assert any(msg.startswith("$ ") for msg in messages), (
-        f"expected '$ ' prefix in logs; got {messages!r}"
-    )
+    assert any(msg.startswith("$ ") for msg in messages), f"expected '$ ' prefix in logs; got {messages!r}"
 
 
 def test_run_command_quiet_suppresses_argv_log(caplog) -> None:
@@ -81,6 +79,4 @@ def test_run_command_quiet_suppresses_argv_log(caplog) -> None:
     caplog.set_level(logging.INFO, logger="gpupoor.subprocess_utils")
     run_command([sys.executable, "-c", "pass"], quiet=True)
     messages = [record.getMessage() for record in caplog.records]
-    assert not any(msg.startswith("$ ") for msg in messages), (
-        f"quiet=True must suppress '$ ' lines; got {messages!r}"
-    )
+    assert not any(msg.startswith("$ ") for msg in messages), f"quiet=True must suppress '$ ' lines; got {messages!r}"

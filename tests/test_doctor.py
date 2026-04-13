@@ -23,8 +23,7 @@ def test_doctor_powershell_times_out(monkeypatch):
         # If it doesn't, this test will also fail because the TimeoutExpired
         # never fires — so the assertion is dual-purpose.
         assert "timeout" in kwargs and kwargs["timeout"] == 5, (
-            "expected _read_windows_utc_timestamp to pass timeout=5 to subprocess; "
-            f"got kwargs={kwargs!r}"
+            f"expected _read_windows_utc_timestamp to pass timeout=5 to subprocess; got kwargs={kwargs!r}"
         )
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
 

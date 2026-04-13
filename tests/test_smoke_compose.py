@@ -63,9 +63,7 @@ def test_smoke_down_does_not_remove_volumes_by_default(smoke_stubs) -> None:
     assert down_argvs, "expected at least one `down` invocation"
     # None of the default-path down calls should contain '-v'.
     for argv in down_argvs:
-        assert "-v" not in argv, (
-            f"default `down` invocation unexpectedly includes '-v': {argv!r}"
-        )
+        assert "-v" not in argv, f"default `down` invocation unexpectedly includes '-v': {argv!r}"
 
 
 def test_smoke_prune_volumes_flag_passes_v(smoke_stubs) -> None:
@@ -76,6 +74,4 @@ def test_smoke_prune_volumes_flag_passes_v(smoke_stubs) -> None:
     down_argvs = _collect_down_argvs(smoke_stubs.call_args_list)
     assert down_argvs, "expected at least one `down` invocation"
     # At least one of the down calls (the final teardown) must include '-v'.
-    assert any("-v" in argv for argv in down_argvs), (
-        f"prune_volumes=True did not cause `-v`: {down_argvs!r}"
-    )
+    assert any("-v" in argv for argv in down_argvs), f"prune_volumes=True did not cause `-v`: {down_argvs!r}"

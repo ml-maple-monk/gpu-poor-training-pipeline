@@ -313,9 +313,7 @@ def test_dstack_has_run_reads_run_name_from_run_spec(monkeypatch: pytest.MonkeyP
     assert dstack.dstack_has_run("dstack", "verda-remote-10m") is True
 
 
-def test_start_dstack_server_raises_when_popen_stdin_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_start_dstack_server_raises_when_popen_stdin_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Popen without stdin must surface via an explicit RuntimeError path.
 
     Bare asserts evaporate under `python -O`, so the fix replaces the assert
@@ -371,9 +369,7 @@ def test_dstack_has_run_raises_on_non_zero_exit(monkeypatch: pytest.MonkeyPatch)
         dstack.dstack_has_run("dstack", "verda-remote-10m")
 
 
-def test_kill_tunnel_skips_if_pid_not_cloudflared(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_kill_tunnel_skips_if_pid_not_cloudflared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """On Linux, kill_tunnel must verify /proc/<pid>/comm before signalling."""
     pid_file = tmp_path / ".cf-tunnel.pid"
     pid_file.write_text("4242\n", encoding="utf-8")
@@ -405,9 +401,7 @@ def test_kill_tunnel_skips_if_pid_not_cloudflared(
     assert not pid_file.exists()
 
 
-def test_kill_tunnel_noop_on_darwin(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_kill_tunnel_noop_on_darwin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """On non-Linux (no /proc), kill_tunnel falls through and signals the PID."""
     pid_file = tmp_path / ".cf-tunnel.pid"
     pid_file.write_text("4242\n", encoding="utf-8")
@@ -481,9 +475,7 @@ def test_dstack_apply_timeout_propagates(tmp_path: Path, monkeypatch: pytest.Mon
         dstack.launch_remote(config, skip_build=True)
 
 
-def test_start_dstack_server_deadline_based(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_start_dstack_server_deadline_based(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """ensure_dstack_server must exit at wall-clock deadline, not iteration count.
 
     Key discriminator: start_timeout_seconds is large (100s) but fake_monotonic
@@ -534,14 +526,11 @@ def test_start_dstack_server_deadline_based(
     # Allow generous upper bound (20) to survive minor implementation detail
     # shifts, but reject anything close to start_timeout_seconds itself.
     assert probe_count["n"] < 30, (
-        f"expected wall-clock-bounded probes, got {probe_count['n']} "
-        "(looks like iteration-count loop)"
+        f"expected wall-clock-bounded probes, got {probe_count['n']} (looks like iteration-count loop)"
     )
 
 
-def test_track_run_concurrent_writes_do_not_interleave(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_track_run_concurrent_writes_do_not_interleave(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Concurrent track_run writes must not interleave or lose records.
 
     Two threads each append 50 run names. The resulting .run-ids must have

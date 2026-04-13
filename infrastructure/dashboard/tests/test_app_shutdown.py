@@ -63,9 +63,7 @@ def test_shutdown_joins_all_workers_before_exit() -> None:
         timeout = call.kwargs.get("timeout")
         if timeout is None and call.args:
             timeout = call.args[0]
-        assert timeout is not None and timeout > 0, (
-            f"join() must be called with a positive timeout, got {call!r}"
-        )
+        assert timeout is not None and timeout > 0, f"join() must be called with a positive timeout, got {call!r}"
     assert rc == 0
 
 

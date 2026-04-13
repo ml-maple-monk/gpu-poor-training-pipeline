@@ -43,8 +43,7 @@ def test_swap_escalates_to_sigkill_when_sigterm_ignored(fake_ignoring_proc):
     assert _sig.SIGTERM in signals_sent, f"expected SIGTERM first, got {signals_sent}"
     # After wait-timeout elapses with proc still alive, .kill() must fire.
     assert fake_ignoring_proc.kill.called, (
-        "expected .kill() to be called after SIGTERM wait elapsed; "
-        f"send_signal calls: {signals_sent}"
+        f"expected .kill() to be called after SIGTERM wait elapsed; send_signal calls: {signals_sent}"
     )
 
 
@@ -144,12 +143,9 @@ def test_run_docker_kills_precheck_on_timeout(monkeypatch):
     tailer._run_docker()
 
     assert fake_proc.kill.called, (
-        ".kill() must be called when docker inspect precheck times out; "
-        "otherwise the Popen leaks"
+        ".kill() must be called when docker inspect precheck times out; otherwise the Popen leaks"
     )
-    assert fake_proc.wait.called, (
-        ".wait() must be called after .kill() so the child is reaped"
-    )
+    assert fake_proc.wait.called, ".wait() must be called after .kill() so the child is reaped"
 
 
 # ── F6 Test 6: safe_docker rejects flag-like target ───────────────────────────
@@ -175,9 +171,7 @@ def test_safe_docker_rejects_flag_like_target(monkeypatch):
     shutdown = threading.Event()
     shutdown.set()
 
-    tailer = LogTailer(
-        target="--config=/etc/passwd", mode="docker", shutdown_event=shutdown
-    )
+    tailer = LogTailer(target="--config=/etc/passwd", mode="docker", shutdown_event=shutdown)
     tailer._running = True
     with pytest.raises(ValueError, match="unsafe target"):
         tailer._run_docker()

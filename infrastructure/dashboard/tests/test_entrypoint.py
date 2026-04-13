@@ -31,9 +31,7 @@ PATHOLOGICAL_TOKENS = [
 
 
 @pytest.mark.parametrize("token", PATHOLOGICAL_TOKENS)
-def test_entrypoint_writes_valid_yaml_with_pathological_token(
-    token: str, tmp_path: Path
-) -> None:
+def test_entrypoint_writes_valid_yaml_with_pathological_token(token: str, tmp_path: Path) -> None:
     """entrypoint.sh must emit YAML that round-trips the token losslessly."""
     # The script writes to /tmp/.dstack/config.yml (hard-coded tmpfs path).
     # We cannot easily redirect that without refactoring, so isolate the run
@@ -60,9 +58,7 @@ def test_entrypoint_writes_valid_yaml_with_pathological_token(
         text=True,
         check=False,
     )
-    assert result.returncode == 0, (
-        f"entrypoint.sh failed: stdout={result.stdout!r} stderr={result.stderr!r}"
-    )
+    assert result.returncode == 0, f"entrypoint.sh failed: stdout={result.stdout!r} stderr={result.stderr!r}"
 
     assert config_path.exists(), "entrypoint.sh did not write the config"
     loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -74,6 +70,4 @@ def test_entrypoint_writes_valid_yaml_with_pathological_token(
     assert project["name"] == "dashboard"
     assert project["url"] == "http://host.docker.internal:3000"
     # The critical assertion: token must round-trip unchanged.
-    assert project["token"] == token, (
-        f"token corruption: wrote {token!r}, read back {project['token']!r}"
-    )
+    assert project["token"] == token, f"token corruption: wrote {token!r}, read back {project['token']!r}"

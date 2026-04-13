@@ -171,6 +171,5 @@ def test_collector_uses_timezone_aware_datetime(monkeypatch):
     stamp = state.last_refreshed_at.get("training")
     assert stamp is not None, "expected 'training' key to be populated"
     assert stamp.tzinfo is not None, (
-        "collector must record a tz-aware datetime (datetime.now(timezone.utc)), "
-        f"got naive: {stamp!r}"
+        f"collector must record a tz-aware datetime (datetime.now(timezone.utc)), got naive: {stamp!r}"
     )

@@ -254,9 +254,7 @@ def test_find_dstack_bin_times_out_on_hanging_version(monkeypatch: pytest.Monkey
     monkeypatch.setattr(config_module.os, "access", lambda path, mode: True)
 
     def fake_run(*args: object, **kwargs: object) -> object:
-        assert kwargs.get("timeout") == 5, (
-            "find_dstack_bin must pass timeout=5 to subprocess.run"
-        )
+        assert kwargs.get("timeout") == 5, "find_dstack_bin must pass timeout=5 to subprocess.run"
         raise subprocess.TimeoutExpired(cmd=args[0], timeout=5)
 
     monkeypatch.setattr(config_module.subprocess, "run", fake_run)

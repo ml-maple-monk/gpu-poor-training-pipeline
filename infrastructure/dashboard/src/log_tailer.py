@@ -32,9 +32,7 @@ _RING_SIZE = 500
 # local setups). This removes the hardcoded /home/geeyang path from the
 # source tree — callers that need a specific binary set $DSTACK_CLI_PATH.
 _DSTACK_CLI = (
-    os.environ.get("DSTACK_CLI_PATH")
-    or shutil.which("dstack")
-    or "/home/geeyang/.dstack-cli-venv/bin/dstack"
+    os.environ.get("DSTACK_CLI_PATH") or shutil.which("dstack") or "/home/geeyang/.dstack-cli-venv/bin/dstack"
 )
 # Per-verb argv shape allowlist — single source of truth for allowed dstack
 # CLI verbs and their argv shapes. "attach" is retained because it is bound
@@ -118,19 +116,13 @@ def _safe_dstack_cli(argv: list[str]) -> subprocess.Popen:
         _assert_safe_target(arg)
         positional_seen += 1
         if positional_seen > max_positional:
-            raise ValueError(
-                f"dstack CLI verb {argv[0]!r} accepts at most "
-                f"{max_positional} positional arg(s)"
-            )
+            raise ValueError(f"dstack CLI verb {argv[0]!r} accepts at most {max_positional} positional arg(s)")
     missing = required_flags - seen_flags
     if missing:
         # SECURITY: `attach` requires `--logs` so interactive attach is
         # impossible — bare `attach run-foo` would otherwise spawn an
         # interactive session that exceeds the read-only contract.
-        raise ValueError(
-            f"dstack CLI verb {argv[0]!r} missing required flag(s): "
-            f"{sorted(missing)!r}"
-        )
+        raise ValueError(f"dstack CLI verb {argv[0]!r} missing required flag(s): {sorted(missing)!r}")
     env = {
         **os.environ,
         "DSTACK_SERVER": os.environ.get("DSTACK_SERVER", "http://host.docker.internal:3000"),
@@ -229,9 +221,7 @@ class LogTailer:
                 self._terminate_source()
                 self._thread.join(timeout=2)
                 if self._thread.is_alive():
-                    raise RuntimeError(
-                        "log tailer thread refused to exit within swap budget"
-                    )
+                    raise RuntimeError("log tailer thread refused to exit within swap budget")
         # Reset for new target (safe now: old thread is confirmed gone).
         with self._lock:
             self.target = new_target
