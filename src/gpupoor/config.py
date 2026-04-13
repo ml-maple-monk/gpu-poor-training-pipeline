@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tomllib
@@ -15,6 +16,12 @@ DEFAULT_LOCAL_BASE_IMAGE = "nvidia/cuda:12.4.1-runtime-ubuntu22.04"
 DEFAULT_VCR_IMAGE_BASE = "vccr.io/f53909d3-a071-4826-8635-a62417ffc867/verda-minimind"
 DEFAULT_DSTACK_SERVER_HEALTH_URL = "http://127.0.0.1:3000/"
 DEFAULT_MLFLOW_HEALTH_URL = "http://127.0.0.1:5000/health"
+
+# dstack's resource-name regex; config.name is used as the run/TASK_NAME
+# and any violation fails late at `dstack apply` time, after image build
+# and tunnel bring-up. Mirror the regex here so load_run_config rejects
+# bad names up front.
+DSTACK_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
 
 
 class ConfigError(ValueError):
@@ -291,6 +298,13 @@ def load_run_config(path: str | Path) -> RunConfig:
     name = _require_str(data, "name")
     recipe_data = _require_table(data, "recipe")
     backend_data = _require_table(data, "backend")
+    # dstack rejects resource names that don't match its regex; local backend
+    # has no such constraint, so we only gate the dstack path here.
+    if backend_data.get("kind") == "dstack" and not DSTACK_NAME_RE.match(name):
+        raise ConfigError(
+            f"name {name!r} is invalid for backend.kind='dstack'; must match "
+            f"{DSTACK_NAME_RE.pattern} (lowercase, hyphens only, no underscores)"
+        )
     mlflow_data = _require_table(data, "mlflow")
     doctor_data = _require_table(data, "doctor")
     smoke_data = _require_table(data, "smoke")

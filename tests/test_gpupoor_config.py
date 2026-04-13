@@ -43,7 +43,7 @@ def test_load_remote_settings_uses_configured_env_file_and_image_base(
     config_file.write_text(
         "\n".join(
             [
-                'name = "custom_remote"',
+                'name = "custom-remote"',
                 "",
                 "[recipe]",
                 'kind = "minimind_pretrain"',
@@ -77,7 +77,7 @@ def test_remote_b300_example_loads_gpu_overrides() -> None:
 
     config = load_run_config(Path(__file__).resolve().parents[1] / "examples" / "verda_b300_10m.toml")
 
-    assert config.name == "verda_b300_10m"
+    assert config.name == "verda-b300-10m"
     assert config.remote.gpu_names == ("B300",)
     assert config.remote.gpu_count == 1
     assert config.remote.spot_policy == "spot"
@@ -104,6 +104,69 @@ def test_non_toml_config_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="Milestone-1 configs must use the .toml format"):
         load_run_config(config_file)
+
+
+def test_dstack_config_rejects_underscore_name(tmp_path: Path) -> None:
+    """dstack's resource-name regex forbids underscores. Loading must fail
+    at config-load time, not during `dstack apply` after image build."""
+    config_file = tmp_path / "bad.toml"
+    config_file.write_text(
+        """
+name = "verda_b300_10m"
+[recipe]
+[backend]
+kind = "dstack"
+[mlflow]
+[doctor]
+[smoke]
+[remote]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="invalid for backend.kind='dstack'"):
+        load_run_config(config_file)
+
+
+def test_dstack_config_accepts_hyphenated_name(tmp_path: Path) -> None:
+    config_file = tmp_path / "ok.toml"
+    config_file.write_text(
+        """
+name = "verda-b300-10m"
+[recipe]
+[backend]
+kind = "dstack"
+[mlflow]
+[doctor]
+[smoke]
+[remote]
+""",
+        encoding="utf-8",
+    )
+
+    config = load_run_config(config_file)
+    assert config.name == "verda-b300-10m"
+
+
+def test_local_config_still_accepts_underscore_name(tmp_path: Path) -> None:
+    """tiny_cpu.toml uses underscores; the regex must only gate dstack."""
+    config_file = tmp_path / "local.toml"
+    config_file.write_text(
+        """
+name = "tiny_cpu"
+[recipe]
+[backend]
+kind = "local"
+[mlflow]
+[doctor]
+[smoke]
+[remote]
+""",
+        encoding="utf-8",
+    )
+
+    config = load_run_config(config_file)
+    assert config.name == "tiny_cpu"
 
 
 def _make_fake_root(path: Path, *, name: str = "gpupoor") -> None:

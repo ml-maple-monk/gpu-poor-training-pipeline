@@ -1,4 +1,4 @@
-name = "verda_b300_10m"
+name = "verda-b300-10m"
 
 [recipe]
 kind = "minimind_pretrain"

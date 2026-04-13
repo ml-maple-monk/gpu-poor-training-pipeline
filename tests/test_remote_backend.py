@@ -39,7 +39,7 @@ def test_task_max_duration_rounds_up_to_minutes() -> None:
 
 def test_render_task_uses_config_name_and_duration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
-    config.name = "verda_remote_10m"
+    config.name = "verda-remote-10m"
     calls: list[dict[str, object]] = []
 
     def fake_repo_path(*parts: str) -> Path:
@@ -55,7 +55,7 @@ def test_render_task_uses_config_name_and_duration(tmp_path: Path, monkeypatch: 
     rendered = dstack.render_task({"VCR_IMAGE_BASE": "vccr.io/example"}, config, "abc123")
 
     assert rendered == tmp_path / ".tmp" / "pretrain.task.rendered.yml"
-    assert calls[0]["env"]["TASK_NAME"] == "verda_remote_10m"
+    assert calls[0]["env"]["TASK_NAME"] == "verda-remote-10m"
     assert calls[0]["env"]["TASK_MAX_DURATION"] == "10m"
     # Baseline config sets no GPU overrides; shell defaults must apply.
     assert "TASK_GPU_NAMES" not in calls[0]["env"]
