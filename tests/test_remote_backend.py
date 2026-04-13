@@ -161,8 +161,8 @@ def test_launch_remote_keeps_tunnel_alive_after_success(tmp_path: Path, monkeypa
     wait_limits: list[int] = []
     monkeypatch.setattr(dstack, "wait_for_run_start", lambda *args, **kwargs: wait_limits.append(kwargs["max_wait"]))
 
-    kill_calls: list[bool] = []
-    monkeypatch.setattr(dstack, "kill_tunnel", lambda *, keep_tunnel: kill_calls.append(keep_tunnel))
+    kill_calls: list[None] = []
+    monkeypatch.setattr(dstack, "kill_tunnel", lambda: kill_calls.append(None))
     apply_envs: list[dict[str, str]] = []
     monkeypatch.setattr(
         dstack,
@@ -224,14 +224,14 @@ def test_launch_remote_cleans_up_tunnel_when_startup_fails(tmp_path: Path, monke
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("startup failed")),
     )
 
-    kill_calls: list[bool] = []
-    monkeypatch.setattr(dstack, "kill_tunnel", lambda *, keep_tunnel: kill_calls.append(keep_tunnel))
+    kill_calls: list[None] = []
+    monkeypatch.setattr(dstack, "kill_tunnel", lambda: kill_calls.append(None))
     monkeypatch.setattr(dstack, "run_command", lambda *args, **kwargs: SimpleNamespace(returncode=0))
 
     with pytest.raises(RuntimeError, match="startup failed"):
         dstack.launch_remote(config, skip_build=True)
 
-    assert kill_calls == [False]
+    assert kill_calls == [None]
 
 
 def test_wait_for_run_start_tolerates_retrying_no_capacity(monkeypatch: pytest.MonkeyPatch) -> None:

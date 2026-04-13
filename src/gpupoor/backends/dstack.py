@@ -190,10 +190,7 @@ def track_run(run_name: str) -> None:
         handle.write(f"{run_name}\n")
 
 
-def kill_tunnel(*, keep_tunnel: bool) -> None:
-    if keep_tunnel:
-        print("[gpupoor] Keeping Cloudflare tunnel alive")
-        return
+def kill_tunnel() -> None:
     pid_file = repo_path(".cf-tunnel.pid")
     if not pid_file.is_file():
         return
@@ -213,7 +210,7 @@ def kill_tunnel(*, keep_tunnel: bool) -> None:
 
 
 def teardown_remote_state() -> None:
-    kill_tunnel(keep_tunnel=False)
+    kill_tunnel()
     dstack_bin = find_dstack_bin()
     run_ids_file = repo_path(".run-ids")
     if not run_ids_file.is_file():
@@ -230,8 +227,6 @@ def launch_remote(
     config: RunConfig,
     *,
     skip_build: bool | None = None,
-    keep_tunnel: bool | None = None,
-    pull_artifacts: bool | None = None,
     dry_run: bool = False,
     configure_server: bool = True,
 ) -> None:
@@ -255,8 +250,6 @@ def launch_remote(
     )
 
     use_skip_build = config.backend.skip_build if skip_build is None else skip_build
-    use_keep_tunnel = config.backend.keep_tunnel if keep_tunnel is None else keep_tunnel
-    use_pull_artifacts = config.backend.pull_artifacts if pull_artifacts is None else pull_artifacts
 
     if not use_skip_build:
         if dry_run:
@@ -295,25 +288,19 @@ def launch_remote(
 
         started_tunnel = True
         rendered_task = render_task(settings, config, image_sha)
-        apply_env = {
-            "HF_TOKEN": read_required_secret("hf_token"),
-            "MLFLOW_TRACKING_URI": mlflow_url,
-            "MLFLOW_EXPERIMENT_NAME": config.mlflow.experiment_name,
-            "MLFLOW_ARTIFACT_UPLOAD": "1" if config.mlflow.artifact_upload else "0",
-            "MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING": "true" if config.mlflow.enable_system_metrics_logging else "false",
-            "MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL": str(config.mlflow.system_metrics_sampling_interval),
-            "MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING": str(config.mlflow.system_metrics_samples_before_logging),
-            "MLFLOW_HTTP_REQUEST_MAX_RETRIES": str(config.mlflow.http_request_max_retries),
-            "MLFLOW_HTTP_REQUEST_TIMEOUT": str(config.mlflow.http_request_timeout_seconds),
-            "MLFLOW_START_TIMEOUT_SECONDS": str(config.mlflow.start_timeout_seconds),
-            "MLFLOW_START_RETRY_SECONDS": str(config.mlflow.start_retry_seconds),
-            "VERDA_PROFILE": "remote",
-            "DSTACK_RUN_NAME": config.name,
-            "OUT_DIR": settings.get("OUT_DIR", "/workspace/out"),
-            "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", "jingyaogong/minimind_dataset"),
-            "HF_DATASET_FILENAME": settings.get("HF_DATASET_FILENAME", Path(config.recipe.dataset_path).name),
-            "TIME_CAP_SECONDS": str(config.recipe.time_cap_seconds),
-        }
+        apply_env = config.mlflow.to_env()
+        apply_env["MLFLOW_TRACKING_URI"] = mlflow_url
+        apply_env.update(
+            {
+                "HF_TOKEN": read_required_secret("hf_token"),
+                "VERDA_PROFILE": "remote",
+                "DSTACK_RUN_NAME": config.name,
+                "OUT_DIR": settings.get("OUT_DIR", "/workspace/out"),
+                "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", "jingyaogong/minimind_dataset"),
+                "HF_DATASET_FILENAME": settings.get("HF_DATASET_FILENAME", Path(config.recipe.dataset_path).name),
+                "TIME_CAP_SECONDS": str(config.recipe.time_cap_seconds),
+            }
+        )
         result = run_command([dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], env=apply_env, check=False)
         if result.returncode != 0:
             raise CommandError([dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], result.returncode)
@@ -328,16 +315,11 @@ def launch_remote(
                 f"[gpupoor] WARN: dstack apply reported success but run '{run_name}' "
                 "is not visible in dstack ps; skipping track/wait"
             )
-        if use_pull_artifacts:
-            print("[gpupoor] WARN: pull-artifacts is still manual on the current dstack CLI")
     finally:
         if rendered_task and rendered_task.exists():
             rendered_task.unlink()
         if started_tunnel:
             if launched_remote_run:
-                if use_keep_tunnel:
-                    print("[gpupoor] Keeping Cloudflare tunnel alive")
-                else:
-                    print("[gpupoor] Keeping Cloudflare tunnel alive until teardown so remote MLflow stays reachable")
+                print("[gpupoor] Keeping Cloudflare tunnel alive until teardown so remote MLflow stays reachable")
             else:
-                kill_tunnel(keep_tunnel=False)
+                kill_tunnel()

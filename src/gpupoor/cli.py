@@ -5,16 +5,17 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from dataclasses import replace
 
 from gpupoor import __version__, ops
 from gpupoor.backends import dstack as dstack_backend
 from gpupoor.backends.local import run_training as run_local_training
 from gpupoor.config import (
     ConfigError,
+    DoctorConfig,
     RunConfig,
+    SmokeConfig,
     load_run_config,
-    merge_doctor_config,
-    merge_smoke_config,
 )
 from gpupoor.legacy import run_dstack, run_infra, run_root, run_training
 from gpupoor.subprocess_utils import CommandError
@@ -65,15 +66,6 @@ def build_parser() -> argparse.ArgumentParser:
     dstack_parser = launch_subparsers.add_parser("dstack", help="Launch a Verda/dstack run from config")
     dstack_parser.add_argument("config", help="Path to a TOML run config")
     dstack_parser.add_argument("--skip-build", action="store_true", default=None, help="Skip image build and push")
-    dstack_parser.add_argument(
-        "--keep-tunnel",
-        action="store_true",
-        default=None,
-        help="Compatibility flag; successful remote launches now keep the MLflow tunnel alive until teardown",
-    )
-    dstack_parser.add_argument(
-        "--pull-artifacts", action="store_true", default=None, help="Retain the compatibility flag"
-    )
     dstack_parser.add_argument("--dry-run", action="store_true", help="Print the remote plan without mutating")
 
     infra_parser = subparsers.add_parser("infra", help="Manage local debug/runtime services")
@@ -146,44 +138,37 @@ def _load_optional_run_config(path: str | None) -> RunConfig | None:
     return load_run_config(path) if path else None
 
 
-def _resolve_doctor_config(run_config: RunConfig | None, args: argparse.Namespace):
+_DOCTOR_OVERRIDE_KEYS = ("skip_preflight", "max_clock_skew_seconds")
+_SMOKE_OVERRIDE_KEYS = (
+    "cpu",
+    "base_image",
+    "health_port",
+    "health_timeout_seconds",
+    "strict_port",
+    "degraded_port",
+    "sigterm_timeout_seconds",
+    "data_wait_timeout_seconds",
+)
+
+
+def _override_kwargs(args: argparse.Namespace, keys: tuple[str, ...]) -> dict[str, object]:
+    return {key: getattr(args, key) for key in keys if getattr(args, key, None) is not None}
+
+
+def _resolve_doctor_config(run_config: RunConfig | None, args: argparse.Namespace) -> DoctorConfig | None:
     base = run_config.doctor if run_config else None
-    skip_preflight = getattr(args, "skip_preflight", None)
-    max_clock_skew_seconds = getattr(args, "max_clock_skew_seconds", None)
-    if base is None and skip_preflight is None and max_clock_skew_seconds is None:
+    overrides = _override_kwargs(args, _DOCTOR_OVERRIDE_KEYS)
+    if base is None and not overrides:
         return None
-    return merge_doctor_config(
-        base,
-        skip_preflight=skip_preflight,
-        max_clock_skew_seconds=max_clock_skew_seconds,
-    )
+    return replace(base or DoctorConfig(), **overrides)
 
 
-def _resolve_smoke_config(run_config: RunConfig | None, args: argparse.Namespace):
+def _resolve_smoke_config(run_config: RunConfig | None, args: argparse.Namespace) -> SmokeConfig | None:
     base = run_config.smoke if run_config else None
-    if (
-        base is None
-        and args.cpu is None
-        and args.base_image is None
-        and args.health_port is None
-        and args.health_timeout_seconds is None
-        and args.strict_port is None
-        and args.degraded_port is None
-        and args.sigterm_timeout_seconds is None
-        and args.data_wait_timeout_seconds is None
-    ):
+    overrides = _override_kwargs(args, _SMOKE_OVERRIDE_KEYS)
+    if base is None and not overrides:
         return None
-    return merge_smoke_config(
-        base,
-        cpu=args.cpu,
-        base_image=args.base_image,
-        health_port=args.health_port,
-        health_timeout_seconds=args.health_timeout_seconds,
-        strict_port=args.strict_port,
-        degraded_port=args.degraded_port,
-        sigterm_timeout_seconds=args.sigterm_timeout_seconds,
-        data_wait_timeout_seconds=args.data_wait_timeout_seconds,
-    )
+    return replace(base or SmokeConfig(), **overrides)
 
 
 def dispatch(args: argparse.Namespace) -> None:
@@ -236,8 +221,6 @@ def dispatch(args: argparse.Namespace) -> None:
         dstack_backend.launch_remote(
             config,
             skip_build=args.skip_build,
-            keep_tunnel=args.keep_tunnel,
-            pull_artifacts=args.pull_artifacts,
             dry_run=args.dry_run,
         )
         return

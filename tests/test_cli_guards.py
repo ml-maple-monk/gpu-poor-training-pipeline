@@ -145,20 +145,18 @@ def test_launch_dstack_leaves_config_defaults_in_control_when_flags_omitted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
-    calls: list[tuple[object, object, object, bool]] = []
+    calls: list[tuple[object, bool]] = []
 
     monkeypatch.setattr(cli, "load_run_config", lambda path: config)
     monkeypatch.setattr(
         cli.dstack_backend,
         "launch_remote",
-        lambda config, *, skip_build=None, keep_tunnel=None, pull_artifacts=None, dry_run=False: calls.append(
-            (skip_build, keep_tunnel, pull_artifacts, dry_run)
-        ),
+        lambda config, *, skip_build=None, dry_run=False: calls.append((skip_build, dry_run)),
     )
 
     cli.dispatch(cli.build_parser().parse_args(["launch", "dstack", "examples/verda_remote.toml"]))
 
-    assert calls == [(None, None, None, False)]
+    assert calls == [(None, False)]
 
 
 def test_compat_fix_clock_uses_package_helper(monkeypatch: pytest.MonkeyPatch) -> None:

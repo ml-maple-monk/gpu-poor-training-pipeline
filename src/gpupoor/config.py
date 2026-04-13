@@ -7,7 +7,7 @@ import re
 import shutil
 import subprocess
 import tomllib
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from gpupoor.utils import repo_path
@@ -41,8 +41,6 @@ class RecipeConfig:
 class BackendConfig:
     kind: str
     skip_build: bool = False
-    keep_tunnel: bool = False
-    pull_artifacts: bool = False
     remote_image_tag: str | None = None
 
 
@@ -58,6 +56,25 @@ class MlflowConfig:
     http_request_timeout_seconds: int = 120
     start_timeout_seconds: int = 180
     start_retry_seconds: int = 5
+
+    def to_env(self) -> dict[str, str]:
+        """Return MLFLOW_* env vars shared by local and dstack training entrypoints.
+
+        Callers may override MLFLOW_TRACKING_URI (e.g. dstack uses the
+        Cloudflare tunnel URL instead of self.tracking_uri).
+        """
+        return {
+            "MLFLOW_TRACKING_URI": self.tracking_uri,
+            "MLFLOW_EXPERIMENT_NAME": self.experiment_name,
+            "MLFLOW_ARTIFACT_UPLOAD": "1" if self.artifact_upload else "0",
+            "MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING": "true" if self.enable_system_metrics_logging else "false",
+            "MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL": str(self.system_metrics_sampling_interval),
+            "MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING": str(self.system_metrics_samples_before_logging),
+            "MLFLOW_HTTP_REQUEST_MAX_RETRIES": str(self.http_request_max_retries),
+            "MLFLOW_HTTP_REQUEST_TIMEOUT": str(self.http_request_timeout_seconds),
+            "MLFLOW_START_TIMEOUT_SECONDS": str(self.start_timeout_seconds),
+            "MLFLOW_START_RETRY_SECONDS": str(self.start_retry_seconds),
+        }
 
 
 @dataclass(slots=True)
@@ -171,56 +188,6 @@ def _optional_string_tuple(data: dict[str, object], key: str) -> tuple[str, ...]
     return tuple(value)
 
 
-def merge_doctor_config(
-    config: DoctorConfig | None = None,
-    *,
-    skip_preflight: bool | None = None,
-    max_clock_skew_seconds: int | None = None,
-) -> DoctorConfig:
-    return replace(
-        config or DoctorConfig(),
-        **{
-            key: value
-            for key, value in {
-                "skip_preflight": skip_preflight,
-                "max_clock_skew_seconds": max_clock_skew_seconds,
-            }.items()
-            if value is not None
-        },
-    )
-
-
-def merge_smoke_config(
-    config: SmokeConfig | None = None,
-    *,
-    cpu: bool | None = None,
-    base_image: str | None = None,
-    health_port: int | None = None,
-    health_timeout_seconds: int | None = None,
-    strict_port: int | None = None,
-    degraded_port: int | None = None,
-    sigterm_timeout_seconds: int | None = None,
-    data_wait_timeout_seconds: int | None = None,
-) -> SmokeConfig:
-    return replace(
-        config or SmokeConfig(),
-        **{
-            key: value
-            for key, value in {
-                "cpu": cpu,
-                "base_image": base_image,
-                "health_port": health_port,
-                "health_timeout_seconds": health_timeout_seconds,
-                "strict_port": strict_port,
-                "degraded_port": degraded_port,
-                "sigterm_timeout_seconds": sigterm_timeout_seconds,
-                "data_wait_timeout_seconds": data_wait_timeout_seconds,
-            }.items()
-            if value is not None
-        },
-    )
-
-
 def parse_env_file(path: Path) -> dict[str, str]:
     """Parse a simple KEY=VALUE env file."""
     data: dict[str, str] = {}
@@ -320,8 +287,6 @@ def load_run_config(path: str | Path) -> RunConfig:
     backend = BackendConfig(
         kind=_require_str(backend_data, "kind"),
         skip_build=_require_bool(backend_data, "skip_build", default=False),
-        keep_tunnel=_require_bool(backend_data, "keep_tunnel", default=False),
-        pull_artifacts=_require_bool(backend_data, "pull_artifacts", default=False),
         remote_image_tag=backend_data.get("remote_image_tag"),
     )
     if backend.remote_image_tag is not None and not isinstance(backend.remote_image_tag, str):

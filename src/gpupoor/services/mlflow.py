@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import urllib.request
 from pathlib import Path
 
 from gpupoor.subprocess_utils import bash_script, run_command
@@ -45,11 +44,3 @@ def logs(extra_args: list[str] | None = None) -> None:
 
 def tunnel(extra_args: list[str] | None = None) -> None:
     bash_script(repo_path("infrastructure", "mlflow", "scripts", "run-tunnel.sh"), *(extra_args or []))
-
-
-def healthcheck(url: str = "http://127.0.0.1:5000/health") -> bool:
-    try:
-        with urllib.request.urlopen(url, timeout=5) as response:
-            return response.status == 200
-    except Exception:
-        return False

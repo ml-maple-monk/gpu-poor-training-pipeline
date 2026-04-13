@@ -10,8 +10,6 @@ time_cap_seconds = 120
 [backend]
 kind = "local"
 skip_build = false
-keep_tunnel = false
-pull_artifacts = false
 
 [mlflow]
 experiment_name = "minimind-pretrain"
