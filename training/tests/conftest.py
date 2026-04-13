@@ -5,11 +5,10 @@ Provides a minimal trainer-shaped script that reproduces the atomic save
 pattern + SIGTERM handler WITHOUT requiring a real GPU, real dataset, or
 real MLflow. Goal: validate the PATTERN, not full minimind integration.
 """
-import os
-import sys
-import textwrap
-import pytest
 
+import textwrap
+
+import pytest
 
 TRAINER_STUB = textwrap.dedent("""\
     #!/usr/bin/env python3

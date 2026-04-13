@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -15,11 +14,7 @@ def test_each_subsystem_has_one_top_level_start_script():
 
 
 def test_infrastructure_shape_is_explicit():
-    infra_dirs = {
-        path.name
-        for path in (REPO_ROOT / "infrastructure").iterdir()
-        if path.is_dir()
-    }
+    infra_dirs = {path.name for path in (REPO_ROOT / "infrastructure").iterdir() if path.is_dir()}
     assert infra_dirs == {"dashboard", "local-emulator", "mlflow"}
 
 
@@ -56,12 +51,18 @@ def test_dashboard_no_longer_owns_mlflow_assets():
 
 
 def test_each_compose_stack_has_a_distinct_project_name():
-    assert (REPO_ROOT / "infrastructure" / "dashboard" / "compose" / "docker-compose.yml").read_text().startswith(
-        "name: verda-dashboard\n"
+    assert (
+        (REPO_ROOT / "infrastructure" / "dashboard" / "compose" / "docker-compose.yml")
+        .read_text()
+        .startswith("name: verda-dashboard\n")
     )
-    assert (REPO_ROOT / "infrastructure" / "local-emulator" / "compose" / "docker-compose.yml").read_text().startswith(
-        "name: verda-local-emulator\n"
+    assert (
+        (REPO_ROOT / "infrastructure" / "local-emulator" / "compose" / "docker-compose.yml")
+        .read_text()
+        .startswith("name: verda-local-emulator\n")
     )
-    assert (REPO_ROOT / "training" / "compose" / "docker-compose.train.yml").read_text().startswith(
-        "name: minimind-training\n"
+    assert (
+        (REPO_ROOT / "training" / "compose" / "docker-compose.train.yml")
+        .read_text()
+        .startswith("name: minimind-training\n")
     )

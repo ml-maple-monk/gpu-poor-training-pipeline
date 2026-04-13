@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import subprocess
 import tempfile
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from gpupoor.config import DoctorConfig, SmokeConfig
 from gpupoor.ops.doctor import run_preflight
@@ -47,9 +47,7 @@ def run_smoke(config: SmokeConfig | None = None, *, doctor: DoctorConfig | None 
     print("--- Build & Run ---")
     try:
         run_command([*compose, "up", "--build", "-d"], env=runtime_env)
-        _wait_for_health(
-            settings.health_port, expected=200, timeout_seconds=settings.health_timeout_seconds
-        )
+        _wait_for_health(settings.health_port, expected=200, timeout_seconds=settings.health_timeout_seconds)
         _probe_uid_gid(compose, reporter)
         _probe_non_root_write(compose, reporter)
         _probe_sigterm_latency(compose, reporter, timeout_seconds=settings.sigterm_timeout_seconds)
@@ -57,9 +55,7 @@ def run_smoke(config: SmokeConfig | None = None, *, doctor: DoctorConfig | None 
         time.sleep(2)
         _probe_env_leak(compose, reporter)
         _probe_degraded_gating(runtime_env, reporter, settings)
-        _probe_data_wait_timeout(
-            local_image, reporter, timeout_seconds=settings.data_wait_timeout_seconds
-        )
+        _probe_data_wait_timeout(local_image, reporter, timeout_seconds=settings.data_wait_timeout_seconds)
 
         print("--- Leak Scan ---")
         try:
@@ -96,11 +92,7 @@ def _compose_command(*, cpu: bool, extra_files: list[Path] | None = None) -> lis
         command.extend(
             [
                 "-f",
-                str(
-                    repo_path(
-                        "infrastructure", "local-emulator", "compose", "docker-compose.cpu.yml"
-                    )
-                ),
+                str(repo_path("infrastructure", "local-emulator", "compose", "docker-compose.cpu.yml")),
             ]
         )
     for extra_file in extra_files or []:
@@ -147,9 +139,7 @@ def _wait_for_health(port: int, *, expected: int, timeout_seconds: int) -> None:
         except Exception:
             last_code = "000"
         time.sleep(1)
-    raise RuntimeError(
-        f"{url} did not return {expected} within {timeout_seconds}s (last={last_code})"
-    )
+    raise RuntimeError(f"{url} did not return {expected} within {timeout_seconds}s (last={last_code})")
 
 
 def _probe_uid_gid(compose: list[str], reporter: SmokeReporter) -> None:
@@ -190,9 +180,7 @@ def _probe_non_root_write(compose: list[str], reporter: SmokeReporter) -> None:
     reporter.fail_probe("B", "non-root write to /data failed")
 
 
-def _probe_sigterm_latency(
-    compose: list[str], reporter: SmokeReporter, *, timeout_seconds: int
-) -> None:
+def _probe_sigterm_latency(compose: list[str], reporter: SmokeReporter, *, timeout_seconds: int) -> None:
     print("--- Probe C: SIGTERM latency ---")
     start = time.time()
     subprocess.run([*compose, "kill", "-s", "TERM"], check=False, capture_output=True, text=True)
@@ -236,9 +224,7 @@ def _probe_env_leak(compose: list[str], reporter: SmokeReporter) -> None:
     reporter.fail_probe("D", f"LEAK: {'; '.join(leaks)}")
 
 
-def _probe_degraded_gating(
-    runtime_env: dict[str, str], reporter: SmokeReporter, settings: SmokeConfig
-) -> None:
+def _probe_degraded_gating(runtime_env: dict[str, str], reporter: SmokeReporter, settings: SmokeConfig) -> None:
     print("--- Probe E: degraded gating ---")
     with tempfile.TemporaryDirectory(prefix="gpupoor-smoke.") as temp_dir:
         strict_override = Path(temp_dir) / "strict.override.yml"
@@ -261,12 +247,8 @@ def _probe_degraded_gating(
         degraded_env = {"APP_PORT": str(settings.degraded_port), **runtime_env}
         try:
             run_command([*strict_compose, "up", "-d", "--build"], env=strict_env)
-            _wait_for_health(
-                settings.strict_port, expected=503, timeout_seconds=settings.health_timeout_seconds
-            )
-            run_command(
-                [*strict_compose, "down", "-v", "--remove-orphans"], check=False, env=strict_env
-            )
+            _wait_for_health(settings.strict_port, expected=503, timeout_seconds=settings.health_timeout_seconds)
+            run_command([*strict_compose, "down", "-v", "--remove-orphans"], check=False, env=strict_env)
 
             run_command([*degraded_compose, "up", "-d", "--build"], env=degraded_env)
             _wait_for_health(
@@ -278,17 +260,11 @@ def _probe_degraded_gating(
         except RuntimeError as exc:
             reporter.fail_probe("E", str(exc))
         finally:
-            run_command(
-                [*strict_compose, "down", "-v", "--remove-orphans"], check=False, env=strict_env
-            )
-            run_command(
-                [*degraded_compose, "down", "-v", "--remove-orphans"], check=False, env=degraded_env
-            )
+            run_command([*strict_compose, "down", "-v", "--remove-orphans"], check=False, env=strict_env)
+            run_command([*degraded_compose, "down", "-v", "--remove-orphans"], check=False, env=degraded_env)
 
 
-def _probe_data_wait_timeout(
-    local_image: str, reporter: SmokeReporter, *, timeout_seconds: int
-) -> None:
+def _probe_data_wait_timeout(local_image: str, reporter: SmokeReporter, *, timeout_seconds: int) -> None:
     print("--- Probe F: /data wait timeout ---")
     completed = subprocess.run(
         [

@@ -5,10 +5,10 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
-
+from typing import Any
 
 # ── Data model dataclasses ──────────────────────────────────────────────────────
+
 
 @dataclass
 class TrainingSnapshot:
@@ -22,8 +22,8 @@ class TrainingSnapshot:
     gpu_util_percent: float = 0.0
     gpu_mem_used_mb: float = 0.0
     gpu_mem_total_mb: float = 0.0
-    exit_code: Optional[int] = None
-    last_seen: Optional[datetime] = None
+    exit_code: int | None = None
+    last_seen: datetime | None = None
 
 
 @dataclass
@@ -56,8 +56,8 @@ class MLflowRun:
     run_name: str = ""
     experiment_id: str = ""
     status: str = ""
-    start_time: Optional[datetime] = None
-    end_time: Optional[datetime] = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
     metrics: dict[str, float] = field(default_factory=dict)
     params: dict[str, str] = field(default_factory=dict)
     tags: dict[str, str] = field(default_factory=dict)
@@ -85,14 +85,16 @@ class Artifact:
     name: str = ""
     path: str = ""
     size_bytes: int = 0
-    modified_at: Optional[datetime] = None
+    modified_at: datetime | None = None
 
 
 # ── AppState ────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class AppState:
     """Shared mutable state. ALL mutations happen under `lock`."""
+
     # Lock must be acquired before reading or writing any field
     lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -130,12 +132,12 @@ class AppState:
     shutdown_event: threading.Event = field(default_factory=threading.Event)
 
     # Active dstack run being followed for logs (None = none)
-    active_dstack_run: Optional[str] = None
+    active_dstack_run: str | None = None
 
 
 # ── Module-level singleton ──────────────────────────────────────────────────────
 
-_state: Optional[AppState] = None
+_state: AppState | None = None
 
 
 def get_state() -> AppState:

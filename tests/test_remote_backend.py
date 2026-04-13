@@ -8,8 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from gpupoor.backends import dstack
-from gpupoor.config import parse_env_file, load_run_config
-
+from gpupoor.config import load_run_config, parse_env_file
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -38,9 +37,7 @@ def test_task_max_duration_rounds_up_to_minutes() -> None:
     assert dstack.task_max_duration(601) == "11m"
 
 
-def test_render_task_uses_config_name_and_duration(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_render_task_uses_config_name_and_duration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
     config.name = "verda_remote_10m"
     calls: list[dict[str, object]] = []
@@ -48,9 +45,7 @@ def test_render_task_uses_config_name_and_duration(
     def fake_repo_path(*parts: str) -> Path:
         return tmp_path.joinpath(*parts)
 
-    def fake_bash_script(
-        script: Path, *args: str, env: dict[str, str] | None = None, **kwargs: object
-    ) -> None:
+    def fake_bash_script(script: Path, *args: str, env: dict[str, str] | None = None, **kwargs: object) -> None:
         calls.append({"script": script, "args": args, "env": env or {}})
         Path(args[0]).write_text("# rendered\n", encoding="utf-8")
 
@@ -69,18 +64,14 @@ def test_render_task_uses_config_name_and_duration(
     assert "TASK_MAX_PRICE" not in calls[0]["env"]
 
 
-def test_render_task_injects_gpu_overrides_when_set(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_render_task_injects_gpu_overrides_when_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = load_run_config(REPO_ROOT / "examples" / "verda_b300_10m.toml")
     calls: list[dict[str, object]] = []
 
     def fake_repo_path(*parts: str) -> Path:
         return tmp_path.joinpath(*parts)
 
-    def fake_bash_script(
-        script: Path, *args: str, env: dict[str, str] | None = None, **kwargs: object
-    ) -> None:
+    def fake_bash_script(script: Path, *args: str, env: dict[str, str] | None = None, **kwargs: object) -> None:
         calls.append({"script": script, "args": args, "env": env or {}})
         Path(args[0]).write_text("# rendered\n", encoding="utf-8")
 
@@ -96,9 +87,7 @@ def test_render_task_injects_gpu_overrides_when_set(
     assert env["TASK_MAX_PRICE"] == "10.0"
 
 
-def test_render_task_joins_multiple_gpu_names(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_render_task_joins_multiple_gpu_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
     config.remote.gpu_names = ("B200", "B300")
     calls: list[dict[str, object]] = []
@@ -106,9 +95,7 @@ def test_render_task_joins_multiple_gpu_names(
     def fake_repo_path(*parts: str) -> Path:
         return tmp_path.joinpath(*parts)
 
-    def fake_bash_script(
-        script: Path, *args: str, env: dict[str, str] | None = None, **kwargs: object
-    ) -> None:
+    def fake_bash_script(script: Path, *args: str, env: dict[str, str] | None = None, **kwargs: object) -> None:
         calls.append({"script": script, "args": args, "env": env or {}})
         Path(args[0]).write_text("# rendered\n", encoding="utf-8")
 
@@ -120,9 +107,7 @@ def test_render_task_joins_multiple_gpu_names(
     assert calls[0]["env"]["TASK_GPU_NAMES"] == "[B200, B300]"
 
 
-def test_launch_remote_keeps_tunnel_alive_after_success(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_launch_remote_keeps_tunnel_alive_after_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
     (tmp_path / ".cf-tunnel.url").write_text("https://mlflow.example", encoding="utf-8")
 
@@ -162,9 +147,7 @@ def test_launch_remote_keeps_tunnel_alive_after_success(
         "ensure_dstack_server",
         lambda *args, **kwargs: (
             dstack_urls.append(kwargs["health_url"]),
-            dstack_timeouts.append(
-                (kwargs["health_timeout_seconds"], kwargs["start_timeout_seconds"])
-            ),
+            dstack_timeouts.append((kwargs["health_timeout_seconds"], kwargs["start_timeout_seconds"])),
         ),
     )
     monkeypatch.setattr(dstack, "bash_script", lambda *args, **kwargs: None)
@@ -176,21 +159,15 @@ def test_launch_remote_keeps_tunnel_alive_after_success(
     monkeypatch.setattr(dstack, "read_required_secret", lambda filename: "hf-token")
     monkeypatch.setattr(dstack, "dstack_has_run", lambda dstack_bin, run_name: True)
     wait_limits: list[int] = []
-    monkeypatch.setattr(
-        dstack, "wait_for_run_start", lambda *args, **kwargs: wait_limits.append(kwargs["max_wait"])
-    )
+    monkeypatch.setattr(dstack, "wait_for_run_start", lambda *args, **kwargs: wait_limits.append(kwargs["max_wait"]))
 
     kill_calls: list[bool] = []
-    monkeypatch.setattr(
-        dstack, "kill_tunnel", lambda *, keep_tunnel: kill_calls.append(keep_tunnel)
-    )
+    monkeypatch.setattr(dstack, "kill_tunnel", lambda *, keep_tunnel: kill_calls.append(keep_tunnel))
     apply_envs: list[dict[str, str]] = []
     monkeypatch.setattr(
         dstack,
         "run_command",
-        lambda *args, **kwargs: (apply_envs.append(kwargs["env"]), SimpleNamespace(returncode=0))[
-            1
-        ],
+        lambda *args, **kwargs: (apply_envs.append(kwargs["env"]), SimpleNamespace(returncode=0))[1],
     )
 
     dstack.launch_remote(config, skip_build=True)
@@ -211,9 +188,7 @@ def test_launch_remote_keeps_tunnel_alive_after_success(
     assert apply_envs[0]["MLFLOW_EXPERIMENT_NAME"] == config.mlflow.experiment_name
 
 
-def test_launch_remote_cleans_up_tunnel_when_startup_fails(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_launch_remote_cleans_up_tunnel_when_startup_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
     (tmp_path / ".cf-tunnel.url").write_text("https://mlflow.example", encoding="utf-8")
 
@@ -250,12 +225,8 @@ def test_launch_remote_cleans_up_tunnel_when_startup_fails(
     )
 
     kill_calls: list[bool] = []
-    monkeypatch.setattr(
-        dstack, "kill_tunnel", lambda *, keep_tunnel: kill_calls.append(keep_tunnel)
-    )
-    monkeypatch.setattr(
-        dstack, "run_command", lambda *args, **kwargs: SimpleNamespace(returncode=0)
-    )
+    monkeypatch.setattr(dstack, "kill_tunnel", lambda *, keep_tunnel: kill_calls.append(keep_tunnel))
+    monkeypatch.setattr(dstack, "run_command", lambda *args, **kwargs: SimpleNamespace(returncode=0))
 
     with pytest.raises(RuntimeError, match="startup failed"):
         dstack.launch_remote(config, skip_build=True)
@@ -293,18 +264,14 @@ def test_dstack_has_run_matches_by_name_not_order(monkeypatch: pytest.MonkeyPatc
             "third-party-run",
         ]
     )
-    monkeypatch.setattr(
-        dstack.subprocess, "check_output", lambda *args, **kwargs: output
-    )
+    monkeypatch.setattr(dstack.subprocess, "check_output", lambda *args, **kwargs: output)
 
     assert dstack.dstack_has_run("dstack", "verda-remote-10m") is True
 
 
 def test_dstack_has_run_returns_false_when_name_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     output = _fake_ps_output(["someone-else-run", "third-party-run"])
-    monkeypatch.setattr(
-        dstack.subprocess, "check_output", lambda *args, **kwargs: output
-    )
+    monkeypatch.setattr(dstack.subprocess, "check_output", lambda *args, **kwargs: output)
 
     assert dstack.dstack_has_run("dstack", "verda-remote-10m") is False
 
@@ -333,8 +300,6 @@ def test_dstack_has_run_reads_run_name_from_run_spec(monkeypatch: pytest.MonkeyP
             ]
         }
     )
-    monkeypatch.setattr(
-        dstack.subprocess, "check_output", lambda *args, **kwargs: payload
-    )
+    monkeypatch.setattr(dstack.subprocess, "check_output", lambda *args, **kwargs: payload)
 
     assert dstack.dstack_has_run("dstack", "verda-remote-10m") is True

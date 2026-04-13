@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import base64
-from pathlib import Path
 import re
 import secrets as py_secrets
 import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 from gpupoor.subprocess_utils import run_command
 from gpupoor.utils import repo_path, repo_root
-
 
 CLIENT_ID_PATTERN = re.compile(r"^[Cc]lien[dt]\s*ID\s*:\s*(.+)$", re.MULTILINE)
 SECRET_PATTERN = re.compile(r"^[Ss]ecret:\s*(.+)$", re.MULTILINE)
@@ -36,9 +35,7 @@ def parse_secrets_payload(payload: str) -> tuple[str, str]:
     return client_id, secret
 
 
-def parse_secrets(
-    secrets_file: str | Path | None = None, *, output_dir: str | Path | None = None
-) -> None:
+def parse_secrets(secrets_file: str | Path | None = None, *, output_dir: str | Path | None = None) -> None:
     source = repo_path("secrets") if secrets_file is None else Path(secrets_file).resolve()
     if not source.is_file():
         raise FileNotFoundError(f"secrets file not found: {source}")
@@ -144,9 +141,7 @@ def leak_scan(image: str = "verda-local", *, canary: bool = False) -> None:
         output = _scan_output(["syft", full_image])
     else:
         print("Using: docker history (fallback)")
-        output = _scan_output(
-            ["docker", "history", "--no-trunc", "--format", "{{.CreatedBy}}", full_image]
-        )
+        output = _scan_output(["docker", "history", "--no-trunc", "--format", "{{.CreatedBy}}", full_image])
 
     findings = detect_secret_leaks(output, collect_leak_scan_secrets())
     for finding in findings:
@@ -192,9 +187,7 @@ def _run_canary_self_test() -> None:
                 text=True,
             )
             if "PLANTED123" not in history:
-                raise RuntimeError(
-                    "CANARY self-test FAIL: canary value NOT detected — scanner may be unreliable"
-                )
+                raise RuntimeError("CANARY self-test FAIL: canary value NOT detected — scanner may be unreliable")
             print("CANARY self-test PASS: canary value detected in layers")
         finally:
             run_command(["docker", "rmi", canary_tag], check=False)

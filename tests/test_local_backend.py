@@ -7,7 +7,6 @@ from pathlib import Path
 from gpupoor.backends import local
 from gpupoor.config import load_run_config
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 

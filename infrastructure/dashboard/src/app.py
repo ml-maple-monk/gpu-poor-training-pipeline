@@ -8,10 +8,8 @@ queue(max_size=5) caps concurrent viewers for bandwidth safety.
 from __future__ import annotations
 
 import logging
-import os
 import signal
 import sys
-import threading
 import time
 
 import gradio as gr
@@ -100,7 +98,6 @@ def build_app() -> gr.Blocks:
     with gr.Blocks(
         title="Verda Dashboard",
     ) as demo:
-
         gr.Markdown("# Verda Dashboard")
 
         # ── Topbar ───────────────────────────────────────────────────────────
@@ -138,9 +135,7 @@ def build_app() -> gr.Blocks:
         with gr.Row():
             with gr.Column():
                 gr.Markdown("### dstack Runs")
-                dstack_active_md = gr.Markdown(
-                    value=f"**Active run:** {get_active_run_name(state)}"
-                )
+                dstack_active_md = gr.Markdown(value=f"**Active run:** {get_active_run_name(state)}")
                 dstack_table = gr.DataFrame(
                     value=format_dstack_table(state),
                     headers=["Run Name", "Status", "Backend", "Instance", "Region", "Cost"],

@@ -33,11 +33,13 @@ def format_system_table(state: AppState) -> list[list]:
     """Return single-row table for system resources."""
     with state.lock:
         sys = state.system
-    return [[
-        sys.hostname,
-        f"{sys.cpu_percent:.1f}%",
-        f"{sys.mem_used_gb:.1f}/{sys.mem_total_gb:.1f} GB",
-        sys.gpu_name or "N/A",
-        f"{sys.gpu_util_percent:.0f}%" if sys.nvidia_smi_available else "N/A",
-        f"{sys.gpu_mem_used_mb:.0f}/{sys.gpu_mem_total_mb:.0f} MB" if sys.nvidia_smi_available else "N/A",
-    ]]
+    return [
+        [
+            sys.hostname,
+            f"{sys.cpu_percent:.1f}%",
+            f"{sys.mem_used_gb:.1f}/{sys.mem_total_gb:.1f} GB",
+            sys.gpu_name or "N/A",
+            f"{sys.gpu_util_percent:.0f}%" if sys.nvidia_smi_available else "N/A",
+            f"{sys.gpu_mem_used_mb:.0f}/{sys.gpu_mem_total_mb:.0f} MB" if sys.nvidia_smi_available else "N/A",
+        ]
+    ]

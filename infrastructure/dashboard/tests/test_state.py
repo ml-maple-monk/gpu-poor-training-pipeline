@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import sys
-import os
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import threading
-import pytest
-from src.state import AppState, reset_state, get_state, TrainingSnapshot, DstackRun
+
+from src.state import DstackRun, TrainingSnapshot, get_state, reset_state
 
 
 def test_fresh_state_defaults(fresh_state):

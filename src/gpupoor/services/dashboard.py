@@ -35,6 +35,4 @@ def down(extra_args: list[str] | None = None) -> None:
 
 
 def logs(extra_args: list[str] | None = None) -> None:
-    run_command(
-        ["docker", "compose", "-f", str(_compose_file()), "logs", "-f", *(extra_args or [])]
-    )
+    run_command(["docker", "compose", "-f", str(_compose_file()), "logs", "-f", *(extra_args or [])])

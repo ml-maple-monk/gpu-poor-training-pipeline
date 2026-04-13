@@ -7,7 +7,6 @@ The actual tailing loop lives in log_tailer.LogTailer.
 from __future__ import annotations
 
 import logging
-from typing import Generator
 
 import httpx
 

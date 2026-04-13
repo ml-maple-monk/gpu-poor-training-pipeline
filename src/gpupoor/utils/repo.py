@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
 import os
-from pathlib import Path
 import re
+from functools import lru_cache
+from pathlib import Path
 
-
-_PYPROJECT_NAME_RE = re.compile(
-    r"""^\s*name\s*=\s*["']gpupoor["']\s*$""", re.MULTILINE
-)
+_PYPROJECT_NAME_RE = re.compile(r"""^\s*name\s*=\s*["']gpupoor["']\s*$""", re.MULTILINE)
 
 
 def _looks_like_repo_root(path: Path) -> bool:
@@ -77,9 +74,7 @@ def repo_root() -> Path:
         found = _search_for_root(start)
         if found is not None:
             return found
-    raise RuntimeError(
-        "Could not locate the gpupoor repo root; set GPUPOOR_ROOT if running outside the repo"
-    )
+    raise RuntimeError("Could not locate the gpupoor repo root; set GPUPOOR_ROOT if running outside the repo")
 
 
 def repo_path(*parts: str) -> Path:

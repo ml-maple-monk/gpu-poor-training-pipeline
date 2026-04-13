@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
 import types
-
+from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HELPER_PATH = REPO_ROOT / "training" / "src" / "minimind" / "trainer" / "_mlflow_helper.py"

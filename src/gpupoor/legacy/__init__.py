@@ -260,8 +260,6 @@ def run_infra(service: str, action: str, args: list[str]) -> None:
             emulator_service.health(args)
             return
     prefix = (
-        f"infrastructure/{service}/start.sh"
-        if service != "emulator"
-        else "infrastructure/local-emulator/start.sh"
+        f"infrastructure/{service}/start.sh" if service != "emulator" else "infrastructure/local-emulator/start.sh"
     )
     _fail_help(prefix, f"unknown command '{action}'", _infra_help(service))

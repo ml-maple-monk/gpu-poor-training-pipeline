@@ -15,9 +15,7 @@ log = logging.getLogger(__name__)
 
 def _run(cmd: list[str], timeout: float = 5.0) -> str:
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         return result.stdout.strip()
     except Exception:
         return ""

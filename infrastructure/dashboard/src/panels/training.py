@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..state import AppState, TrainingSnapshot
+from ..state import AppState
 
 
 def format_training_md(state: AppState) -> str:
@@ -28,8 +28,7 @@ def format_training_md(state: AppState) -> str:
     ]
     if snap.gpu_util_percent or snap.gpu_mem_used_mb:
         lines.append(
-            f"**GPU:** {snap.gpu_util_percent:.0f}% util | "
-            f"{snap.gpu_mem_used_mb:.0f}/{snap.gpu_mem_total_mb:.0f} MB"
+            f"**GPU:** {snap.gpu_util_percent:.0f}% util | {snap.gpu_mem_used_mb:.0f}/{snap.gpu_mem_total_mb:.0f} MB"
         )
     if snap.exit_code is not None:
         lines.append(f"**Exit code:** {snap.exit_code}")
@@ -41,10 +40,12 @@ def format_training_table(state: AppState) -> list[list[str]]:
     """Return table rows for the training panel."""
     with state.lock:
         snap = state.training
-    return [[
-        snap.container_name,
-        snap.status,
-        snap.image,
-        snap.container_id,
-        f"{snap.gpu_util_percent:.0f}%" if snap.gpu_util_percent else "N/A",
-    ]]
+    return [
+        [
+            snap.container_name,
+            snap.status,
+            snap.image,
+            snap.container_id,
+            f"{snap.gpu_util_percent:.0f}%" if snap.gpu_util_percent else "N/A",
+        ]
+    ]

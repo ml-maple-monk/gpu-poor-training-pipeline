@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import time
-from typing import Generator
+from collections.abc import Generator
 
 from ..log_tailer import LogTailer
-from ..state import AppState
 
 
 def stream_local_logs(

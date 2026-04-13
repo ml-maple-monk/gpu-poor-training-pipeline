@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import argparse
 import os
-from pathlib import Path
 import time
 import urllib.request
+from pathlib import Path
 
 from gpupoor.subprocess_utils import run_command
 from gpupoor.utils import repo_path
@@ -41,9 +41,7 @@ def _compose_command(*extra_files: Path) -> list[str]:
 
 
 def up(extra_args: list[str] | None = None) -> None:
-    run_command(
-        [*_compose_command(), "up", "-d", "--build", *(extra_args or [])], env=_load_hf_token()
-    )
+    run_command([*_compose_command(), "up", "-d", "--build", *(extra_args or [])], env=_load_hf_token())
 
 
 def cpu(extra_args: list[str] | None = None) -> None:

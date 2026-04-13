@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any
 
 import requests
 
 from ..config import MLFLOW_URL
 from ..errors import SourceStatus
-from ..state import MLflowRun, TrainingSnapshot
+from ..state import MLflowRun
 
 log = logging.getLogger(__name__)
 

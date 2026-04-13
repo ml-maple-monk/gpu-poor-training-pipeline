@@ -31,8 +31,7 @@ def test_wrapper_does_not_treat_sigkill_as_success(script: Path) -> None:
     """137 (SIGKILL / OOM / cgroup kill) must propagate as failure."""
     body = script.read_text(encoding="utf-8")
     assert '"$RC" -eq 137' not in body, (
-        f"{script.name} maps exit code 137 (SIGKILL) to success; "
-        "OOM and external kills would appear as green runs."
+        f"{script.name} maps exit code 137 (SIGKILL) to success; OOM and external kills would appear as green runs."
     )
 
 
@@ -55,6 +54,5 @@ def test_wrapper_exit_logic(script: Path, rc: int, expected: int) -> None:
         text=True,
     )
     assert result.returncode == expected, (
-        f"{script.name} with RC={rc} returned {result.returncode}, "
-        f"expected {expected}. stderr={result.stderr!r}"
+        f"{script.name} with RC={rc} returned {result.returncode}, expected {expected}. stderr={result.stderr!r}"
     )

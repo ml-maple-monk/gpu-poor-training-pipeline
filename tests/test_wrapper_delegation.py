@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -19,18 +18,9 @@ def test_subsystem_wrappers_delegate_to_cli() -> None:
     expected = {
         REPO_ROOT / "training" / "start.sh": "python3 -m gpupoor.cli compat training",
         REPO_ROOT / "dstack" / "start.sh": "python3 -m gpupoor.cli compat dstack",
-        REPO_ROOT
-        / "infrastructure"
-        / "mlflow"
-        / "start.sh": "python3 -m gpupoor.cli compat infra mlflow",
-        REPO_ROOT
-        / "infrastructure"
-        / "dashboard"
-        / "start.sh": "python3 -m gpupoor.cli compat infra dashboard",
-        REPO_ROOT
-        / "infrastructure"
-        / "local-emulator"
-        / "start.sh": "python3 -m gpupoor.cli compat infra emulator",
+        REPO_ROOT / "infrastructure" / "mlflow" / "start.sh": "python3 -m gpupoor.cli compat infra mlflow",
+        REPO_ROOT / "infrastructure" / "dashboard" / "start.sh": "python3 -m gpupoor.cli compat infra dashboard",
+        REPO_ROOT / "infrastructure" / "local-emulator" / "start.sh": "python3 -m gpupoor.cli compat infra emulator",
     }
 
     for path, needle in expected.items():

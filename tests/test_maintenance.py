@@ -28,8 +28,7 @@ def test_parse_secrets_writes_repo_env_files_with_mode_600(tmp_path) -> None:
 
     assert "VERDA_INFERENCE_TOKEN=local-dev-" in inference_env.read_text(encoding="utf-8")
     assert (
-        management_env.read_text(encoding="utf-8")
-        == "VERDA_CLIENT_ID=demo-client\nVERDA_CLIENT_SECRET=super-secret\n"
+        management_env.read_text(encoding="utf-8") == "VERDA_CLIENT_ID=demo-client\nVERDA_CLIENT_SECRET=super-secret\n"
     )
     assert oct(inference_env.stat().st_mode & 0o777) == "0o600"
     assert oct(management_env.stat().st_mode & 0o777) == "0o600"

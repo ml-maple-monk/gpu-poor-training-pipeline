@@ -10,7 +10,6 @@ from gpupoor import config as config_module
 from gpupoor.config import ConfigError, load_remote_settings, load_run_config
 from gpupoor.utils import repo as repo_utils
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -109,9 +108,7 @@ def test_non_toml_config_is_rejected(tmp_path: Path) -> None:
 
 def _make_fake_root(path: Path, *, name: str = "gpupoor") -> None:
     (path / "src" / "gpupoor").mkdir(parents=True)
-    (path / "pyproject.toml").write_text(
-        f"[project]\nname = \"{name}\"\n", encoding="utf-8"
-    )
+    (path / "pyproject.toml").write_text(f'[project]\nname = "{name}"\n', encoding="utf-8")
 
 
 def test_repo_root_honors_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -126,9 +123,7 @@ def test_repo_root_honors_env_override(tmp_path: Path, monkeypatch: pytest.Monke
         repo_utils.repo_root.cache_clear()
 
 
-def test_repo_root_rejects_pyproject_from_different_project(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_repo_root_rejects_pyproject_from_different_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A sibling project's pyproject + src/gpupoor stub must not match.
 
     The old fingerprint (`pyproject.toml` + `src/gpupoor/` + `design.md`)
@@ -146,9 +141,7 @@ def test_repo_root_rejects_pyproject_from_different_project(
         repo_utils.repo_root.cache_clear()
 
 
-def test_repo_root_accepts_root_without_design_md(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_repo_root_accepts_root_without_design_md(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Docs files must not be part of the repo fingerprint.
 
     Renaming or relocating design docs should not break every repo_path
@@ -180,6 +173,5 @@ def test_repo_root_candidates_prefer_package_over_cwd(monkeypatch: pytest.Monkey
     cwd_index = candidates.index(Path.cwd())
     package_index = candidates.index(package_dir)
     assert package_index < cwd_index, (
-        "__file__ ancestry must be searched before cwd to keep the "
-        "running package authoritative"
+        "__file__ ancestry must be searched before cwd to keep the running package authoritative"
     )

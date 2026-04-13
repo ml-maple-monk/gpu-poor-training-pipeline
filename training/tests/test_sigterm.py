@@ -9,15 +9,16 @@ Tests:
 All tests use the trainer_stub from conftest.py — no real GPU, no real dataset,
 no real MLflow required.
 """
-import os
+
 import glob
-import time
+import os
 import signal
 import subprocess
 import sys
+import time
+
 import pytest
 import torch
-
 
 STUB_TIMEOUT = 15  # seconds max for each subprocess
 

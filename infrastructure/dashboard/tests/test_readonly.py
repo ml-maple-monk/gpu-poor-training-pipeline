@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import ast
 import re
-import sys
 from pathlib import Path
 
 SRC_DIR = Path(__file__).parent.parent / "src"
@@ -52,7 +51,7 @@ def test_no_open_write_ast():
 
 def test_no_os_remove():
     """No os.remove() calls in src/."""
-    pattern = re.compile(r'\bos\.remove\s*\(')
+    pattern = re.compile(r"\bos\.remove\s*\(")
     violations = []
     for path in _py_files():
         for i, line in enumerate(path.read_text().splitlines(), 1):
@@ -63,7 +62,7 @@ def test_no_os_remove():
 
 def test_no_shutil_rmtree():
     """No shutil.rmtree() calls in src/."""
-    pattern = re.compile(r'\bshutil\.rmtree\s*\(')
+    pattern = re.compile(r"\bshutil\.rmtree\s*\(")
     violations = []
     for path in _py_files():
         for i, line in enumerate(path.read_text().splitlines(), 1):
@@ -78,7 +77,7 @@ def test_mutating_requests_not_in_hot_path():
     Exception: mlflow_client.py uses requests.post for MLflow search API
     (MLflow uses POST for /runs/search — read-only by design).
     """
-    pattern = re.compile(r'\brequests\.(post|put|delete|patch)\s*\(')
+    pattern = re.compile(r"\brequests\.(post|put|delete|patch)\s*\(")
     # Files permitted to use requests.post for read-only API calls
     _ALLOWED = {"safe_exec.py", "mlflow_client.py"}
     violations = []
@@ -93,7 +92,7 @@ def test_mutating_requests_not_in_hot_path():
 
 def test_mutating_httpx_not_in_hot_path():
     """httpx.post/put/delete/patch only allowed in safe_exec.py (whitelisted)."""
-    pattern = re.compile(r'\bhttpx\.(post|put|delete|patch)\s*\(')
+    pattern = re.compile(r"\bhttpx\.(post|put|delete|patch)\s*\(")
     violations = []
     for path in _py_files():
         if path.name == "safe_exec.py":

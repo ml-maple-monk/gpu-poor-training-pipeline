@@ -17,16 +17,16 @@ def format_mlflow_table(state: AppState) -> list[list[str]]:
     for r in runs[:20]:
         start_str = r.start_time.strftime("%Y-%m-%d %H:%M") if r.start_time else ""
         # Show top 3 metrics inline
-        metric_str = "  ".join(
-            f"{k}={v:.4g}" for k, v in list(r.metrics.items())[:3]
+        metric_str = "  ".join(f"{k}={v:.4g}" for k, v in list(r.metrics.items())[:3])
+        rows.append(
+            [
+                r.run_name or r.run_id[:8],
+                r.status,
+                start_str,
+                r.experiment_id,
+                metric_str,
+            ]
         )
-        rows.append([
-            r.run_name or r.run_id[:8],
-            r.status,
-            start_str,
-            r.experiment_id,
-            metric_str,
-        ])
     return rows
 
 

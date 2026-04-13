@@ -6,11 +6,9 @@ import argparse
 import subprocess
 import sys
 
-from gpupoor import __version__
+from gpupoor import __version__, ops
 from gpupoor.backends import dstack as dstack_backend
 from gpupoor.backends.local import run_training as run_local_training
-from gpupoor import ops
-from gpupoor.legacy import run_dstack, run_infra, run_root, run_training
 from gpupoor.config import (
     ConfigError,
     RunConfig,
@@ -18,6 +16,7 @@ from gpupoor.config import (
     merge_doctor_config,
     merge_smoke_config,
 )
+from gpupoor.legacy import run_dstack, run_infra, run_root, run_training
 from gpupoor.subprocess_utils import CommandError
 
 
@@ -27,68 +26,34 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     doctor_parser = subparsers.add_parser("doctor", help="Run preflight checks")
-    doctor_parser.add_argument(
-        "config", nargs="?", help="Optional TOML run config with doctor/remote defaults"
-    )
+    doctor_parser.add_argument("config", nargs="?", help="Optional TOML run config with doctor/remote defaults")
     doctor_parser.add_argument("--remote", action="store_true", help="Include remote-path checks")
-    doctor_parser.add_argument(
-        "--skip-preflight", action="store_true", default=None, help="Skip preflight checks"
-    )
-    doctor_parser.add_argument(
-        "--max-clock-skew-seconds", type=int, help="Override the WSL clock skew budget"
-    )
+    doctor_parser.add_argument("--skip-preflight", action="store_true", default=None, help="Skip preflight checks")
+    doctor_parser.add_argument("--max-clock-skew-seconds", type=int, help="Override the WSL clock skew budget")
 
     smoke_parser = subparsers.add_parser("smoke", help="Run repo smoke checks")
-    smoke_parser.add_argument(
-        "config", nargs="?", help="Optional TOML run config with smoke defaults"
-    )
-    smoke_parser.add_argument(
-        "--cpu", action="store_true", default=None, help="Use the CPU emulator overlay"
-    )
+    smoke_parser.add_argument("config", nargs="?", help="Optional TOML run config with smoke defaults")
+    smoke_parser.add_argument("--cpu", action="store_true", default=None, help="Use the CPU emulator overlay")
     smoke_parser.add_argument("--base-image", help="Override the emulator base image build arg")
-    smoke_parser.add_argument(
-        "--health-port", type=int, help="Port to probe for the main /health check"
-    )
-    smoke_parser.add_argument(
-        "--health-timeout-seconds", type=int, help="Timeout for /health probes"
-    )
-    smoke_parser.add_argument(
-        "--strict-port", type=int, help="Port for the strict degraded-mode probe"
-    )
+    smoke_parser.add_argument("--health-port", type=int, help="Port to probe for the main /health check")
+    smoke_parser.add_argument("--health-timeout-seconds", type=int, help="Timeout for /health probes")
+    smoke_parser.add_argument("--strict-port", type=int, help="Port for the strict degraded-mode probe")
     smoke_parser.add_argument("--degraded-port", type=int, help="Port for the degraded-mode probe")
-    smoke_parser.add_argument(
-        "--sigterm-timeout-seconds", type=int, help="SIGTERM exit budget for the emulator"
-    )
-    smoke_parser.add_argument(
-        "--data-wait-timeout-seconds", type=int, help="WAIT_DATA_TIMEOUT value for probe F"
-    )
-    smoke_parser.add_argument(
-        "--skip-preflight", action="store_true", default=None, help="Skip preflight checks"
-    )
-    smoke_parser.add_argument(
-        "--max-clock-skew-seconds", type=int, help="Override the WSL clock skew budget"
-    )
+    smoke_parser.add_argument("--sigterm-timeout-seconds", type=int, help="SIGTERM exit budget for the emulator")
+    smoke_parser.add_argument("--data-wait-timeout-seconds", type=int, help="WAIT_DATA_TIMEOUT value for probe F")
+    smoke_parser.add_argument("--skip-preflight", action="store_true", default=None, help="Skip preflight checks")
+    smoke_parser.add_argument("--max-clock-skew-seconds", type=int, help="Override the WSL clock skew budget")
 
     fix_clock_parser = subparsers.add_parser("fix-clock", help="Sync the WSL2 clock from Windows")
-    fix_clock_parser.add_argument(
-        "config", nargs="?", help="Optional TOML run config with doctor defaults"
-    )
-    fix_clock_parser.add_argument(
-        "--max-clock-skew-seconds", type=int, help="Override the WSL clock skew budget"
-    )
+    fix_clock_parser.add_argument("config", nargs="?", help="Optional TOML run config with doctor defaults")
+    fix_clock_parser.add_argument("--max-clock-skew-seconds", type=int, help="Override the WSL clock skew budget")
 
-    parse_parser = subparsers.add_parser(
-        "parse-secrets", help="Write .env files from the repo secrets file"
-    )
+    parse_parser = subparsers.add_parser("parse-secrets", help="Write .env files from the repo secrets file")
     parse_parser.add_argument("secrets_file", nargs="?", help="Path to the Verda secrets file")
 
     leak_parser = subparsers.add_parser("leak-scan", help="Scan a local image for leaked secrets")
-    leak_parser.add_argument(
-        "image", nargs="?", default="verda-local", help="Image name or repository prefix"
-    )
-    leak_parser.add_argument(
-        "--canary", action="store_true", help="Run the scanner canary self-test"
-    )
+    leak_parser.add_argument("image", nargs="?", default="verda-local", help="Image name or repository prefix")
+    leak_parser.add_argument("--canary", action="store_true", help="Run the scanner canary self-test")
 
     subparsers.add_parser("check-anchors", help="Verify referenced doc anchors resolve")
 
@@ -97,13 +62,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     launch_parser = subparsers.add_parser("launch", help="Launch a backend from config")
     launch_subparsers = launch_parser.add_subparsers(dest="launch_target", required=True)
-    dstack_parser = launch_subparsers.add_parser(
-        "dstack", help="Launch a Verda/dstack run from config"
-    )
+    dstack_parser = launch_subparsers.add_parser("dstack", help="Launch a Verda/dstack run from config")
     dstack_parser.add_argument("config", help="Path to a TOML run config")
-    dstack_parser.add_argument(
-        "--skip-build", action="store_true", default=None, help="Skip image build and push"
-    )
+    dstack_parser.add_argument("--skip-build", action="store_true", default=None, help="Skip image build and push")
     dstack_parser.add_argument(
         "--keep-tunnel",
         action="store_true",
@@ -113,9 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     dstack_parser.add_argument(
         "--pull-artifacts", action="store_true", default=None, help="Retain the compatibility flag"
     )
-    dstack_parser.add_argument(
-        "--dry-run", action="store_true", help="Print the remote plan without mutating"
-    )
+    dstack_parser.add_argument("--dry-run", action="store_true", help="Print the remote plan without mutating")
 
     infra_parser = subparsers.add_parser("infra", help="Manage local debug/runtime services")
     infra_subparsers = infra_parser.add_subparsers(dest="infra_target", required=True)
@@ -180,9 +139,7 @@ def run_non_mutating(label: str, action) -> None:
     action()
     after = tracked_fingerprint()
     if before != after:
-        raise RuntimeError(
-            f"{label} mutated tracked files (HEAD or working-tree content changed)."
-        )
+        raise RuntimeError(f"{label} mutated tracked files (HEAD or working-tree content changed).")
 
 
 def _load_optional_run_config(path: str | None) -> RunConfig | None:
@@ -236,9 +193,7 @@ def dispatch(args: argparse.Namespace) -> None:
         remote_config = config.remote if config else None
         run_non_mutating(
             "doctor",
-            lambda: ops.run_preflight(
-                remote=args.remote, doctor=doctor, remote_config=remote_config
-            ),
+            lambda: ops.run_preflight(remote=args.remote, doctor=doctor, remote_config=remote_config),
         )
         return
 

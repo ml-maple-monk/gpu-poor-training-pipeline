@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import time
 import urllib.request
+from pathlib import Path
 
 from gpupoor import ops
 from gpupoor.config import (
@@ -48,9 +48,7 @@ def ensure_dstack_server(
 
     print("[gpupoor] dstack server not running; starting it in background")
     with log_file.open("ab") as handle:
-        subprocess.Popen(
-            [dstack_bin, "server"], stdout=handle, stderr=subprocess.STDOUT, start_new_session=True
-        )
+        subprocess.Popen([dstack_bin, "server"], stdout=handle, stderr=subprocess.STDOUT, start_new_session=True)
 
     for _ in range(start_timeout_seconds):
         if http_ok(health_url, timeout_seconds=health_timeout_seconds):
@@ -79,9 +77,7 @@ def verify_mlflow(health_url: str, *, timeout_seconds: int) -> None:
         raise RuntimeError(f"MLflow is not responding at {health_url}")
 
 
-def remote_image_tag(
-    backend: BackendConfig, *, skip_build: bool, dry_run: bool, settings: dict[str, str]
-) -> str:
+def remote_image_tag(backend: BackendConfig, *, skip_build: bool, dry_run: bool, settings: dict[str, str]) -> str:
     if dry_run and not skip_build:
         return "dryrun0"
     if skip_build:
@@ -166,13 +162,8 @@ def wait_for_run_start(dstack_bin: str, run_name: str, *, max_wait: int = 480) -
         if run_status == "running" or job_status == "running":
             print(f"[gpupoor] Run '{run_name}' is running")
             return
-        if (
-            run_status in {"pending", "submitted"}
-            and termination_reason == "failed_to_start_due_to_no_capacity"
-        ):
-            print(
-                f"[gpupoor] Run '{run_name}' is retrying after a no-capacity offer; waiting for the next submission"
-            )
+        if run_status in {"pending", "submitted"} and termination_reason == "failed_to_start_due_to_no_capacity":
+            print(f"[gpupoor] Run '{run_name}' is retrying after a no-capacity offer; waiting for the next submission")
             time.sleep(10)
             elapsed += 10
             continue
@@ -254,9 +245,7 @@ def launch_remote(
     ops.run_preflight(remote=True, doctor=config.doctor, remote_config=config.remote)
     if configure_server:
         bash_script(repo_path("dstack", "scripts", "setup-config.sh"))
-    verify_mlflow(
-        config.remote.mlflow_health_url, timeout_seconds=config.remote.health_timeout_seconds
-    )
+    verify_mlflow(config.remote.mlflow_health_url, timeout_seconds=config.remote.health_timeout_seconds)
     ensure_dstack_server(
         dstack_bin,
         health_url=config.remote.dstack_server_health_url,
@@ -282,9 +271,7 @@ def launch_remote(
     else:
         bash_script(repo_path("infrastructure", "mlflow", "scripts", "run-tunnel.sh"))
 
-    image_sha = remote_image_tag(
-        config.backend, skip_build=use_skip_build, dry_run=dry_run, settings=settings
-    )
+    image_sha = remote_image_tag(config.backend, skip_build=use_skip_build, dry_run=dry_run, settings=settings)
     mlflow_url = (
         "https://dry-run-example.trycloudflare.com"
         if dry_run
@@ -313,15 +300,9 @@ def launch_remote(
             "MLFLOW_TRACKING_URI": mlflow_url,
             "MLFLOW_EXPERIMENT_NAME": config.mlflow.experiment_name,
             "MLFLOW_ARTIFACT_UPLOAD": "1" if config.mlflow.artifact_upload else "0",
-            "MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING": "true"
-            if config.mlflow.enable_system_metrics_logging
-            else "false",
-            "MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL": str(
-                config.mlflow.system_metrics_sampling_interval
-            ),
-            "MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING": str(
-                config.mlflow.system_metrics_samples_before_logging
-            ),
+            "MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING": "true" if config.mlflow.enable_system_metrics_logging else "false",
+            "MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL": str(config.mlflow.system_metrics_sampling_interval),
+            "MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING": str(config.mlflow.system_metrics_samples_before_logging),
             "MLFLOW_HTTP_REQUEST_MAX_RETRIES": str(config.mlflow.http_request_max_retries),
             "MLFLOW_HTTP_REQUEST_TIMEOUT": str(config.mlflow.http_request_timeout_seconds),
             "MLFLOW_START_TIMEOUT_SECONDS": str(config.mlflow.start_timeout_seconds),
@@ -330,25 +311,17 @@ def launch_remote(
             "DSTACK_RUN_NAME": config.name,
             "OUT_DIR": settings.get("OUT_DIR", "/workspace/out"),
             "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", "jingyaogong/minimind_dataset"),
-            "HF_DATASET_FILENAME": settings.get(
-                "HF_DATASET_FILENAME", Path(config.recipe.dataset_path).name
-            ),
+            "HF_DATASET_FILENAME": settings.get("HF_DATASET_FILENAME", Path(config.recipe.dataset_path).name),
             "TIME_CAP_SECONDS": str(config.recipe.time_cap_seconds),
         }
-        result = run_command(
-            [dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], env=apply_env, check=False
-        )
+        result = run_command([dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], env=apply_env, check=False)
         if result.returncode != 0:
-            raise CommandError(
-                [dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], result.returncode
-            )
+            raise CommandError([dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], result.returncode)
 
         run_name = config.name
         if dstack_has_run(dstack_bin, run_name):
             track_run(run_name)
-            wait_for_run_start(
-                dstack_bin, run_name, max_wait=config.remote.run_start_timeout_seconds
-            )
+            wait_for_run_start(dstack_bin, run_name, max_wait=config.remote.run_start_timeout_seconds)
             launched_remote_run = True
         else:
             print(
@@ -365,8 +338,6 @@ def launch_remote(
                 if use_keep_tunnel:
                     print("[gpupoor] Keeping Cloudflare tunnel alive")
                 else:
-                    print(
-                        "[gpupoor] Keeping Cloudflare tunnel alive until teardown so remote MLflow stays reachable"
-                    )
+                    print("[gpupoor] Keeping Cloudflare tunnel alive until teardown so remote MLflow stays reachable")
             else:
                 kill_tunnel(keep_tunnel=False)

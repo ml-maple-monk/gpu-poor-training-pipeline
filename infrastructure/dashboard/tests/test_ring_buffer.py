@@ -8,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import threading
-import pytest
+
 from src.ring_buffer import RingBuffer
 
 
@@ -63,7 +63,6 @@ def test_monotonic_seq():
 
 def test_thread_safe_concurrent_appends():
     rb = RingBuffer(maxlen=1000)
-    errors = []
 
     def writer():
         for i in range(100):

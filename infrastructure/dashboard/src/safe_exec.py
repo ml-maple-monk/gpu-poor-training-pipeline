@@ -18,11 +18,10 @@ import httpx
 # ── Whitelists ──────────────────────────────────────────────────────────────────
 ALLOWED_VERBS: frozenset[str] = frozenset({"logs", "ps", "inspect"})
 
-ALLOWED_ENDPOINTS: frozenset[str] = frozenset(
-    {"runs/get_plan", "runs/list", "runs/get_logs"}
-)
+ALLOWED_ENDPOINTS: frozenset[str] = frozenset({"runs/get_plan", "runs/list", "runs/get_logs"})
 
 # ── Docker safe wrapper ─────────────────────────────────────────────────────────
+
 
 def safe_docker(argv: list[str]) -> subprocess.Popen:
     """Spawn 'docker <argv>' after asserting argv[0] is in ALLOWED_VERBS.
@@ -35,9 +34,7 @@ def safe_docker(argv: list[str]) -> subprocess.Popen:
         raise ValueError("argv must be non-empty")
     verb = argv[0]
     if verb not in ALLOWED_VERBS:
-        raise ValueError(
-            f"docker verb {verb!r} not in whitelist {sorted(ALLOWED_VERBS)}"
-        )
+        raise ValueError(f"docker verb {verb!r} not in whitelist {sorted(ALLOWED_VERBS)}")
     cmd = ["docker"] + argv
     return subprocess.Popen(
         cmd,
@@ -49,6 +46,7 @@ def safe_docker(argv: list[str]) -> subprocess.Popen:
 
 
 # ── dstack REST safe wrapper ────────────────────────────────────────────────────
+
 
 def _get_base_url() -> str:
     return os.environ.get("DSTACK_SERVER_URL", "http://localhost:3000")
@@ -68,10 +66,7 @@ _GLOBAL_ENDPOINTS: frozenset[str] = frozenset({"runs/list"})
 
 def _assert_endpoint(endpoint: str) -> str:
     if endpoint not in ALLOWED_ENDPOINTS:
-        raise ValueError(
-            f"dstack endpoint {endpoint!r} not in whitelist "
-            f"{sorted(ALLOWED_ENDPOINTS)}"
-        )
+        raise ValueError(f"dstack endpoint {endpoint!r} not in whitelist {sorted(ALLOWED_ENDPOINTS)}")
     base = _get_base_url().rstrip("/")
     if endpoint in _GLOBAL_ENDPOINTS:
         return f"{base}/api/{endpoint}"

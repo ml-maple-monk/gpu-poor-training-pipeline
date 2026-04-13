@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from ..config import MLFLOW_URL
 from ..state import AppState
 

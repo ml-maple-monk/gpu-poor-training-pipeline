@@ -9,8 +9,6 @@ Greps infrastructure/dashboard/src/ (excluding tests/) for:
 
 from __future__ import annotations
 
-import ast
-import os
 import re
 from pathlib import Path
 
@@ -20,26 +18,24 @@ SRC_DIR = Path(__file__).parent.parent / "src"
 
 # Docker mutating verbs in subprocess args (string literals containing these words
 # as standalone tokens)
-FORBIDDEN_DOCKER_VERBS = re.compile(
-    r'\b(stop|kill|rm|delete|apply|run|up|down|push)\b'
-)
+FORBIDDEN_DOCKER_VERBS = re.compile(r"\b(stop|kill|rm|delete|apply|run|up|down|push)\b")
 
 # dstack REST mutation paths
 FORBIDDEN_REST_PATHS = re.compile(
-    r'/api/runs/(stop|delete|apply|push|kill)'
-    r'|/api/users/'
-    r'|/api/projects/.*(delete|create|update)'
+    r"/api/runs/(stop|delete|apply|push|kill)"
+    r"|/api/users/"
+    r"|/api/projects/.*(delete|create|update)"
 )
 
 # Mutating HTTP methods used directly (not inside safe_dstack_rest or safe_docker)
 FORBIDDEN_HTTP_CALLS = re.compile(
-    r'requests\.(post|put|delete|patch)\s*\('
-    r'|httpx\.(post|put|delete|patch)\s*\('
+    r"requests\.(post|put|delete|patch)\s*\("
+    r"|httpx\.(post|put|delete|patch)\s*\("
 )
 
 # subprocess patterns with mutating docker verbs
 FORBIDDEN_SUBPROCESS = re.compile(
-    r'subprocess\.(run|Popen|call|check_call|check_output).*'
+    r"subprocess\.(run|Popen|call|check_call|check_output).*"
     r'["\']docker["\'].*["\'](?:stop|kill|rm|delete|apply|run|push)["\']'
 )
 
@@ -83,7 +79,7 @@ def test_no_forbidden_http_methods():
             continue
         for lineno, line in _file_lines(path):
             # Allow requests.get and httpx.get
-            if re.search(r'requests\.(get|head)\s*\(', line):
+            if re.search(r"requests\.(get|head)\s*\(", line):
                 continue
             if FORBIDDEN_HTTP_CALLS.search(line):
                 violations.append(f"{path.relative_to(SRC_DIR.parent)}:{lineno}: {line.rstrip()}")
@@ -95,9 +91,9 @@ def test_no_write_calls():
     forbidden = re.compile(
         r'\bopen\s*\(.*["\']w["\']'
         r'|\bopen\s*\(.*["\']a["\']'
-        r'|\bos\.remove\s*\('
-        r'|\bshutil\.rmtree\s*\('
-        r'|\bshutil\.move\s*\('
+        r"|\bos\.remove\s*\("
+        r"|\bshutil\.rmtree\s*\("
+        r"|\bshutil\.move\s*\("
     )
     violations = []
     for path in _iter_py_files():
@@ -110,9 +106,7 @@ def test_no_write_calls():
 def test_no_docker_mutating_subprocess():
     """No subprocess calls with mutating docker verbs as args."""
     # More targeted: look for subprocess with 'docker' AND a mutating verb
-    forbidden = re.compile(
-        r'["\'](?:stop|kill|rm|delete|apply|push|run|up|down)["\']'
-    )
+    forbidden = re.compile(r'["\'](?:stop|kill|rm|delete|apply|push|run|up|down)["\']')
     violations = []
     for path in _iter_py_files():
         # safe_exec.py contains ALLOWED_VERBS — skip it
@@ -124,8 +118,6 @@ def test_no_docker_mutating_subprocess():
                 in_subprocess_context = True
             if in_subprocess_context and "docker" in line.lower():
                 if forbidden.search(line):
-                    violations.append(
-                        f"{path.relative_to(SRC_DIR.parent)}:{lineno}: {line.rstrip()}"
-                    )
+                    violations.append(f"{path.relative_to(SRC_DIR.parent)}:{lineno}: {line.rstrip()}")
                 in_subprocess_context = False
     assert not violations, "Forbidden docker subprocess calls:\n" + "\n".join(violations)

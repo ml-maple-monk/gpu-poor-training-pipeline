@@ -11,18 +11,16 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable
 
-from .collectors.dstack_rest import collect_dstack_runs
 from .collectors.docker_logs import collect_training_snapshot
+from .collectors.dstack_rest import collect_dstack_runs
 from .collectors.mlflow_client import collect_live_metrics, collect_mlflow_recent
 from .collectors.system import collect_system
 from .collectors.tunnel import collect_tunnel_url
 from .collectors.verda_offers import collect_verda_offers
 from .config import TRAINER_CONTAINER
-from .errors import SourceStatus
 from .state import AppState
 
 log = logging.getLogger(__name__)
@@ -73,6 +71,7 @@ class CollectorWorker:
 
 
 # ── Factory: build and start all collectors ─────────────────────────────────────
+
 
 def start_all_collectors(state: AppState) -> list[CollectorWorker]:
     """Build and start all 4 collector workers. Returns the worker list."""

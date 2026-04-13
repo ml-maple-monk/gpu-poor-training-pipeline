@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 from gpupoor.config import DoctorConfig, RemoteConfig, find_dstack_bin, load_remote_settings
 from gpupoor.subprocess_utils import run_command
 from gpupoor.utils import repo_path, repo_root
-
 
 ANCHOR_PATTERN = re.compile(r"doc-anchor:\s*([\w-]+)")
 
@@ -52,9 +51,7 @@ def _absolute_delta(lhs: int, rhs: int) -> int:
     return abs(lhs - rhs)
 
 
-def _resolve_max_clock_skew(
-    *, doctor: DoctorConfig | None = None, max_skew_seconds: int | None = None
-) -> int:
+def _resolve_max_clock_skew(*, doctor: DoctorConfig | None = None, max_skew_seconds: int | None = None) -> int:
     if max_skew_seconds is not None:
         return max_skew_seconds
     if doctor is not None:
@@ -62,9 +59,7 @@ def _resolve_max_clock_skew(
     return int(os.environ.get("MAX_CLOCK_SKEW_SECONDS", "5"))
 
 
-def fix_wsl_clock(
-    *, doctor: DoctorConfig | None = None, max_skew_seconds: int | None = None
-) -> None:
+def fix_wsl_clock(*, doctor: DoctorConfig | None = None, max_skew_seconds: int | None = None) -> None:
     limit = _resolve_max_clock_skew(doctor=doctor, max_skew_seconds=max_skew_seconds)
     if not shutil.which("powershell.exe"):
         raise RuntimeError("powershell.exe not found. This fixer only applies inside WSL2.")
@@ -152,12 +147,9 @@ def check_doc_anchors(*, root: str | Path | None = None) -> None:
     if missing:
         rendered = "\n".join(f"  - {anchor}" for anchor in missing)
         raise RuntimeError(
-            "[anchor-check] FAIL — unresolved anchors referenced in READMEs but not defined in source:\n"
-            f"{rendered}"
+            f"[anchor-check] FAIL — unresolved anchors referenced in READMEs but not defined in source:\n{rendered}"
         )
-    print(
-        f"[anchor-check] OK — all {len(referenced)} referenced anchors resolve to source comments."
-    )
+    print(f"[anchor-check] OK — all {len(referenced)} referenced anchors resolve to source comments.")
 
 
 def run_preflight(
@@ -166,9 +158,7 @@ def run_preflight(
     doctor: DoctorConfig | None = None,
     remote_config: RemoteConfig | None = None,
 ) -> None:
-    should_skip = (
-        doctor.skip_preflight if doctor is not None else os.environ.get("SKIP_PREFLIGHT") == "1"
-    )
+    should_skip = doctor.skip_preflight if doctor is not None else os.environ.get("SKIP_PREFLIGHT") == "1"
     if should_skip:
         print(
             "WARNING: preflight skipped — operator-only; CI must not set this for validation",
@@ -194,13 +184,9 @@ def run_preflight(
     print(f"Remote preflight OK (VCR_IMAGE_BASE={settings.get('VCR_IMAGE_BASE', 'unknown')})")
 
 
-def _run_local_preflight(
-    reporter: PreflightReporter, repo: Path, *, doctor: DoctorConfig | None = None
-) -> None:
+def _run_local_preflight(reporter: PreflightReporter, repo: Path, *, doctor: DoctorConfig | None = None) -> None:
     if not Path("/usr/lib/wsl/lib/libcuda.so.1").is_file():
-        reporter.fail(
-            "/usr/lib/wsl/lib/libcuda.so.1 not found — install Windows NVIDIA driver and enable WSL2 CUDA"
-        )
+        reporter.fail("/usr/lib/wsl/lib/libcuda.so.1 not found — install Windows NVIDIA driver and enable WSL2 CUDA")
 
     if str(repo).startswith("/mnt/c"):
         reporter.fail(
@@ -269,9 +255,7 @@ def _run_local_preflight(
     if wsl_conf.is_file():
         text = wsl_conf.read_text(encoding="utf-8", errors="ignore")
         if "systemd=true" not in text:
-            reporter.warn(
-                "/etc/wsl.conf does not contain systemd=true — some features may not work"
-            )
+            reporter.warn("/etc/wsl.conf does not contain systemd=true — some features may not work")
     else:
         reporter.warn("/etc/wsl.conf not found — consider adding [boot] systemd=true")
 
@@ -297,26 +281,18 @@ def _run_remote_preflight(
     try:
         find_dstack_bin()
     except RuntimeError:
-        reporter.fail(
-            "no working dstack CLI found — install the isolated uv venv described in dstack/docs/README.md"
-        )
+        reporter.fail("no working dstack CLI found — install the isolated uv venv described in dstack/docs/README.md")
 
     if not shutil.which("jq"):
-        reporter.warn(
-            "jq not found — python3 fallback will be used for JSON parsing (safe, but slower)"
-        )
+        reporter.warn("jq not found — python3 fallback will be used for JSON parsing (safe, but slower)")
 
     for relative in ("hf_token", "secrets"):
         path = repo / relative
         if not path.is_file():
             if relative == "hf_token":
-                reporter.fail(
-                    f"{relative} not found — save your Hugging Face token to {path} (chmod 600)"
-                )
+                reporter.fail(f"{relative} not found — save your Hugging Face token to {path} (chmod 600)")
             else:
-                reporter.fail(
-                    f"{relative} not found — save your Verda credentials to {path} (chmod 600)"
-                )
+                reporter.fail(f"{relative} not found — save your Verda credentials to {path} (chmod 600)")
             continue
         mode = _mode_octal(path)
         if mode != "600":
@@ -327,23 +303,15 @@ def _run_remote_preflight(
     if remote_env_path.is_file():
         mode = _mode_octal(remote_env_path)
         if mode != "600":
-            reporter.fail(
-                f"{remote_env_path} has mode {mode} — must be 600: run: chmod 600 {remote_env_path}"
-            )
+            reporter.fail(f"{remote_env_path} has mode {mode} — must be 600: run: chmod 600 {remote_env_path}")
 
     settings = load_remote_settings(remote_config)
     if not settings.get("VCR_USERNAME") or not settings.get("VCR_PASSWORD"):
-        reporter.fail(
-            f"VCR_USERNAME/VCR_PASSWORD missing — export them or create {remote_env_path} with mode 600"
-        )
+        reporter.fail(f"VCR_USERNAME/VCR_PASSWORD missing — export them or create {remote_env_path} with mode 600")
 
     if settings.get("PUSH_GHCR") == "1":
         gh_token = repo / "gh_token"
         if not gh_token.is_file():
-            reporter.fail(
-                f"PUSH_GHCR=1 but {gh_token} is missing — GHCR fallback needs a write:packages token"
-            )
+            reporter.fail(f"PUSH_GHCR=1 but {gh_token} is missing — GHCR fallback needs a write:packages token")
     elif (repo / "gh_token").is_file():
-        reporter.warn(
-            "gh_token is not used by the default remote path anymore; GHCR is optional fallback only"
-        )
+        reporter.warn("gh_token is not used by the default remote path anymore; GHCR is optional fallback only")
