@@ -1,25 +1,34 @@
 # gpupoor
 
-> **Train readable, reproducible MiniMind experiments on limited GPUs — locally or on Verda/dstack — without living in bash.**
+> **Rent preemptible GPUs by the minute, train a reproducible MiniMind experiment, and only pay for cycles you actually burn.**
 
 [![tests](https://github.com/ml-maple-monk/gpu-poor-training-pipeline/actions/workflows/tests.yml/badge.svg)](https://github.com/ml-maple-monk/gpu-poor-training-pipeline/actions/workflows/tests.yml)
 [![quality](https://github.com/ml-maple-monk/gpu-poor-training-pipeline/actions/workflows/quality.yml/badge.svg)](https://github.com/ml-maple-monk/gpu-poor-training-pipeline/actions/workflows/quality.yml)
 ![python](https://img.shields.io/badge/python-3.11%2B-blue)
 ![deps](https://img.shields.io/badge/runtime_deps-0-brightgreen)
+![target](https://img.shields.io/badge/audience-GPU--poor_researchers-orange)
 
-`gpupoor` is a package-first CLI that turns a single TOML file into one reproducible training run. It runs the same recipe on your laptop, a single GPU, or a rented Verda/dstack GPU — with MLflow wired in, a live dashboard, and cheap-to-fail preflights that catch misconfiguration before you spend money.
+The **GPU-poor researcher's toolbox.** One typed TOML file drives one reproducible run of the **MiniMind** reference recipe — on your laptop CPU, a single local GPU, or an **auto-allocated preemptible GPU** on Verda/dstack. Live MLflow tracking, a hardened live dashboard, and cheap-to-fail preflights catch misconfiguration before you spend a cent.
 
 ---
 
 ## Why
 
-GPU-poor researchers keep writing the same three scripts: a config sketch, a launcher that reads env vars, and a bash wrapper that calls `dstack apply`. The wrappers drift, the configs aren't typed, and remote failures show up *after* the registry push. `gpupoor` replaces that stack with:
+Research and engineering explorations shouldn't require a lab budget. `gpupoor` targets the gap between "train in Colab" and "run on a real cluster":
 
-- **One typed config per run.** Strict TOML — unknown keys fail fast. No silent override chains.
-- **Two backends, same contract.** `local` for CPU/single-GPU, `dstack` for Verda. Same recipe, same artifacts, different runtime.
-- **Zero runtime dependencies.** The core package adds nothing to your Python environment. (Dev extras are opt-in.)
-- **Cheap failure first.** `gpupoor doctor` + `gpupoor smoke` verify secrets, clocks, disk, docker, and MLflow reachability before `dstack apply` is ever called.
-- **Live dashboard that can't exfiltrate.** Argv allowlists, endpoint allowlists, read-only docker.sock bind, argv regex validation, SIGTERM→SIGKILL escalation on shutdown.
+- **Preemptible auto-allocation.** Declare `spot_policy = "spot"` + `max_price` + `gpu_names` in TOML. The CLI asks dstack for the cheapest **live spot offer** that matches your GPU class (A100, B300, H100 …) and schedules your run. You pay spot rate for the minutes you use — nothing else.
+- **MiniMind as the first-class recipe.** A small-but-complete transformer training loop — not a toy, not a framework. Designed to actually train to completion in minutes on a rented GPU, so you can iterate on architecture/data ideas at research speed.
+- **Identical local ↔ remote contract.** Same TOML, same recipe, same artifacts. Smoke on CPU first, then swap one field (`backend.kind = "dstack"`) and rent a GPU.
+- **Zero runtime dependencies.** The core package adds nothing to your Python environment. Dev extras are opt-in.
+- **Cheap failure first.** `gpupoor doctor` + `gpupoor smoke` verify secrets, clocks, disk, docker, and MLflow reachability before `dstack apply` is ever called. Money-spending calls are the last step, never the first.
+- **Live dashboard that can't exfiltrate.** Argv allowlists, endpoint allowlists, read-only docker.sock bind, argv regex validation, SIGTERM→SIGKILL escalation on shutdown — safe to run unattended.
+
+### Who this is for
+
+- **Solo researchers** exploring new transformer ideas without institutional GPU access
+- **Engineers** who need a small, real-stack reference for how a training pipeline *should* look
+- **Students** learning LLM training without burning through a monthly credit in a single notebook session
+- **Teams** that want one config format, one recipe, and one launcher across laptop, workstation, and rented GPU
 
 ---
 
@@ -43,57 +52,74 @@ Requires **Python 3.11+**. The `[dev]` extras install linter, formatter, and tes
 
 ## Quick start
 
-### Local (CPU)
+### 1. Local smoke (CPU, no GPU needed)
 
 ```bash
-gpupoor doctor                           # preflight
-gpupoor train examples/tiny_cpu.toml     # train a tiny MiniMind on CPU
+gpupoor doctor                           # preflight: clocks, docker, secrets
+gpupoor train examples/tiny_cpu.toml     # tiny MiniMind, ~2 min on CPU
 ```
 
-### Remote (Verda / dstack)
+This is your fast feedback loop. Iterate here until the recipe is happy, then rent a GPU.
+
+### 2. Preemptible GPU on Verda/dstack
 
 ```bash
-gpupoor infra mlflow up                  # start local MLflow + tunnel
-gpupoor launch dstack examples/verda_remote.toml
+gpupoor infra mlflow up                              # local MLflow + Cloudflare tunnel
+gpupoor launch dstack examples/verda_a100_10m.toml   # auto-allocates cheapest preemptible A100
 ```
 
-The remote launch path keeps the Cloudflare MLflow tunnel alive until you call `gpupoor dstack teardown` (or `./run.sh teardown`), so the remote trainer can report metrics in real time.
+What `launch dstack` actually does:
 
-### Dry-run the remote plan
+1. Loads the TOML and runs preflight locally (doctor, mlflow reachable, secrets resolved).
+2. Builds and pushes your training image (skip with `--skip-build` to reuse an existing tag).
+3. Opens a **Cloudflare tunnel** so the remote trainer can stream metrics to *your* local MLflow.
+4. Asks dstack for the cheapest **live preemptible offer** matching `gpu_names`, `gpu_count`, and `max_price`.
+5. Applies the run, tails logs, and keeps the tunnel alive until `gpupoor dstack teardown`.
+
+The TOML in the example sets `max_price = 3.0` USD/hr and `time_cap_seconds = 600` — **bounded at $0.50 per run in the absolute worst case**, and in practice the winning spot bid is usually a small fraction of the ceiling. `time_cap_seconds` is a hard wall-clock ceiling enforced inside the trainer, so the run self-terminates before the price ever surprises you.
+
+### 3. Dry-run the remote plan (free)
 
 ```bash
-gpupoor launch dstack examples/verda_remote.toml --dry-run
+gpupoor launch dstack examples/verda_a100_10m.toml --dry-run
 ```
 
-Prints the resolved runtime values and the `dstack apply` shape without mutating anything.
+Prints the resolved `dstack apply` shape (image, env, GPU filter, time cap) without allocating anything. Use this to verify the config before burning money.
+
+### The MiniMind recipe
+
+[MiniMind](https://github.com/jingyaogong/minimind) is a compact, end-to-end transformer training loop — small enough to train to completion on a single preemptible GPU in minutes, complete enough to be a realistic reference for research explorations. It lives in [`training/src/minimind/`](./training/src/minimind/) and is wired into the `recipe.kind = "minimind_pretrain"` path by default. Swap datasets, change hyperparameters, or fork the recipe — the backends don't care.
 
 ---
 
 ## Architecture
 
 ```mermaid
-graph TD
-    DEV["developer<br/>(CLI or run.sh)"] --> CLI["<b>gpupoor CLI</b><br/>src/gpupoor/cli.py"]
-    DEV --> MAKE["Makefile targets<br/>test-fast / ci-local"]
-    CLI --> CFG["<b>config.py</b><br/>TOML → RunConfig<br/>strict-keys"]
+flowchart TD
+    DEV["developer"] --> CLI["gpupoor CLI<br/>src/gpupoor/cli.py"]
+    DEV --> RUN["run.sh"]
+    DEV --> MAKE["Makefile targets"]
+    RUN --> CLI
 
-    CFG --> OPS["ops/<br/>doctor · smoke · secrets<br/>leak-scan · check-anchors"]
-    CFG --> BACKEND{backend.kind}
-    CFG --> SERVICES["services/<br/>mlflow · dashboard · emulator"]
+    CLI --> CFG["config.py<br/>TOML to RunConfig<br/>strict-keys"]
 
-    BACKEND -->|local| LOCAL["backends/local.py<br/>docker compose"]
-    BACKEND -->|dstack| DSTACK["backends/dstack.py<br/>launch_remote()"]
+    CFG --> OPS["ops/<br/>doctor, smoke, secrets<br/>leak-scan, check-anchors"]
+    CFG --> BACKEND{"backend.kind"}
+    CFG --> SERVICES["services/<br/>mlflow, dashboard, emulator"]
 
-    LOCAL --> DOCKER[(Docker)]
-    DSTACK --> DCLI[dstack CLI]
-    DSTACK --> TUNNEL["Cloudflare tunnel<br/>.cf-tunnel.url"]
-    DCLI --> VERDA[(Verda fleet)]
+    BACKEND -- local --> LOCAL["backends/local.py<br/>docker compose"]
+    BACKEND -- dstack --> DSTACK["backends/dstack.py<br/>launch_remote"]
 
-    SERVICES --> MLFLOW[("MLflow<br/>:5000")]
-    SERVICES --> DASH["Dashboard (Gradio)<br/>:7860"]
+    LOCAL --> DOCKER["Docker"]
+    DSTACK --> DCLI["dstack CLI"]
+    DSTACK --> TUNNEL["Cloudflare tunnel<br/>cf-tunnel.url"]
+    DCLI --> VERDA["Verda fleet"]
+
+    SERVICES --> MLFLOW["MLflow<br/>port 5000"]
+    SERVICES --> DASH["Dashboard (Gradio)<br/>port 7860"]
     TUNNEL --> MLFLOW
 
-    DASH --> COLLECTORS["7 collectors<br/>(see below)"]
+    DASH --> COLLECTORS["7 collectors"]
     COLLECTORS --> MLFLOW
     COLLECTORS --> DCLI
     COLLECTORS --> DOCKER
@@ -110,29 +136,29 @@ sequenceDiagram
     autonumber
     participant U as User
     participant CLI as gpupoor CLI
-    participant D as backends/dstack.py
-    participant O as ops/
-    participant T as tunnel + dstack CLI
+    participant D as dstack backend
+    participant O as ops
+    participant T as tunnel and dstack
     participant V as Verda fleet
 
     U->>CLI: launch dstack config.toml
     CLI->>CLI: load_run_config (strict TOML)
     CLI->>D: launch_remote(config, skip_build, dry_run)
-    D->>O: run_preflight (doctor + secrets + mlflow probe)
+    D->>O: run_preflight (doctor, secrets, mlflow probe)
     Note over D: abort early on any FAIL
-    D->>D: build_and_push image (unless --skip-build)
+    D->>D: build and push image (unless skip-build)
     D->>T: start Cloudflare tunnel
-    T-->>D: .cf-tunnel.url
+    T-->>D: cf-tunnel.url
     D->>T: dstack apply -f rendered.yml
     T->>V: schedule run
     V-->>T: state = running
     D->>D: track_run (flock on .run-ids)
-    D->>D: wait_for_run_start (poll ps --json)
+    D->>D: wait_for_run_start (poll ps)
     alt success
-        D-->>U: remote running; tunnel kept alive
+        D-->>U: remote running, tunnel kept alive
     else failure
-        D->>T: kill_tunnel (verified /proc/&lt;pid&gt;/comm)
-        D-->>U: error + cleanup
+        D->>T: kill_tunnel (verify proc comm)
+        D-->>U: error and cleanup
     end
 ```
 
@@ -152,12 +178,12 @@ sequenceDiagram
     participant S as External source
 
     loop every cadence_s
-      W->>G: argv or endpoint allowlist check
-      G-->>W: ValueError on unsafe input
-      W->>S: httpx get / subprocess Popen
-      S-->>W: raw payload
-      W->>W: update AppState under lock
-      W->>W: shutdown_event.wait(cadence)
+        W->>G: argv or endpoint allowlist check
+        G-->>W: ValueError on unsafe input
+        W->>S: httpx get or subprocess Popen
+        S-->>W: raw payload
+        W->>W: update AppState under lock
+        W->>W: shutdown_event.wait(cadence)
     end
 ```
 
@@ -177,14 +203,19 @@ Log tailers run alongside collectors and use the same gates; `attach` is bound t
 
 ```mermaid
 sequenceDiagram
-    SIGTERM->>app.py: signal
-    app.py->>app.py: shutdown_event.set()
-    app.py->>LogTailer: shutdown() [SIGTERM→SIGKILL after grace]
-    app.py->>Workers: Thread.join(per_worker_budget)
+    participant SIG as SIGTERM
+    participant APP as app.py
+    participant LT as LogTailer
+    participant WK as Workers
+
+    SIG->>APP: signal
+    APP->>APP: shutdown_event.set()
+    APP->>LT: shutdown (SIGTERM then SIGKILL after grace)
+    APP->>WK: Thread.join (per_worker_budget)
     alt all threads exited
-      app.py->>app.py: sys.exit(0)
-    else survivors
-      app.py->>app.py: log WARN + sys.exit(1)
+        APP->>APP: sys.exit(0)
+    else survivors exist
+        APP->>APP: log WARN and sys.exit(1)
     end
 ```
 
