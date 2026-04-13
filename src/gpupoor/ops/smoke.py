@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -99,10 +98,10 @@ def _compose_command(*, cpu: bool, extra_files: list[Path] | None = None) -> lis
 
 
 def _build_local_image(base_image: str) -> str:
-    local_tag = subprocess.check_output(
+    local_tag = run_command(
         ["git", "-C", str(repo_path()), "rev-parse", "--short", "HEAD"],
-        text=True,
-    ).strip()
+        capture_output=True,
+    ).stdout.strip()
     local_image = f"verda-local:{local_tag or 'local'}"
     run_command(
         [
@@ -134,11 +133,10 @@ def _wait_for_health(port: int, *, expected: int, timeout_seconds: int) -> None:
 
 def _probe_uid_gid(compose: list[str], reporter: SmokeReporter) -> None:
     print("--- Probe A: /data UID/GID ---")
-    completed = subprocess.run(
+    completed = run_command(
         [*compose, "exec", "verda-local", "stat", "-c", "%u:%g", "/data"],
         check=False,
         capture_output=True,
-        text=True,
     )
     uid_gid = completed.stdout.strip()
     if uid_gid == "1000:1000":
@@ -149,7 +147,7 @@ def _probe_uid_gid(compose: list[str], reporter: SmokeReporter) -> None:
 
 def _probe_non_root_write(compose: list[str], reporter: SmokeReporter) -> None:
     print("--- Probe B: non-root write ---")
-    completed = subprocess.run(
+    completed = run_command(
         [
             *compose,
             "exec",
@@ -162,7 +160,6 @@ def _probe_non_root_write(compose: list[str], reporter: SmokeReporter) -> None:
         ],
         check=False,
         capture_output=True,
-        text=True,
     )
     if completed.returncode == 0:
         reporter.pass_probe("B", "non-root write to /data OK")
@@ -173,15 +170,14 @@ def _probe_non_root_write(compose: list[str], reporter: SmokeReporter) -> None:
 def _probe_sigterm_latency(compose: list[str], reporter: SmokeReporter, *, timeout_seconds: int) -> None:
     print("--- Probe C: SIGTERM latency ---")
     start = time.time()
-    subprocess.run([*compose, "kill", "-s", "TERM"], check=False, capture_output=True, text=True)
+    run_command([*compose, "kill", "-s", "TERM"], check=False, capture_output=True)
     deadline = time.time() + timeout_seconds + 5
     exited = False
     while time.time() < deadline:
-        completed = subprocess.run(
+        completed = run_command(
             [*compose, "ps", "--status", "exited", "-q"],
             check=False,
             capture_output=True,
-            text=True,
         )
         if completed.stdout.strip():
             exited = True
@@ -197,11 +193,10 @@ def _probe_sigterm_latency(compose: list[str], reporter: SmokeReporter, *, timeo
 
 def _probe_env_leak(compose: list[str], reporter: SmokeReporter) -> None:
     print("--- Probe D: trust-zone leak ---")
-    completed = subprocess.run(
+    completed = run_command(
         [*compose, "exec", "verda-local", "env"],
         check=False,
         capture_output=True,
-        text=True,
     )
     leaks = [
         line.strip()
@@ -257,7 +252,7 @@ def _probe_degraded_gating(runtime_env: dict[str, str], reporter: SmokeReporter,
 
 def _probe_data_wait_timeout(local_image: str, reporter: SmokeReporter, *, timeout_seconds: int) -> None:
     print("--- Probe F: /data wait timeout ---")
-    completed = subprocess.run(
+    completed = run_command(
         [
             "docker",
             "run",
@@ -270,7 +265,6 @@ def _probe_data_wait_timeout(local_image: str, reporter: SmokeReporter, *, timeo
         ],
         check=False,
         capture_output=True,
-        text=True,
     )
     if completed.returncode != 0:
         reporter.pass_probe("F", f"/data timeout exits non-zero (code={completed.returncode})")

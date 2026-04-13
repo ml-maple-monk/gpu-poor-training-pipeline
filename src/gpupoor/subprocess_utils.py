@@ -41,14 +41,25 @@ def run_command(
     cwd: Path | None = None,
     env: Mapping[str, str] | None = None,
     check: bool = True,
-) -> subprocess.CompletedProcess[None]:
-    """Run a subprocess while streaming stdout/stderr."""
+    timeout: float | None = None,
+    capture_output: bool = False,
+) -> subprocess.CompletedProcess:
+    """Run a subprocess, optionally capturing stdout/stderr.
+
+    By default, stdout/stderr stream to the parent process and the
+    returned ``CompletedProcess`` has ``stdout``/``stderr`` set to
+    ``None``. When ``capture_output=True`` the helper captures both
+    streams as text and returns them on the ``CompletedProcess``.
+    """
     log_command(command)
     completed = subprocess.run(
         list(command),
         cwd=str(cwd) if cwd else None,
         env=_merged_env(env),
         check=False,
+        timeout=timeout,
+        capture_output=capture_output,
+        text=True if capture_output else None,
     )
     if check and completed.returncode != 0:
         raise CommandError(command, completed.returncode)
@@ -61,6 +72,6 @@ def bash_script(
     cwd: Path | None = None,
     env: Mapping[str, str] | None = None,
     check: bool = True,
-) -> subprocess.CompletedProcess[None]:
+) -> subprocess.CompletedProcess:
     """Run a bash helper script."""
     return run_command(["bash", str(script), *args], cwd=cwd, env=env, check=check)

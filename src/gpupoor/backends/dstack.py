@@ -22,7 +22,7 @@ from gpupoor.config import (
     load_remote_settings,
     require_remote_settings,
 )
-from gpupoor.subprocess_utils import CommandError, bash_script, log_command, run_command
+from gpupoor.subprocess_utils import CommandError, bash_script, run_command
 from gpupoor.utils import repo_path
 from gpupoor.utils.http import http_ok
 from gpupoor.utils.logging import get_logger
@@ -379,24 +379,14 @@ def launch_remote(
                 "TIME_CAP_SECONDS": str(config.recipe.time_cap_seconds),
             }
         )
-        # Bypass run_command here to pass a subprocess-level timeout.
-        # `dstack apply` can hang indefinitely on registry auth or network
-        # stalls; without a timeout the CLI freezes with no liveness signal.
-        # Budget: the existing run-start window plus a 60s buffer covers
-        # dstack's own internal retries without inventing a new knob.
+        # `dstack apply` can hang indefinitely on registry auth or
+        # network stalls; without a timeout the CLI freezes with no
+        # liveness signal. Budget: the existing run-start window plus a
+        # 60s buffer covers dstack's own internal retries without
+        # inventing a new knob.
         apply_cmd = [dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"]
-        log_command(apply_cmd)
         apply_timeout = config.remote.run_start_timeout_seconds + 60
-        apply_run_env = os.environ.copy()
-        apply_run_env.update({key: value for key, value in apply_env.items() if value is not None})
-        result = subprocess.run(
-            apply_cmd,
-            env=apply_run_env,
-            check=False,
-            timeout=apply_timeout,
-        )
-        if result.returncode != 0:
-            raise CommandError(apply_cmd, result.returncode)
+        run_command(apply_cmd, env=apply_env, timeout=apply_timeout)
 
         run_name = config.name
         if dstack_has_run(dstack_bin, run_name):

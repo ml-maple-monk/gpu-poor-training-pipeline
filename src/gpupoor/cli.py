@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
 import sys
 from dataclasses import replace
 
@@ -114,17 +113,13 @@ def tracked_fingerprint() -> str:
     diff-against-HEAD form captures content changes to tracked files,
     and including the HEAD sha catches actions that commit.
     """
-    head = subprocess.run(
+    head = run_command(
         ["git", "rev-parse", "HEAD"],
-        check=True,
         capture_output=True,
-        text=True,
     ).stdout.strip()
-    diff = subprocess.run(
+    diff = run_command(
         ["git", "diff", "HEAD", "--no-ext-diff", "--no-color"],
-        check=True,
         capture_output=True,
-        text=True,
     ).stdout
     return f"{head}\n---\n{diff}"
 
