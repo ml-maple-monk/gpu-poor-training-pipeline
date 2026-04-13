@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpupoor"
+version = "0.1.0"
+description = "Package-first orchestration for local and Verda-backed MiniMind experiments."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Codex" }]
+dependencies = []
+
+[project.scripts]
+gpupoor = "gpupoor.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "training/tests", "infrastructure/dashboard/tests"]
+

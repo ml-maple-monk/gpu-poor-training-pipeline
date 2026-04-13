@@ -8,6 +8,9 @@ done
 
 COMPOSE_FILES="-f infrastructure/local-emulator/compose/docker-compose.yml"
 [ "$CPU_MODE" = "1" ] && COMPOSE_FILES="-f infrastructure/local-emulator/compose/docker-compose.yml -f infrastructure/local-emulator/compose/docker-compose.cpu.yml"
+LOCAL_BASE_IMAGE="${BASE_IMAGE:-nvidia/cuda:12.4.1-runtime-ubuntu22.04}"
+LOCAL_TAG="$(git rev-parse --short HEAD 2>/dev/null || echo local)"
+LOCAL_IMAGE="verda-local:${LOCAL_TAG}"
 
 PASS=0
 FAIL_COUNT=0
@@ -15,36 +18,17 @@ FAIL_COUNT=0
 probe_pass() { echo "PROBE $1 PASS: $2"; PASS=$((PASS+1)); }
 probe_fail() { echo "PROBE $1 FAIL: $2" >&2; FAIL_COUNT=$((FAIL_COUNT+1)); }
 
-update_parity() {
-    local aspect="$1" measured="$2"
-    local ts
-    ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-    # replace measured and measured_at columns in the table row matching the aspect key
-    sed -i "s|^| |; s|^ ||" PARITY.md 2>/dev/null || true
-    # idempotent update: replace (pending) values for matching aspect row
-    python3 - "$aspect" "$measured" "$ts" <<'PYEOF'
-import sys, re, pathlib
-aspect, measured, ts = sys.argv[1], sys.argv[2], sys.argv[3]
-p = pathlib.Path("PARITY.md")
-text = p.read_text()
-def replacer(m):
-    cols = m.group(0).split("|")
-    if len(cols) >= 5 and aspect.lower() in cols[1].lower():
-        cols[3] = f" {measured} "
-        cols[4] = f" {ts} "
-    return "|".join(cols)
-text = re.sub(r'\|[^\n]+\|', replacer, text)
-p.write_text(text)
-PYEOF
-}
-
 # Step 1 — preflight
 echo "--- Preflight ---"
 ./scripts/preflight.sh || { echo "Preflight failed — aborting smoke" >&2; exit 1; }
 
 # Step 2 — build and run
 echo "--- Build & Run ---"
-make build
+docker build \
+    --build-arg BASE_IMAGE="$LOCAL_BASE_IMAGE" \
+    -f infrastructure/local-emulator/docker/Dockerfile \
+    -t "$LOCAL_IMAGE" \
+    infrastructure/local-emulator
 docker compose ${COMPOSE_FILES} up --build -d
 # wait for /health
 for i in $(seq 1 30); do
@@ -58,7 +42,6 @@ echo "--- Probe A: /data UID/GID ---"
 UIDGID=$(docker compose ${COMPOSE_FILES} exec verda-local stat -c '%u:%g' /data 2>/dev/null | tr -d '[:space:]') || UIDGID=""
 if [ "$UIDGID" = "1000:1000" ]; then
     probe_pass A "/data UID:GID = 1000:1000"
-    update_parity "/data UID/GID" "1000:1000"
 else
     probe_fail A "/data UID:GID = '$UIDGID' (expected 1000:1000)"
 fi
@@ -67,7 +50,6 @@ fi
 echo "--- Probe B: non-root write ---"
 if docker compose ${COMPOSE_FILES} exec -u verda verda-local sh -c 'touch /data/.probe && rm /data/.probe' 2>/dev/null; then
     probe_pass B "non-root write to /data OK"
-    update_parity "non-root writability" "ok"
 else
     probe_fail B "non-root write to /data failed"
 fi
@@ -85,7 +67,6 @@ T1=$(date +%s%N)
 LATENCY_MS=$(( (T1 - T0) / 1000000 ))
 if [ "$LATENCY_MS" -le 30000 ]; then
     probe_pass C "SIGTERM latency ${LATENCY_MS}ms (<=30s)"
-    update_parity "SIGTERM-to-exit latency" "${LATENCY_MS}ms"
 else
     probe_fail C "SIGTERM latency ${LATENCY_MS}ms exceeds 30s"
 fi
@@ -97,7 +78,6 @@ sleep 2
 LEAK=$(docker compose ${COMPOSE_FILES} exec verda-local env 2>/dev/null | grep -E 'VERDA_CLIENT_(ID|SECRET)' || true)
 if [ -z "$LEAK" ]; then
     probe_pass D "no VERDA_CLIENT_* in container env"
-    update_parity "Auth header contract" "VERDA_CLIENT_* absent from container env"
 else
     probe_fail D "LEAK: $LEAK"
 fi
@@ -125,7 +105,7 @@ fi
 
 # Probe F — /data wait timeout
 echo "--- Probe F: /data wait timeout ---"
-IMG=$(docker images verda-local --format '{{.Repository}}:{{.Tag}}' | head -1)
+IMG="$LOCAL_IMAGE"
 if [ -n "$IMG" ]; then
     set +e
     docker run --rm -e WAIT_DATA_TIMEOUT=2 \

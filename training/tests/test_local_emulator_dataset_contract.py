@@ -34,6 +34,8 @@ def test_remote_and_local_share_dataset_bootstrap_helper():
 
 def test_local_emulator_start_script_loads_hf_token_file():
     start_script = (REPO_ROOT / "infrastructure" / "local-emulator" / "start.sh").read_text()
+    emulator_service = (REPO_ROOT / "src" / "gpupoor" / "services" / "emulator.py").read_text()
 
-    assert "load_hf_token" in start_script
-    assert 'REPO_ROOT/hf_token' in start_script
+    assert 'python3 -m gpupoor.cli compat infra emulator' in start_script
+    assert "_load_hf_token" in emulator_service
+    assert 'repo_path("hf_token")' in emulator_service

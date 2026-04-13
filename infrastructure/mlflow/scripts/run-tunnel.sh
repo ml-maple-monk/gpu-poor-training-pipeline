@@ -81,22 +81,32 @@ echo "[tunnel] Tunnel URL: $TUNNEL_URL"
 
 # Validate tunnel is reachable
 echo "[tunnel] Validating tunnel health endpoint..."
-MAX_HEALTH_ATTEMPTS=10
+# Quick Tunnel DNS + edge propagation can lag behind URL emission for a short
+# period, so allow a longer readiness window before treating it as a failure.
+MAX_HEALTH_ATTEMPTS=45
 HEALTH_OK=0
 for i in $(seq 1 $MAX_HEALTH_ATTEMPTS); do
     if curl -fsS "$TUNNEL_URL/health" >/dev/null 2>&1; then
         HEALTH_OK=1
         break
     fi
+    if [ $(( i % 5 )) -eq 0 ]; then
+        echo "[tunnel] Waiting for public tunnel readiness... (${i}/${MAX_HEALTH_ATTEMPTS})"
+    fi
     sleep 1
 done
 
 if [ "$HEALTH_OK" -ne 1 ]; then
-    echo "[tunnel] ERROR: Tunnel URL $TUNNEL_URL/health not reachable after $MAX_HEALTH_ATTEMPTS attempts" >&2
-    kill "$CF_PID" 2>/dev/null || true
-    rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE"
-    exit 1
+    if kill -0 "$CF_PID" 2>/dev/null; then
+        echo "[tunnel] WARN: Tunnel URL $TUNNEL_URL/health not reachable after $MAX_HEALTH_ATTEMPTS attempts" >&2
+        echo "[tunnel] WARN: Continuing with the emitted URL because cloudflared is still running; remote MLflow logging may lag or degrade." >&2
+    else
+        echo "[tunnel] ERROR: cloudflared exited before the tunnel became reachable" >&2
+        rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE"
+        exit 1
+    fi
+else
+    echo "[tunnel] Tunnel validated — MLflow reachable at $TUNNEL_URL"
 fi
 
-echo "[tunnel] Tunnel validated — MLflow reachable at $TUNNEL_URL"
 echo "[STEP 3] CF Quick Tunnel ready: $TUNNEL_URL"

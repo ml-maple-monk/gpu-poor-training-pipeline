@@ -39,6 +39,13 @@ def test_old_clone_based_training_entrypoints_are_gone():
     assert not (REPO_ROOT / "training" / "run-train.sh").exists()
 
 
+def test_obsolete_top_level_artifacts_are_gone():
+    assert not (REPO_ROOT / "Makefile").exists()
+    assert not (REPO_ROOT / "PARITY.md").exists()
+    assert not (REPO_ROOT / "REPO_REVIEW.md").exists()
+    assert not (REPO_ROOT / "PR_DRAFT.md").exists()
+
+
 def test_dashboard_no_longer_owns_mlflow_assets():
     dashboard_root = REPO_ROOT / "infrastructure" / "dashboard"
     start_script = (dashboard_root / "start.sh").read_text()

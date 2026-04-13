@@ -43,7 +43,7 @@ check_output() {
 # resolve most recent verda-local image tag
 FULL_IMAGE=$(docker images "$IMAGE" --format '{{.Repository}}:{{.Tag}}' | head -1)
 if [ -z "$FULL_IMAGE" ]; then
-    echo "ERROR: no image matching '$IMAGE' found — run make build first" >&2
+    echo "ERROR: no image matching '$IMAGE' found — build the local emulator image first or run ./scripts/smoke.sh" >&2
     exit 1
 fi
 
