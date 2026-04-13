@@ -36,14 +36,11 @@ _DSTACK_CLI = (
     or shutil.which("dstack")
     or "/home/geeyang/.dstack-cli-venv/bin/dstack"
 )
-# NOTE: "attach" is retained for `attach --logs` which is read-only in
-#       practice. CS5 fixed in this commit: per-verb argv allowlist below
-#       binds "attach" to the "--logs" flag specifically, so any other
-#       attach invocation (interactive shell, `--tty`, bare `attach`) is
-#       rejected before the subprocess is spawned.
-_ALLOWED_DSTACK_CLI_VERBS = frozenset({"logs", "ps", "attach"})
-
-# Per-verb argv shape allowlist. Each entry has:
+# Per-verb argv shape allowlist — single source of truth for allowed dstack
+# CLI verbs and their argv shapes. "attach" is retained because it is bound
+# to ``--logs`` below (read-only); bare or ``--tty`` attach is rejected.
+#
+# Each entry has:
 #   * ``flags``: tokens (``-x`` / ``--xyz``) accepted for that verb.
 #     Anything starting with ``-`` outside this set is rejected.
 #   * ``positional``: maximum count of non-flag tokens (each of which
@@ -102,12 +99,9 @@ def _safe_dstack_cli(argv: list[str]) -> subprocess.Popen:
     attach (``attach run-foo`` with no flag, or ``--tty``) is rejected
     before any subprocess is spawned.
     """
-    if not argv or argv[0] not in _ALLOWED_DSTACK_CLI_VERBS:
+    if not argv or argv[0] not in _ALLOWED_DSTACK_ARGV:
         raise ValueError(f"dstack CLI verb {argv[:1]!r} not in whitelist")
-    spec = _ALLOWED_DSTACK_ARGV.get(argv[0])
-    if spec is None:
-        # Defensive: keep the two allowlists in sync.
-        raise ValueError(f"dstack CLI verb {argv[0]!r} has no argv spec")
+    spec = _ALLOWED_DSTACK_ARGV[argv[0]]
     allowed_flags: frozenset[str] = spec["flags"]  # type: ignore[assignment]
     required_flags: frozenset[str] = spec["required_flags"]  # type: ignore[assignment]
     max_positional: int = spec["positional"]  # type: ignore[assignment]
