@@ -10,7 +10,8 @@ from __future__ import annotations
 import logging
 import signal
 import sys
-import time
+import threading
+from typing import TYPE_CHECKING
 
 import gradio as gr
 
@@ -29,6 +30,11 @@ from .panels.training import format_training_md
 from .panels.verda_inventory import format_verda_table
 from .state import AppState, get_state
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from .collector_workers import CollectorWorker
+
 log = logging.getLogger(__name__)
 
 # ── Global singletons (set during build_app) ────────────────────────────────────
@@ -37,14 +43,95 @@ _docker_tailer: LogTailer | None = None
 _dstack_tailer: LogTailer | None = None
 _workers: list = []
 
+# Grace budget derivation:
+#   max collector cadence today is 30s (offers-30s).
+#   Workers sleep via shutdown_event.wait(cadence), which returns immediately
+#   once the event is set — so the bulk of the grace window only covers a
+#   single in-flight collect() call that might be mid-HTTP. 5s slack on top of
+#   the 30s cadence is enough headroom without making operator-visible
+#   shutdown feel frozen.
+_DEFAULT_SHUTDOWN_GRACE_SECONDS = 35.0
 
-def _setup_signal_handler(state: AppState) -> None:
+
+def _shutdown_sequence(
+    tailers: Sequence[LogTailer],
+    workers: Sequence[CollectorWorker],
+    *,
+    shutdown_event: threading.Event,
+    grace_seconds: float = _DEFAULT_SHUTDOWN_GRACE_SECONDS,
+) -> int:
+    """Run the graceful shutdown sequence. Pure function — signal-free.
+
+    Steps:
+      1. Set ``shutdown_event`` so collector workers wake from their cadence
+         sleep early.
+      2. Tear down each tailer (SIGTERM->SIGKILL + httpx close, per F1).
+      3. Join every collector worker with a per-worker timeout computed so
+         the combined wall-clock stays within ``grace_seconds``.
+      4. Report which (if any) workers failed to exit.
+
+    Returns:
+      ``0`` if every worker thread confirmed dead after join.
+      ``1`` if any worker thread remained alive; names of survivors are
+      logged at WARNING so operators can see what blocked shutdown.
+    """
+    log.info("shutdown sequence starting (grace=%.1fs)", grace_seconds)
+    shutdown_event.set()
+
+    # Tailers own their own 5s join budget internally (see LogTailer.shutdown).
+    # They run first so the collectors don't see a half-dead stream while they
+    # wind down their own work.
+    for tailer in tailers:
+        try:
+            tailer.shutdown()
+        except Exception as exc:  # pragma: no cover — defensive
+            log.warning(
+                "LogTailer[%s/%s] shutdown raised: %s",
+                getattr(tailer, "mode", "?"),
+                getattr(tailer, "target", "?"),
+                exc,
+            )
+
+    # Share the remaining grace budget equally across workers so a single
+    # slow worker can't starve the rest. Floor at 1s to avoid zero-timeout
+    # spin-polling when the worker list is long.
+    if workers:
+        per_worker_timeout = max(1.0, grace_seconds / len(workers))
+    else:
+        per_worker_timeout = grace_seconds
+
+    survivors: list[str] = []
+    for worker in workers:
+        worker.join(timeout=per_worker_timeout)
+        thread = getattr(worker, "_thread", None)
+        if thread is not None and thread.is_alive():
+            survivors.append(worker.name)
+
+    if survivors:
+        log.warning(
+            "shutdown: %d worker(s) did not exit within grace budget: %s",
+            len(survivors),
+            ", ".join(survivors),
+        )
+        return 1
+
+    log.info("shutdown sequence complete — all workers joined cleanly")
+    return 0
+
+
+def _setup_signal_handler(
+    state: AppState,
+    tailers: Sequence[LogTailer],
+    workers: Sequence[CollectorWorker],
+) -> None:
     def _sigterm_handler(signum, frame):
-        log.info("SIGTERM received — setting shutdown_event")
-        state.shutdown_event.set()
-        # Give workers a moment to finish
-        time.sleep(1)
-        sys.exit(0)
+        log.info("SIGTERM/SIGINT received (signum=%s) — draining", signum)
+        rc = _shutdown_sequence(
+            tailers=tailers,
+            workers=workers,
+            shutdown_event=state.shutdown_event,
+        )
+        sys.exit(rc)
 
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
@@ -68,7 +155,6 @@ def build_app() -> gr.Blocks:
 
     state = get_state()
     _state = state
-    _setup_signal_handler(state)
 
     # ── Start log tailers ────────────────────────────────────────────────────
     docker_tailer = LogTailer(
@@ -93,6 +179,9 @@ def build_app() -> gr.Blocks:
     # ── Start collector workers ──────────────────────────────────────────────
     workers = start_all_collectors(state)
     _workers = workers
+
+    # SIGTERM handler wired after tailers + workers exist so it can drain them.
+    _setup_signal_handler(state, tailers=[docker_tailer, dstack_tailer], workers=workers)
 
     # ── Build Gradio UI ──────────────────────────────────────────────────────
     with gr.Blocks(
