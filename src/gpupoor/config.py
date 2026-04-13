@@ -82,6 +82,11 @@ class RemoteConfig:
     health_timeout_seconds: int = 5
     dstack_server_start_timeout_seconds: int = 30
     run_start_timeout_seconds: int = 480
+    # dstack task overrides; unset fields fall back to render-pretrain-task.sh defaults.
+    gpu_names: tuple[str, ...] = ()
+    gpu_count: int | None = None
+    spot_policy: str | None = None
+    max_price: float | None = None
 
 
 @dataclass(slots=True)
@@ -131,6 +136,35 @@ def _optional_str(data: dict[str, object], key: str) -> str | None:
     if not isinstance(value, str) or not value:
         raise ConfigError(f"{key} must be a non-empty string when provided")
     return value
+
+
+def _optional_int(data: dict[str, object], key: str) -> int | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ConfigError(f"{key} must be an integer when provided")
+    return value
+
+
+def _optional_number(data: dict[str, object], key: str) -> float | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{key} must be a number when provided")
+    return float(value)
+
+
+def _optional_string_tuple(data: dict[str, object], key: str) -> tuple[str, ...]:
+    value = data.get(key)
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item for item in value
+    ):
+        raise ConfigError(f"{key} must be an array of non-empty strings when provided")
+    return tuple(value)
 
 
 def merge_doctor_config(
@@ -343,6 +377,10 @@ def load_run_config(path: str | Path) -> RunConfig:
         run_start_timeout_seconds=_require_int(
             remote_data, "run_start_timeout_seconds", default=480
         ),
+        gpu_names=_optional_string_tuple(remote_data, "gpu_names"),
+        gpu_count=_optional_int(remote_data, "gpu_count"),
+        spot_policy=_optional_str(remote_data, "spot_policy"),
+        max_price=_optional_number(remote_data, "max_price"),
     )
     return RunConfig(
         name=name,

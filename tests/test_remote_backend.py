@@ -62,6 +62,62 @@ def test_render_task_uses_config_name_and_duration(
     assert rendered == tmp_path / ".tmp" / "pretrain.task.rendered.yml"
     assert calls[0]["env"]["TASK_NAME"] == "verda_remote_10m"
     assert calls[0]["env"]["TASK_MAX_DURATION"] == "10m"
+    # Baseline config sets no GPU overrides; shell defaults must apply.
+    assert "TASK_GPU_NAMES" not in calls[0]["env"]
+    assert "TASK_GPU_COUNT" not in calls[0]["env"]
+    assert "TASK_SPOT_POLICY" not in calls[0]["env"]
+    assert "TASK_MAX_PRICE" not in calls[0]["env"]
+
+
+def test_render_task_injects_gpu_overrides_when_set(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = load_run_config(REPO_ROOT / "examples" / "verda_b300_10m.toml")
+    calls: list[dict[str, object]] = []
+
+    def fake_repo_path(*parts: str) -> Path:
+        return tmp_path.joinpath(*parts)
+
+    def fake_bash_script(
+        script: Path, *args: str, env: dict[str, str] | None = None, **kwargs: object
+    ) -> None:
+        calls.append({"script": script, "args": args, "env": env or {}})
+        Path(args[0]).write_text("# rendered\n", encoding="utf-8")
+
+    monkeypatch.setattr(dstack, "repo_path", fake_repo_path)
+    monkeypatch.setattr(dstack, "bash_script", fake_bash_script)
+
+    dstack.render_task({"VCR_IMAGE_BASE": "vccr.io/example"}, config, "abc123")
+
+    env = calls[0]["env"]
+    assert env["TASK_GPU_NAMES"] == "[B300]"
+    assert env["TASK_GPU_COUNT"] == "1"
+    assert env["TASK_SPOT_POLICY"] == "spot"
+    assert env["TASK_MAX_PRICE"] == "10.0"
+
+
+def test_render_task_joins_multiple_gpu_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
+    config.remote.gpu_names = ("B200", "B300")
+    calls: list[dict[str, object]] = []
+
+    def fake_repo_path(*parts: str) -> Path:
+        return tmp_path.joinpath(*parts)
+
+    def fake_bash_script(
+        script: Path, *args: str, env: dict[str, str] | None = None, **kwargs: object
+    ) -> None:
+        calls.append({"script": script, "args": args, "env": env or {}})
+        Path(args[0]).write_text("# rendered\n", encoding="utf-8")
+
+    monkeypatch.setattr(dstack, "repo_path", fake_repo_path)
+    monkeypatch.setattr(dstack, "bash_script", fake_bash_script)
+
+    dstack.render_task({"VCR_IMAGE_BASE": "vccr.io/example"}, config, "abc123")
+
+    assert calls[0]["env"]["TASK_GPU_NAMES"] == "[B200, B300]"
 
 
 def test_launch_remote_keeps_tunnel_alive_after_success(

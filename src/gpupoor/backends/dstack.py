@@ -103,6 +103,17 @@ def render_task(settings: dict[str, str], config: RunConfig, image_sha: str) -> 
     render_env["IMAGE_SHA"] = image_sha
     render_env["TASK_NAME"] = config.name
     render_env["TASK_MAX_DURATION"] = task_max_duration(config.recipe.time_cap_seconds)
+    # Task/GPU overrides: unset fields fall back to shell defaults so the
+    # baseline example stays unchanged while targeted runs (e.g. B300) can
+    # pick their own instance type from TOML.
+    if config.remote.gpu_names:
+        render_env["TASK_GPU_NAMES"] = "[" + ", ".join(config.remote.gpu_names) + "]"
+    if config.remote.gpu_count is not None:
+        render_env["TASK_GPU_COUNT"] = str(config.remote.gpu_count)
+    if config.remote.spot_policy:
+        render_env["TASK_SPOT_POLICY"] = config.remote.spot_policy
+    if config.remote.max_price is not None:
+        render_env["TASK_MAX_PRICE"] = str(config.remote.max_price)
     bash_script(
         repo_path("dstack", "scripts", "render-pretrain-task.sh"),
         str(rendered_task),

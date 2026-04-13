@@ -73,6 +73,32 @@ def test_load_remote_settings_uses_configured_env_file_and_image_base(
     assert settings["VCR_LOGIN_REGISTRY"] == "vccr.io/example"
 
 
+def test_remote_b300_example_loads_gpu_overrides() -> None:
+    from gpupoor.config import load_run_config
+
+    config = load_run_config(Path(__file__).resolve().parents[1] / "examples" / "verda_b300_10m.toml")
+
+    assert config.name == "verda_b300_10m"
+    assert config.remote.gpu_names == ("B300",)
+    assert config.remote.gpu_count == 1
+    assert config.remote.spot_policy == "spot"
+    assert config.remote.max_price == 10.0
+
+
+def test_remote_example_has_no_gpu_overrides_so_shell_defaults_apply() -> None:
+    """The baseline verda_remote.toml must not set GPU overrides, so the
+    shell-level defaults (H100/H200/A100) remain in effect for CI and
+    existing runs that did not ask for a specific instance type."""
+    from gpupoor.config import load_run_config
+
+    config = load_run_config(Path(__file__).resolve().parents[1] / "examples" / "verda_remote.toml")
+
+    assert config.remote.gpu_names == ()
+    assert config.remote.gpu_count is None
+    assert config.remote.spot_policy is None
+    assert config.remote.max_price is None
+
+
 def test_non_toml_config_is_rejected(tmp_path: Path) -> None:
     config_file = tmp_path / "invalid.yaml"
     config_file.write_text("name: nope\n", encoding="utf-8")
