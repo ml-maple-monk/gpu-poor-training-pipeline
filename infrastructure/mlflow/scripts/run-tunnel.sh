@@ -60,6 +60,11 @@ start_tunnel() {
 
     ELAPSED=0
     TUNNEL_URL=""
+    # POLL_TIMEOUT is documented in seconds; sleep 1 + ELAPSED+=1 keeps
+    # the budget honest. The earlier sleep 0.5 + ELAPSED+=1 gave only
+    # ~POLL_TIMEOUT/2 seconds while the error message claimed the full
+    # value, making tunnel startup twice as timing-sensitive as config
+    # implied.
     while [ $ELAPSED -lt $POLL_TIMEOUT ]; do
         if [ -f "$TUNNEL_LOG" ]; then
             TUNNEL_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | head -1 || true)
@@ -67,7 +72,7 @@ start_tunnel() {
                 break
             fi
         fi
-        sleep 0.5
+        sleep 1
         ELAPSED=$(( ELAPSED + 1 ))
     done
 
