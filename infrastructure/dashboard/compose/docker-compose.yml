@@ -26,7 +26,7 @@ services:
       # When set (and local TRAINER_CONTAINER is absent), log panel streams
       # `dstack logs -f <REMOTE_RUN_NAME>` via the mounted dstack CLI.
       REMOTE_RUN_NAME: "${REMOTE_RUN_NAME:-verda-minimind-pretrain}"
-      DSTACK_PROJECT: "main"
+      DSTACK_PROJECT: "${DSTACK_PROJECT:-dashboard}"
       DSTACK_SERVER: "http://host.docker.internal:3000"
       DSTACK_TOKEN: "${DSTACK_SERVER_ADMIN_TOKEN}"
       # dstack imports GitPython which probes for `git` on PATH; suppress noise

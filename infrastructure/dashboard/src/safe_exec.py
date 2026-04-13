@@ -14,6 +14,8 @@ from typing import Any
 
 import httpx
 
+from .dstack_project import infer_dstack_project
+
 # doc-anchor: safe-exec-allowlist
 # ── Whitelists ──────────────────────────────────────────────────────────────────
 ALLOWED_VERBS: frozenset[str] = frozenset({"logs", "ps", "inspect"})
@@ -57,7 +59,7 @@ def _get_token() -> str:
 
 
 def _get_project() -> str:
-    return os.environ.get("DSTACK_PROJECT", "main")
+    return infer_dstack_project()
 
 
 # endpoints that are NOT project-scoped in dstack 0.20+

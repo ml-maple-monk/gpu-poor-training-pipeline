@@ -81,7 +81,7 @@ def choose_access_path() -> AccessPath:
 
     # C2.1b: CLI with subtree mount
     if _probe_dstack_cli():
-        log.info("Access path chosen: C2.1b (CLI + ~/.dstack/projects/main/ subtree)")
+        log.info("Access path chosen: C2.1b (CLI + ~/.dstack/projects/<name>/ subtree)")
         return "C2.1b"
 
     log.error(

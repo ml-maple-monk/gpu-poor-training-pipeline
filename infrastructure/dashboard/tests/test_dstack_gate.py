@@ -6,17 +6,21 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.bootstrap import choose_access_path
 
 
-def test_c22_chosen_when_rest_works(monkeypatch):
-    """C2.2 is chosen when REST probe succeeds."""
+@pytest.mark.parametrize("response_shape", [{"runs": []}, []], ids=["dict-runs", "bare-list"])
+def test_choose_access_path_prefers_rest_when_a_token_exists(monkeypatch, response_shape):
+    """Proves the dashboard treats both accepted REST payload shapes as a healthy
+    C2.2 path, so read-only dstack access is available before any CLI fallback."""
     monkeypatch.setenv("DSTACK_SERVER_ADMIN_TOKEN", "token123")
 
     mock_resp = MagicMock()
-    mock_resp.json.return_value = {"runs": []}
+    mock_resp.json.return_value = response_shape
 
     with patch("src.bootstrap.safe_dstack_rest", return_value=mock_resp) as mock_rest:
         path = choose_access_path()
@@ -30,49 +34,29 @@ def test_c22_chosen_when_rest_works(monkeypatch):
     assert path == "C2.2"
 
 
-def test_c21a_chosen_when_rest_fails_cli_works(monkeypatch):
-    """C2.1a is chosen when REST fails but CLI works."""
-    monkeypatch.setenv("DSTACK_SERVER_ADMIN_TOKEN", "token123")
+@pytest.mark.parametrize(
+    ("token", "rest_side_effect", "cli_works", "expected"),
+    [
+        ("token123", Exception("connection refused"), True, "C2.1a"),
+        ("token123", Exception("refused"), False, "FAILED"),
+        ("", None, False, "FAILED"),
+    ],
+    ids=["rest-fails-cli-recovers", "all-paths-fail", "no-token-skips-rest"],
+)
+def test_choose_access_path_falls_back_or_fails_closed(monkeypatch, token, rest_side_effect, cli_works, expected):
+    """Proves the boot gate only degrades along the intended path order and
+    fails closed when neither REST nor CLI access is usable."""
+    monkeypatch.setenv("DSTACK_SERVER_ADMIN_TOKEN", token)
 
-    with patch("src.bootstrap.safe_dstack_rest", side_effect=Exception("connection refused")):
-        with patch("src.bootstrap._probe_dstack_cli", return_value=True):
+    rest_patch = patch("src.bootstrap.safe_dstack_rest")
+    with rest_patch as mock_rest:
+        if rest_side_effect is not None:
+            mock_rest.side_effect = rest_side_effect
+        with patch("src.bootstrap._probe_dstack_cli", return_value=cli_works):
             path = choose_access_path()
 
-    assert path == "C2.1a"
-
-
-def test_failed_when_all_paths_fail(monkeypatch):
-    """FAILED is returned when all access paths fail."""
-    monkeypatch.setenv("DSTACK_SERVER_ADMIN_TOKEN", "token123")
-
-    with patch("src.bootstrap.safe_dstack_rest", side_effect=Exception("refused")):
-        with patch("src.bootstrap._probe_dstack_cli", return_value=False):
-            path = choose_access_path()
-
-    assert path == "FAILED"
-
-
-def test_c22_skipped_when_no_token(monkeypatch):
-    """C2.2 probe is skipped when DSTACK_SERVER_ADMIN_TOKEN is empty."""
-    monkeypatch.setenv("DSTACK_SERVER_ADMIN_TOKEN", "")
-
-    with patch("src.bootstrap.safe_dstack_rest") as mock_rest:
-        with patch("src.bootstrap._probe_dstack_cli", return_value=False):
-            path = choose_access_path()
-
-    # REST should NOT have been called (no token)
-    mock_rest.assert_not_called()
-    assert path == "FAILED"
-
-
-def test_c22_chosen_with_list_response(monkeypatch):
-    """C2.2 is chosen when REST returns a list directly."""
-    monkeypatch.setenv("DSTACK_SERVER_ADMIN_TOKEN", "tok")
-
-    mock_resp = MagicMock()
-    mock_resp.json.return_value = []  # direct list
-
-    with patch("src.bootstrap.safe_dstack_rest", return_value=mock_resp):
-        path = choose_access_path()
-
-    assert path == "C2.2"
+    if token:
+        assert mock_rest.called
+    else:
+        mock_rest.assert_not_called()
+    assert path == expected

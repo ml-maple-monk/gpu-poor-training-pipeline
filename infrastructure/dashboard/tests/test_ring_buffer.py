@@ -12,7 +12,9 @@ import threading
 from src.ring_buffer import RingBuffer
 
 
-def test_append_and_snapshot():
+def test_snapshot_apis_preserve_append_order_and_delta_semantics():
+    """Proves readers can observe the full ordered log stream and then fetch
+    only new lines, which is the core dashboard log-delivery contract."""
     rb = RingBuffer(maxlen=10)
     rb.append("line1")
     rb.append("line2")
@@ -20,48 +22,33 @@ def test_append_and_snapshot():
     assert lines == ["line1", "line2"]
     assert seq == 2
 
-
-def test_snapshot_since_delta():
-    rb = RingBuffer(maxlen=10)
-    rb.append("a")
-    rb.append("b")
     _, seq0 = rb.snapshot()
-    rb.append("c")
-    rb.append("d")
-    lines, seq1 = rb.snapshot_since(seq0)
-    assert lines == ["c", "d"]
-    assert seq1 == 4
+    rb.append("line3")
+    rb.append("line4")
+    delta, seq1 = rb.snapshot_since(seq0)
+    assert delta == ["line3", "line4"]
+    no_new, seq2 = rb.snapshot_since(seq1)
+    assert no_new == []
+    assert seq2 == seq1
 
 
-def test_snapshot_since_no_new():
-    rb = RingBuffer(maxlen=10)
-    rb.append("x")
-    _, seq = rb.snapshot()
-    lines, new_seq = rb.snapshot_since(seq)
-    assert lines == []
-    assert new_seq == seq
-
-
-def test_bounded_maxlen():
+def test_ring_buffer_keeps_a_bounded_window_while_sequence_stays_monotonic():
+    """Proves overflow discards old lines without rewinding sequence numbers,
+    which is the safety property that lets sessions reason about deltas."""
     rb = RingBuffer(maxlen=3)
+    seqs = []
     for i in range(10):
         rb.append(str(i))
+        seqs.append(rb.seq)
     lines, seq = rb.snapshot()
     assert len(lines) == 3
-    # seq is still monotonic
     assert seq == 10
-
-
-def test_monotonic_seq():
-    rb = RingBuffer(maxlen=5)
-    seqs = []
-    for i in range(20):
-        rb.append(f"line{i}")
-        seqs.append(rb.seq)
-    assert seqs == list(range(1, 21))
+    assert seqs == list(range(1, 11))
 
 
 def test_thread_safe_concurrent_appends():
+    """Proves concurrent writers cannot corrupt the buffer, which protects the
+    log fanout path used by multiple dashboard background threads."""
     rb = RingBuffer(maxlen=1000)
 
     def writer():
@@ -80,17 +67,14 @@ def test_thread_safe_concurrent_appends():
 
 
 def test_snapshot_since_with_overflow():
-    """snapshot_since still works after ring overflows."""
+    """Proves delta reads still return the surviving tail after overflow, so
+    late readers degrade gracefully instead of crashing or rewinding."""
     rb = RingBuffer(maxlen=3)
     rb.append("a")
     rb.append("b")
     seq_after_2 = rb.seq
-    # Overflow: add 5 more, ring keeps only last 3
     for c in "cdefg":
         rb.append(c)
-    # seq_after_2 = 2; all lines with seq > 2 are c(3),d(4),e(5),f(6),g(7)
-    # but ring only holds last 3: e,f,g (seqs 5,6,7)
     lines, seq = rb.snapshot_since(seq_after_2)
     assert seq == 7
-    # Only the 3 surviving lines have seq > 2
     assert set(lines).issubset({"c", "d", "e", "f", "g"})
