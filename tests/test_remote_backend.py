@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ import pytest
 
 from gpupoor.backends import dstack
 from gpupoor.config import load_run_config, parse_env_file
+from gpupoor.subprocess_utils import CommandError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -307,3 +309,120 @@ def test_dstack_has_run_reads_run_name_from_run_spec(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(dstack.subprocess, "check_output", lambda *args, **kwargs: payload)
 
     assert dstack.dstack_has_run("dstack", "verda-remote-10m") is True
+
+
+def test_start_dstack_server_raises_when_popen_stdin_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Popen without stdin must surface via an explicit RuntimeError path.
+
+    Bare asserts evaporate under `python -O`, so the fix replaces the assert
+    with `raise RuntimeError(...)`. The surrounding except also catches
+    RuntimeError so the stdin-handshake failure degrades into the existing
+    health-check loop instead of leaking the Popen handle; the health poll
+    then surfaces a RuntimeError to the caller.
+    """
+
+    def fake_repo_path(*parts: str) -> Path:
+        return tmp_path.joinpath(*parts)
+
+    class FakePopen:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            self.stdin = None
+
+    monkeypatch.setattr(dstack, "repo_path", fake_repo_path)
+    monkeypatch.setattr(dstack, "http_ok", lambda *args, **kwargs: False)
+    monkeypatch.setattr(dstack.subprocess, "Popen", FakePopen)
+    monkeypatch.setattr(dstack.time, "sleep", lambda seconds: None)
+
+    # With the old bare assert + `python -O`, the assert silently vanished and
+    # the only failure surface was the health-poll timeout. With the fix, an
+    # explicit RuntimeError is raised (caught to avoid leaking Popen), and the
+    # caller still receives a clear RuntimeError from the health-poll loop.
+    with pytest.raises(RuntimeError, match="did not become healthy"):
+        dstack.ensure_dstack_server(
+            "dstack",
+            health_url="http://localhost:3000/",
+            health_timeout_seconds=1,
+            start_timeout_seconds=1,
+            dry_run=False,
+        )
+
+
+def test_dstack_has_run_raises_on_malformed_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Malformed `dstack ps --json` output must surface as CommandError."""
+    monkeypatch.setattr(dstack.subprocess, "check_output", lambda *args, **kwargs: "not json")
+
+    with pytest.raises(CommandError):
+        dstack.dstack_has_run("dstack", "verda-remote-10m")
+
+
+def test_dstack_has_run_raises_on_non_zero_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CLI failure must surface as CommandError, not CalledProcessError."""
+
+    def raise_called_process_error(*args: object, **kwargs: object) -> str:
+        raise subprocess.CalledProcessError(1, ["dstack", "ps", "--json"])
+
+    monkeypatch.setattr(dstack.subprocess, "check_output", raise_called_process_error)
+
+    with pytest.raises(CommandError):
+        dstack.dstack_has_run("dstack", "verda-remote-10m")
+
+
+def test_kill_tunnel_skips_if_pid_not_cloudflared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On Linux, kill_tunnel must verify /proc/<pid>/comm before signalling."""
+    pid_file = tmp_path / ".cf-tunnel.pid"
+    pid_file.write_text("4242\n", encoding="utf-8")
+
+    def fake_repo_path(*parts: str) -> Path:
+        return tmp_path.joinpath(*parts)
+
+    kill_calls: list[tuple[int, int]] = []
+
+    def fake_kill(pid: int, sig: int) -> None:
+        kill_calls.append((pid, sig))
+
+    real_read_text = Path.read_text
+
+    def fake_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        if str(self) == "/proc/4242/comm":
+            return "bash\n"
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(dstack, "repo_path", fake_repo_path)
+    monkeypatch.setattr(dstack.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(dstack.os, "kill", fake_kill)
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    dstack.kill_tunnel()
+
+    assert kill_calls == []
+    # Sidecar cleanup still runs.
+    assert not pid_file.exists()
+
+
+def test_kill_tunnel_noop_on_darwin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On non-Linux (no /proc), kill_tunnel falls through and signals the PID."""
+    pid_file = tmp_path / ".cf-tunnel.pid"
+    pid_file.write_text("4242\n", encoding="utf-8")
+
+    def fake_repo_path(*parts: str) -> Path:
+        return tmp_path.joinpath(*parts)
+
+    kill_calls: list[tuple[int, int]] = []
+
+    def fake_kill(pid: int, sig: int) -> None:
+        kill_calls.append((pid, sig))
+
+    monkeypatch.setattr(dstack, "repo_path", fake_repo_path)
+    monkeypatch.setattr(dstack.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(dstack.os, "kill", fake_kill)
+
+    dstack.kill_tunnel()
+
+    assert kill_calls == [(4242, 15)]
+    assert not pid_file.exists()

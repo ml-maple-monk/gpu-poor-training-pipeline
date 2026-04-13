@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import subprocess
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -25,7 +27,7 @@ def http_ok(url: str, *, timeout_seconds: int = 5) -> bool:
     try:
         with urllib.request.urlopen(url, timeout=timeout_seconds) as response:
             return response.status == 200
-    except Exception:
+    except (urllib.error.URLError, OSError, TimeoutError):
         return False
 
 
@@ -61,10 +63,13 @@ def ensure_dstack_server(
             start_new_session=True,
         )
         try:
-            assert process.stdin is not None
+            if process.stdin is None:
+                raise RuntimeError("dstack server Popen did not return stdin")
             process.stdin.write(b"y\n")
             process.stdin.close()
-        except (BrokenPipeError, OSError):
+        except (BrokenPipeError, OSError, RuntimeError):
+            # Don't leak the Popen handle if the stdin handshake fails; the
+            # subsequent health poll still decides whether startup succeeded.
             pass
 
     for _ in range(start_timeout_seconds):
@@ -149,8 +154,17 @@ def dstack_has_run(dstack_bin: str, run_name: str) -> bool:
     """
     if not run_name:
         return False
-    output = subprocess.check_output([dstack_bin, "ps", "--json"], text=True)
-    data = json.loads(output)
+    command = [dstack_bin, "ps", "--json"]
+    try:
+        output = subprocess.check_output(command, text=True)
+    except subprocess.CalledProcessError as exc:
+        raise CommandError(command, exc.returncode) from exc
+    try:
+        data = json.loads(output)
+    except json.JSONDecodeError as exc:
+        # Surface as CommandError so the caller sees a uniform failure type
+        # and does not have to catch JSON-layer details at every call site.
+        raise CommandError(command, 0) from exc
     runs = data.get("runs", []) if isinstance(data, dict) else data
     for run in runs:
         candidate = run.get("run_name") or (run.get("run_spec") or {}).get("run_name") or ""
@@ -221,10 +235,31 @@ def kill_tunnel() -> None:
     except ValueError:
         pid = 0
     if pid:
-        try:
-            os.kill(pid, 15)
-        except OSError:
-            pass
+        should_kill = True
+        # On Linux, confirm the PID still belongs to cloudflared before
+        # signalling. PIDs recycle; a stale .cf-tunnel.pid could name any
+        # unrelated process (shell, editor, build) and we must not SIGTERM it.
+        if platform.system() == "Linux":
+            comm_path = Path(f"/proc/{pid}/comm")
+            try:
+                comm = comm_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                # /proc entry gone -> PID no longer exists; nothing to kill.
+                should_kill = False
+            else:
+                if comm != "cloudflared":
+                    print(
+                        f"[gpupoor] WARN: .cf-tunnel.pid {pid} is '{comm}', "
+                        "not cloudflared; skipping kill"
+                    )
+                    should_kill = False
+        # On non-Linux (e.g. macOS), /proc is not available. Fall through and
+        # trust the pid file; this matches prior behavior on those platforms.
+        if should_kill:
+            try:
+                os.kill(pid, 15)
+            except OSError:
+                pass
     for suffix in (".cf-tunnel.pid", ".cf-tunnel.url", ".cf-tunnel.log"):
         path = repo_path(suffix)
         if path.exists():
