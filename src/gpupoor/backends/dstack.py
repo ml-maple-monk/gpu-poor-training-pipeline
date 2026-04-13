@@ -9,25 +9,34 @@ import time
 import urllib.request
 
 from gpupoor import maintenance
-from gpupoor.config import BackendConfig, RunConfig
+from gpupoor.config import (
+    BackendConfig,
+    RunConfig,
+    find_dstack_bin,
+    load_remote_settings,
+    require_remote_settings,
+)
 from gpupoor.paths import repo_path
-from gpupoor.remote_env import find_dstack_bin, load_remote_settings, parse_env_file, require_remote_settings
 from gpupoor.subprocess_utils import CommandError, bash_script, run_command
 
-DSTACK_SERVER_HEALTH_URL = "http://127.0.0.1:3000/"
-MLFLOW_HEALTH_URL = "http://127.0.0.1:5000/health"
 
-
-def http_ok(url: str) -> bool:
+def http_ok(url: str, *, timeout_seconds: int = 5) -> bool:
     try:
-        with urllib.request.urlopen(url, timeout=5) as response:
+        with urllib.request.urlopen(url, timeout=timeout_seconds) as response:
             return response.status == 200
     except Exception:
         return False
 
 
-def ensure_dstack_server(dstack_bin: str, *, dry_run: bool) -> None:
-    if http_ok(DSTACK_SERVER_HEALTH_URL):
+def ensure_dstack_server(
+    dstack_bin: str,
+    *,
+    health_url: str,
+    health_timeout_seconds: int,
+    start_timeout_seconds: int,
+    dry_run: bool,
+) -> None:
+    if http_ok(health_url, timeout_seconds=health_timeout_seconds):
         print("[gpupoor] dstack server already running")
         return
 
@@ -40,8 +49,8 @@ def ensure_dstack_server(dstack_bin: str, *, dry_run: bool) -> None:
     with log_file.open("ab") as handle:
         subprocess.Popen([dstack_bin, "server"], stdout=handle, stderr=subprocess.STDOUT, start_new_session=True)
 
-    for _ in range(30):
-        if http_ok(DSTACK_SERVER_HEALTH_URL):
+    for _ in range(start_timeout_seconds):
+        if http_ok(health_url, timeout_seconds=health_timeout_seconds):
             print("[gpupoor] dstack server healthy")
             return
         time.sleep(1)
@@ -62,9 +71,9 @@ def git_short_sha() -> str:
     ).strip()
 
 
-def verify_mlflow() -> None:
-    if not http_ok(MLFLOW_HEALTH_URL):
-        raise RuntimeError("MLflow is not responding at http://127.0.0.1:5000/health")
+def verify_mlflow(health_url: str, *, timeout_seconds: int) -> None:
+    if not http_ok(health_url, timeout_seconds=timeout_seconds):
+        raise RuntimeError(f"MLflow is not responding at {health_url}")
 
 
 def remote_image_tag(backend: BackendConfig, *, skip_build: bool, dry_run: bool, settings: dict[str, str]) -> str:
@@ -86,8 +95,6 @@ def render_task(settings: dict[str, str], image_sha: str) -> Path:
         env=render_env,
     )
     return rendered_task
-
-
 def dstack_latest_run_name(dstack_bin: str) -> str:
     output = subprocess.check_output([dstack_bin, "ps", "--json"], text=True)
     data = json.loads(output)
@@ -189,15 +196,21 @@ def launch_remote(
     if config.backend.kind != "dstack":
         raise ValueError("launch_remote requires backend.kind='dstack'")
 
-    settings = load_remote_settings()
+    settings = load_remote_settings(config.remote)
     require_remote_settings(settings)
     dstack_bin = find_dstack_bin()
 
-    maintenance.run_preflight(remote=True)
+    maintenance.run_preflight(remote=True, doctor=config.doctor, remote_config=config.remote)
     if configure_server:
         bash_script(repo_path("dstack", "scripts", "setup-config.sh"))
-    verify_mlflow()
-    ensure_dstack_server(dstack_bin, dry_run=dry_run)
+    verify_mlflow(config.remote.mlflow_health_url, timeout_seconds=config.remote.health_timeout_seconds)
+    ensure_dstack_server(
+        dstack_bin,
+        health_url=config.remote.dstack_server_health_url,
+        health_timeout_seconds=config.remote.health_timeout_seconds,
+        start_timeout_seconds=config.remote.dstack_server_start_timeout_seconds,
+        dry_run=dry_run,
+    )
 
     use_skip_build = config.backend.skip_build if skip_build is None else skip_build
     use_keep_tunnel = config.backend.keep_tunnel if keep_tunnel is None else keep_tunnel
@@ -241,6 +254,13 @@ def launch_remote(
             "MLFLOW_TRACKING_URI": mlflow_url,
             "MLFLOW_EXPERIMENT_NAME": config.mlflow.experiment_name,
             "MLFLOW_ARTIFACT_UPLOAD": "1" if config.mlflow.artifact_upload else "0",
+            "MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING": "true" if config.mlflow.enable_system_metrics_logging else "false",
+            "MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL": str(config.mlflow.system_metrics_sampling_interval),
+            "MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING": str(config.mlflow.system_metrics_samples_before_logging),
+            "MLFLOW_HTTP_REQUEST_MAX_RETRIES": str(config.mlflow.http_request_max_retries),
+            "MLFLOW_HTTP_REQUEST_TIMEOUT": str(config.mlflow.http_request_timeout_seconds),
+            "MLFLOW_START_TIMEOUT_SECONDS": str(config.mlflow.start_timeout_seconds),
+            "MLFLOW_START_RETRY_SECONDS": str(config.mlflow.start_retry_seconds),
             "VERDA_PROFILE": "remote",
         }
         result = run_command([dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], env=apply_env, check=False)
@@ -250,7 +270,7 @@ def launch_remote(
         run_name = dstack_latest_run_name(dstack_bin)
         if run_name:
             track_run(run_name)
-            wait_for_run_start(dstack_bin, run_name)
+            wait_for_run_start(dstack_bin, run_name, max_wait=config.remote.run_start_timeout_seconds)
             launched_remote_run = True
         if use_pull_artifacts:
             print("[gpupoor] WARN: pull-artifacts is still manual on the current dstack CLI")

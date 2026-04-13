@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 from pathlib import Path
 import time
@@ -66,7 +67,16 @@ def shell(extra_args: list[str] | None = None) -> None:
         run_command([*_compose_command(), "exec", "verda-local", "sh", *args])
 
 
-def health(port: int = 8000, timeout_seconds: int = 300) -> None:
+def _parse_health_args(extra_args: list[str] | None) -> tuple[int, int]:
+    parser = argparse.ArgumentParser(prog="gpupoor infra emulator health", add_help=False)
+    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--timeout-seconds", type=int, default=300)
+    parsed = parser.parse_args(extra_args or [])
+    return parsed.port, parsed.timeout_seconds
+
+
+def health(extra_args: list[str] | None = None) -> None:
+    port, timeout_seconds = _parse_health_args(extra_args)
     url = f"http://127.0.0.1:{port}/health"
     for _ in range(timeout_seconds):
         try:
@@ -76,4 +86,3 @@ def health(port: int = 8000, timeout_seconds: int = 300) -> None:
         except Exception:
             time.sleep(1)
     raise RuntimeError(f"/health did not return 200 within {timeout_seconds}s")
-

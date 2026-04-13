@@ -10,8 +10,8 @@ from gpupoor import __version__
 from gpupoor.backends import dstack as dstack_backend
 from gpupoor.backends.local import run_training as run_local_training
 from gpupoor.compat import run_dstack, run_infra, run_root, run_training
-from gpupoor.config import ConfigError, load_run_config
-from gpupoor import maintenance, smoke
+from gpupoor import maintenance
+from gpupoor.config import ConfigError, RunConfig, load_run_config, merge_doctor_config, merge_smoke_config
 from gpupoor.subprocess_utils import CommandError
 
 
@@ -21,12 +21,27 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     doctor_parser = subparsers.add_parser("doctor", help="Run preflight checks")
+    doctor_parser.add_argument("config", nargs="?", help="Optional TOML run config with doctor/remote defaults")
     doctor_parser.add_argument("--remote", action="store_true", help="Include remote-path checks")
+    doctor_parser.add_argument("--skip-preflight", action="store_true", default=None, help="Skip preflight checks")
+    doctor_parser.add_argument("--max-clock-skew-seconds", type=int, help="Override the WSL clock skew budget")
 
     smoke_parser = subparsers.add_parser("smoke", help="Run repo smoke checks")
-    smoke_parser.add_argument("--cpu", action="store_true", help="Use the CPU emulator overlay")
+    smoke_parser.add_argument("config", nargs="?", help="Optional TOML run config with smoke defaults")
+    smoke_parser.add_argument("--cpu", action="store_true", default=None, help="Use the CPU emulator overlay")
+    smoke_parser.add_argument("--base-image", help="Override the emulator base image build arg")
+    smoke_parser.add_argument("--health-port", type=int, help="Port to probe for the main /health check")
+    smoke_parser.add_argument("--health-timeout-seconds", type=int, help="Timeout for /health probes")
+    smoke_parser.add_argument("--strict-port", type=int, help="Port for the strict degraded-mode probe")
+    smoke_parser.add_argument("--degraded-port", type=int, help="Port for the degraded-mode probe")
+    smoke_parser.add_argument("--sigterm-timeout-seconds", type=int, help="SIGTERM exit budget for the emulator")
+    smoke_parser.add_argument("--data-wait-timeout-seconds", type=int, help="WAIT_DATA_TIMEOUT value for probe F")
+    smoke_parser.add_argument("--skip-preflight", action="store_true", default=None, help="Skip preflight checks")
+    smoke_parser.add_argument("--max-clock-skew-seconds", type=int, help="Override the WSL clock skew budget")
 
-    subparsers.add_parser("fix-clock", help="Sync the WSL2 clock from Windows")
+    fix_clock_parser = subparsers.add_parser("fix-clock", help="Sync the WSL2 clock from Windows")
+    fix_clock_parser.add_argument("config", nargs="?", help="Optional TOML run config with doctor defaults")
+    fix_clock_parser.add_argument("--max-clock-skew-seconds", type=int, help="Override the WSL clock skew budget")
 
     parse_parser = subparsers.add_parser("parse-secrets", help="Write .env files from the repo secrets file")
     parse_parser.add_argument("secrets_file", nargs="?", help="Path to the Verda secrets file")
@@ -109,17 +124,72 @@ def run_non_mutating(label: str, action) -> None:
         )
 
 
+def _load_optional_run_config(path: str | None) -> RunConfig | None:
+    return load_run_config(path) if path else None
+
+
+def _resolve_doctor_config(run_config: RunConfig | None, args: argparse.Namespace):
+    base = run_config.doctor if run_config else None
+    skip_preflight = getattr(args, "skip_preflight", None)
+    max_clock_skew_seconds = getattr(args, "max_clock_skew_seconds", None)
+    if base is None and skip_preflight is None and max_clock_skew_seconds is None:
+        return None
+    return merge_doctor_config(
+        base,
+        skip_preflight=skip_preflight,
+        max_clock_skew_seconds=max_clock_skew_seconds,
+    )
+
+
+def _resolve_smoke_config(run_config: RunConfig | None, args: argparse.Namespace):
+    base = run_config.smoke if run_config else None
+    if (
+        base is None
+        and args.cpu is None
+        and args.base_image is None
+        and args.health_port is None
+        and args.health_timeout_seconds is None
+        and args.strict_port is None
+        and args.degraded_port is None
+        and args.sigterm_timeout_seconds is None
+        and args.data_wait_timeout_seconds is None
+    ):
+        return None
+    return merge_smoke_config(
+        base,
+        cpu=args.cpu,
+        base_image=args.base_image,
+        health_port=args.health_port,
+        health_timeout_seconds=args.health_timeout_seconds,
+        strict_port=args.strict_port,
+        degraded_port=args.degraded_port,
+        sigterm_timeout_seconds=args.sigterm_timeout_seconds,
+        data_wait_timeout_seconds=args.data_wait_timeout_seconds,
+    )
+
+
 def dispatch(args: argparse.Namespace) -> None:
     if args.command == "doctor":
-        run_non_mutating("doctor", lambda: maintenance.run_preflight(remote=args.remote))
+        config = _load_optional_run_config(args.config)
+        doctor = _resolve_doctor_config(config, args)
+        remote_config = config.remote if config else None
+        run_non_mutating(
+            "doctor",
+            lambda: maintenance.run_preflight(remote=args.remote, doctor=doctor, remote_config=remote_config),
+        )
         return
 
     if args.command == "smoke":
-        run_non_mutating("smoke", lambda: smoke.run_smoke(cpu=args.cpu))
+        config = _load_optional_run_config(args.config)
+        smoke_config = _resolve_smoke_config(config, args)
+        doctor = _resolve_doctor_config(config, args)
+        run_non_mutating("smoke", lambda: maintenance.run_smoke(smoke_config, doctor=doctor))
         return
 
     if args.command == "fix-clock":
-        maintenance.fix_wsl_clock()
+        config = _load_optional_run_config(args.config)
+        doctor = _resolve_doctor_config(config, args)
+        maintenance.fix_wsl_clock(doctor=doctor, max_skew_seconds=args.max_clock_skew_seconds)
         return
 
     if args.command == "parse-secrets":

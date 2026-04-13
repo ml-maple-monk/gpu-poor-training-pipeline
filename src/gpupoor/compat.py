@@ -248,7 +248,7 @@ def run_infra(service: str, action: str, args: list[str]) -> None:
         if action == "health":
             from gpupoor.services import emulator as emulator_service
 
-            emulator_service.health()
+            emulator_service.health(args)
             return
     prefix = f"infrastructure/{service}/start.sh" if service != "emulator" else "infrastructure/local-emulator/start.sh"
     _fail_help(prefix, f"unknown command '{action}'", _infra_help(service))

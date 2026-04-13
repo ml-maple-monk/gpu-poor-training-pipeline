@@ -2,8 +2,8 @@
 set -uo pipefail
 
 SOURCE_ROOT=/workspace/minimind
-DATASET=/data/datasets/pretrain_t2t_mini.jsonl
-OUT=/data/minimind-out
+DATASET=${DATASET_PATH:-/data/datasets/pretrain_t2t_mini.jsonl}
+OUT=${OUTPUT_DIR:-/data/minimind-out}
 TIME_CAP_SECONDS=${TIME_CAP_SECONDS:-600}
 TRAIN_ARGS_FILE=/workspace/train-pretrain-args.sh
 

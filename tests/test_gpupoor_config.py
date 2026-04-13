@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from gpupoor.config import ConfigError, load_run_config
+from gpupoor.config import ConfigError, load_remote_settings, load_run_config
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +18,9 @@ def test_tiny_cpu_example_loads() -> None:
     assert config.name == "tiny_cpu"
     assert config.backend.kind == "local"
     assert config.recipe.time_cap_seconds == 120
+    assert config.mlflow.tracking_uri == "http://host.docker.internal:5000"
+    assert config.smoke.cpu is True
+    assert config.smoke.base_image == "nvidia/cuda:12.4.1-runtime-ubuntu22.04"
 
 
 def test_remote_example_loads() -> None:
@@ -25,6 +28,45 @@ def test_remote_example_loads() -> None:
 
     assert config.backend.kind == "dstack"
     assert config.mlflow.experiment_name == "minimind-pretrain-remote"
+    assert config.remote.env_file == ".env.remote"
+    assert config.remote.mlflow_health_url == "http://127.0.0.1:5000/health"
+    assert config.remote.run_start_timeout_seconds == 480
+
+
+def test_load_remote_settings_uses_configured_env_file_and_image_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    env_file = tmp_path / "remote.env"
+    env_file.write_text("VCR_USERNAME=user\nVCR_PASSWORD=pass\n", encoding="utf-8")
+    config_file = tmp_path / "run.toml"
+    config_file.write_text(
+        "\n".join(
+            [
+                'name = "custom_remote"',
+                "",
+                "[recipe]",
+                'kind = "minimind_pretrain"',
+                "",
+                "[backend]",
+                'kind = "dstack"',
+                "",
+                "[mlflow]",
+                'experiment_name = "demo"',
+                "",
+                "[remote]",
+                'env_file = "remote.env"',
+                'vcr_image_base = "vccr.io/example/custom-image"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GPUPOOR_REPO_ROOT", str(tmp_path))
+
+    settings = load_remote_settings(load_run_config(config_file).remote)
+
+    assert settings["VCR_USERNAME"] == "user"
+    assert settings["VCR_PASSWORD"] == "pass"
+    assert settings["VCR_IMAGE_BASE"] == "vccr.io/example/custom-image"
+    assert settings["VCR_LOGIN_REGISTRY"] == "vccr.io/example"
 
 
 def test_non_toml_config_is_rejected(tmp_path: Path) -> None:
@@ -33,4 +75,3 @@ def test_non_toml_config_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="Milestone-1 configs must use the .toml format"):
         load_run_config(config_file)
-

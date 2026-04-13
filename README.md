@@ -69,9 +69,9 @@ explicit run contract.
 ## Public CLI
 
 ```text
-gpupoor doctor
-gpupoor smoke
-gpupoor fix-clock
+gpupoor doctor [config.toml]
+gpupoor smoke [config.toml]
+gpupoor fix-clock [config.toml]
 gpupoor parse-secrets [secrets]
 gpupoor leak-scan [image]
 gpupoor check-anchors
@@ -81,6 +81,9 @@ gpupoor infra mlflow <up|down|logs|tunnel>
 gpupoor infra dashboard <up|down|logs>
 gpupoor infra emulator <up|cpu|nvcr|down|logs|shell|health>
 ```
+
+`doctor`, `smoke`, and `launch dstack` now resolve their operational defaults
+from the typed TOML config first, with CLI flags available for one-off overrides.
 
 ## Compatibility Wrappers
 
