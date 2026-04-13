@@ -1,0 +1,19 @@
+# Overlay on top of training/compose/docker-compose.train.yml to wire training → MLflow tracking server.
+# Usage:
+#   docker compose \
+#     -f training/compose/docker-compose.train.yml \
+#     -f training/compose/docker-compose.train.mlflow.yml \
+#     run --rm minimind-trainer
+
+services:
+  minimind-trainer:
+    environment:
+      MLFLOW_TRACKING_URI: http://host.docker.internal:5000
+      MLFLOW_EXPERIMENT_NAME: minimind-pretrain
+      MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING: "true"
+      MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL: "5"
+      MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING: "1"
+      MLFLOW_HTTP_REQUEST_MAX_RETRIES: "7"
+      MLFLOW_HTTP_REQUEST_TIMEOUT: "120"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

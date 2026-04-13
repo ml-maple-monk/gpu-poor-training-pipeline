@@ -15,34 +15,28 @@ ifndef ALLOW_DIRTY
 	@git diff-index --quiet HEAD -- || (echo "ERROR: dirty tree — commit or set ALLOW_DIRTY=1" >&2; exit 1)
 endif
 	docker build --build-arg BASE_IMAGE=$${BASE_IMAGE:-nvidia/cuda:12.4.1-runtime-ubuntu22.04} \
-		-t verda-local:$(TAG) .
+		-f infrastructure/local-emulator/docker/Dockerfile -t verda-local:$(TAG) infrastructure/local-emulator
 
 run: preflight
-	docker compose up --build -d
+	./infrastructure/local-emulator/start.sh up
 	$(MAKE) health
 
 cpu: preflight
-	docker compose -f docker-compose.yml -f docker-compose.cpu.yml up --build -d
-	@docker compose -f docker-compose.yml -f docker-compose.cpu.yml config | grep -q 'nvidia' \
+	./infrastructure/local-emulator/start.sh cpu
+	@docker compose -f infrastructure/local-emulator/compose/docker-compose.yml -f infrastructure/local-emulator/compose/docker-compose.cpu.yml config | grep -q 'nvidia' \
 		&& (echo "CPU override failed — GPU block still present" >&2; exit 1) || true
 
 nvcr:
-	docker compose -f docker-compose.yml -f docker-compose.nvcr.yml up --build -d
+	./infrastructure/local-emulator/start.sh nvcr
 
 health:
-	@echo "Waiting for /health..."
-	@for i in $$(seq 1 30); do \
-		code=$$(curl -fsS -o /dev/null -w '%{http_code}' http://localhost:$(APP_PORT)/health 2>/dev/null) && \
-		echo "Health: $$code" && exit 0; \
-		sleep 1; \
-	done; \
-	echo "ERROR: /health did not return 200 within 30s" >&2; exit 1
+	@./infrastructure/local-emulator/start.sh health
 
 logs:
-	docker compose logs -f --tail=200
+	./infrastructure/local-emulator/start.sh logs
 
 shell:
-	docker compose exec verda-local bash || docker compose exec verda-local sh
+	./infrastructure/local-emulator/start.sh shell
 
 push:
 	@if [ -z "$(TAG)" ]; then echo "ERROR: TAG is empty" >&2; exit 1; fi
@@ -53,5 +47,5 @@ smoke:
 	./scripts/smoke.sh
 
 clean:
-	docker compose down -v --remove-orphans
+	./infrastructure/local-emulator/start.sh down
 	find data/ -mindepth 1 -not -name '.placeholder' -delete

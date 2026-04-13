@@ -17,6 +17,7 @@ training/.venv/
 .omc/state/
 .env.inference
 .env.mgmt
+.env.remote
 .env
 data/*
 !data/.placeholder

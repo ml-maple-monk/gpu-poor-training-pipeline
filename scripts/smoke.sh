@@ -6,8 +6,8 @@ for arg in "$@"; do
     [ "$arg" = "--cpu" ] && CPU_MODE=1
 done
 
-COMPOSE_FILES="-f docker-compose.yml"
-[ "$CPU_MODE" = "1" ] && COMPOSE_FILES="-f docker-compose.yml -f docker-compose.cpu.yml"
+COMPOSE_FILES="-f infrastructure/local-emulator/compose/docker-compose.yml"
+[ "$CPU_MODE" = "1" ] && COMPOSE_FILES="-f infrastructure/local-emulator/compose/docker-compose.yml -f infrastructure/local-emulator/compose/docker-compose.cpu.yml"
 
 PASS=0
 FAIL_COUNT=0
@@ -106,16 +106,16 @@ fi
 echo "--- Probe E: degraded gating ---"
 docker compose ${COMPOSE_FILES} down 2>/dev/null || true
 # strict mode (ALLOW_DEGRADED not set) with cpu overlay
-docker compose -f docker-compose.yml -f docker-compose.cpu.yml \
+docker compose -f infrastructure/local-emulator/compose/docker-compose.yml -f infrastructure/local-emulator/compose/docker-compose.cpu.yml \
     run --rm -e ALLOW_DEGRADED=0 -e VERDA_REQUIRE_GPU=1 verda-local &
 sleep 3
 CODE_STRICT=$(curl -fsS -o /dev/null -w '%{http_code}' http://localhost:8000/health 2>/dev/null) || CODE_STRICT="000"
-docker compose -f docker-compose.yml -f docker-compose.cpu.yml down 2>/dev/null || true
+docker compose -f infrastructure/local-emulator/compose/docker-compose.yml -f infrastructure/local-emulator/compose/docker-compose.cpu.yml down 2>/dev/null || true
 
-docker compose -f docker-compose.yml -f docker-compose.cpu.yml up -d 2>/dev/null || true
+docker compose -f infrastructure/local-emulator/compose/docker-compose.yml -f infrastructure/local-emulator/compose/docker-compose.cpu.yml up -d 2>/dev/null || true
 sleep 3
 CODE_DEGRADED=$(curl -fsS -o /dev/null -w '%{http_code}' http://localhost:8000/health 2>/dev/null) || CODE_DEGRADED="000"
-docker compose -f docker-compose.yml -f docker-compose.cpu.yml down 2>/dev/null || true
+docker compose -f infrastructure/local-emulator/compose/docker-compose.yml -f infrastructure/local-emulator/compose/docker-compose.cpu.yml down 2>/dev/null || true
 
 if [ "$CODE_STRICT" = "503" ] && [ "$CODE_DEGRADED" = "200" ]; then
     probe_pass E "strict->503, degraded->200"

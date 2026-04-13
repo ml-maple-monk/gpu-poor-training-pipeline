@@ -1,0 +1,52 @@
+# Dockerfile.remote — remote training image for Verda/dstack H100 runs
+#
+# Base: pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime  (~5 GB, no DEVEL headers)
+# Target: <7 GB compressed push to VCR
+#
+# DO NOT MODIFY training/docker/Dockerfile.train — that file is local-only.
+# This file is the source of truth for the remote image.
+
+FROM pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/workspace/hf_cache \
+    HF_HUB_ENABLE_HF_TRANSFER=0 \
+    TRANSFORMERS_OFFLINE=0 \
+    TOKENIZERS_PARALLELISM=false
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git curl coreutils rsync openssh-server \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /var/run/sshd /root/.ssh \
+    && chmod 700 /root/.ssh
+
+# doc-anchor: remote-dockerfile-ssh-bake
+# Inject operator's SSH pubkey at build time (ARG) — empty value disables sshd.
+ARG SSH_PUBKEY=""
+RUN if [ -n "$SSH_PUBKEY" ]; then \
+        echo "$SSH_PUBKEY" > /root/.ssh/authorized_keys && \
+        chmod 600 /root/.ssh/authorized_keys; \
+    fi
+EXPOSE 22
+
+# Install Python dependencies
+COPY training/config/requirements.train.txt /tmp/requirements.train.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.train.txt
+
+# Bake repo-owned training source (no runtime git clone)
+COPY training/src/minimind/ /opt/training/minimind/
+
+# Bake training scripts
+COPY training/scripts/lib/train-pretrain-args.sh /opt/training/scripts/lib/train-pretrain-args.sh
+COPY training/scripts/remote-entrypoint.sh /opt/training/scripts/remote-entrypoint.sh
+RUN chmod +x /opt/training/scripts/remote-entrypoint.sh /opt/training/scripts/lib/train-pretrain-args.sh
+
+# Workspace layout expected by the entrypoint
+RUN mkdir -p /workspace/data/datasets /workspace/out /workspace/hf_cache
+
+WORKDIR /opt/training/minimind
+
+# Default: verify torch
+CMD ["python", "-c", "import torch; print(torch.__version__, torch.cuda.is_available())"]

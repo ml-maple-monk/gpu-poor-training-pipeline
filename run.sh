@@ -3,6 +3,7 @@
 #
 # Subcommands:
 #   setup               — preflight + dstack config
+#   fix-clock           — sync WSL2 clock from Windows
 #   local [args...]     — local docker-compose training (thin wrapper)
 #   remote [flags]      — full remote training pipeline
 #   teardown            — kill tunnel, stop dstack runs
@@ -22,8 +23,16 @@ DSTACK_SERVER_LOG="$REPO_ROOT/.dstack-server.log"
 RUN_IDS_FILE="$REPO_ROOT/.run-ids"
 
 # Source jq fallback helper
-# shellcheck source=training/lib/jq-fallback.sh
-source "$REPO_ROOT/training/lib/jq-fallback.sh"
+# shellcheck source=training/scripts/lib/jq-fallback.sh
+source "$REPO_ROOT/training/scripts/lib/jq-fallback.sh"
+
+# Shared remote env helpers
+# shellcheck source=training/scripts/lib/remote-env.sh
+source "$REPO_ROOT/training/scripts/lib/remote-env.sh"
+
+# dstack CLI resolver
+# shellcheck source=dstack/scripts/lib/dstack-cli.sh
+source "$REPO_ROOT/dstack/scripts/lib/dstack-cli.sh"
 
 # ── Globals set by flag parsing ───────────────────────────────────────────────
 OPT_PULL_ARTIFACTS=0
@@ -43,6 +52,99 @@ dry_run_guard() {
     "$@"
 }
 
+dstack_latest_run_name() {
+    local ps_json="$REPO_ROOT/.tmp/dstack-ps.json"
+
+    mkdir -p "$REPO_ROOT/.tmp"
+    dstack_cli ps --json > "$ps_json"
+    python3 - <<'PY' "$ps_json"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
+
+runs = data.get("runs", []) if isinstance(data, dict) else data
+if not runs:
+    print("")
+    raise SystemExit(0)
+
+run = runs[0]
+print(run.get("run_name") or (run.get("run_spec") or {}).get("run_name") or "")
+PY
+}
+
+dstack_run_status_triplet() {
+    local run_name="$1"
+    local ps_json="$REPO_ROOT/.tmp/dstack-ps.json"
+
+    mkdir -p "$REPO_ROOT/.tmp"
+    dstack_cli ps --json > "$ps_json"
+    python3 - <<'PY' "$ps_json" "$run_name"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
+
+target = sys.argv[2]
+runs = data.get("runs", []) if isinstance(data, dict) else data
+
+for run in runs:
+    run_name = run.get("run_name") or (run.get("run_spec") or {}).get("run_name") or ""
+    if run_name != target:
+        continue
+    latest = run.get("latest_job_submission") or {}
+    print(
+        "\t".join(
+            [
+                str(run.get("status") or ""),
+                str(latest.get("status") or ""),
+                str(latest.get("termination_reason") or ""),
+            ]
+        )
+    )
+    raise SystemExit(0)
+
+print("\t\t")
+PY
+}
+
+wait_for_run_start() {
+    local run_name="$1"
+    local max_wait="${2:-480}"
+    local poll_interval=10
+    local elapsed=0
+    local status=""
+    local job_status=""
+    local termination_reason=""
+    local status_triplet=""
+
+    log "[STEP 7] Waiting for run '$run_name' to leave startup states (budget ${max_wait}s)..."
+
+    while [ "$elapsed" -lt "$max_wait" ]; do
+        status_triplet=$(dstack_run_status_triplet "$run_name" 2>/dev/null || true)
+        IFS=$'\t' read -r status job_status termination_reason <<< "$status_triplet"
+
+        case "$job_status" in
+            running)
+                log "Run '$run_name' is RUNNING"
+                return 0
+                ;;
+            terminated|failed|stopped|completed)
+                log "Run '$run_name' reached terminal status '$job_status' (${termination_reason:-none}) before steady-state attach"
+                return 1
+                ;;
+        esac
+
+        sleep "$poll_interval"
+        elapsed=$(( elapsed + poll_interval ))
+    done
+
+    log "WARN: run '$run_name' did not reach RUNNING within ${max_wait}s"
+    return 124
+}
+
 # ── Tunnel teardown ───────────────────────────────────────────────────────────
 kill_tunnel() {
     if [ "$OPT_KEEP_TUNNEL" -eq 1 ]; then
@@ -56,7 +158,7 @@ kill_tunnel() {
             log "Killing cloudflared (PID $pid)"
             kill "$pid" 2>/dev/null || true
         fi
-        rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE"
+        rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE" "$REPO_ROOT/.cf-tunnel.log"
     fi
 }
 
@@ -68,7 +170,7 @@ stop_tracked_runs() {
     while IFS= read -r run_name; do
         [ -z "$run_name" ] && continue
         log "Stopping dstack run: $run_name"
-        dstack stop "$run_name" -y 2>/dev/null || true
+        dstack_cli stop "$run_name" -y 2>/dev/null || true
     done < "$RUN_IDS_FILE"
     rm -f "$RUN_IDS_FILE"
 }
@@ -81,24 +183,30 @@ cmd_setup() {
         echo "ACTION REQUIRED — fix the errors above, then re-run: ./run.sh setup" >&2
         echo "" >&2
         echo "Common fixes:" >&2
-        echo "  Missing gh_token:     create GitHub PAT with write:packages scope → echo TOKEN > gh_token && chmod 600 gh_token" >&2
+        echo "  Clock skew:           ./run.sh fix-clock" >&2
         echo "  Missing hf_token:     get token from https://huggingface.co/settings/tokens → echo TOKEN > hf_token && chmod 600 hf_token" >&2
+        echo "  Missing VCR creds:    create .env.remote with VCR_USERNAME / VCR_PASSWORD and chmod 600" >&2
         echo "  Missing cloudflared:  curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o /usr/local/bin/cloudflared && chmod +x /usr/local/bin/cloudflared" >&2
-        echo "  Missing dstack:       pip install --user dstack" >&2
+        echo "  Missing dstack:       uv venv ~/.dstack-cli-venv --python 3.11 && uv pip install --python ~/.dstack-cli-venv/bin/python 'dstack[verda]==0.20.*'" >&2
         exit 1
     }
 
     log "[STEP 4] Configuring dstack server..."
-    bash "$REPO_ROOT/dstack/setup-config.sh"
+    bash "$REPO_ROOT/dstack/start.sh" setup
 
     log "Setup complete. Run: ./run.sh remote"
+}
+
+# ── Subcommand: fix-clock ─────────────────────────────────────────────────────
+cmd_fix_clock() {
+    bash "$REPO_ROOT/scripts/fix-wsl-clock.sh"
 }
 
 # ── Subcommand: local ─────────────────────────────────────────────────────────
 cmd_local() {
     # Thin wrapper — preserve existing behavior unchanged
     log "Starting local training (docker-compose)..."
-    exec bash "$REPO_ROOT/training/run-train.sh" "$@"
+    exec bash "$REPO_ROOT/training/start.sh" local "$@"
 }
 
 # ── Subcommand: teardown ──────────────────────────────────────────────────────
@@ -111,9 +219,11 @@ cmd_teardown() {
 
 # ── dstack server health + autostart ─────────────────────────────────────────
 ensure_dstack_server() {
-    local health_url="http://127.0.0.1:3000/api/health"
+    local health_url="http://127.0.0.1:3000/"
     local max_wait=30
     local elapsed=0
+
+    require_dstack_bin || die "dstack CLI is not usable"
 
     if curl -fsS "$health_url" >/dev/null 2>&1; then
         log "dstack server already running"
@@ -122,9 +232,10 @@ ensure_dstack_server() {
 
     log "[STEP 4] dstack server not running — starting in background..."
     if [ "$OPT_DRY_RUN" -eq 1 ]; then
-        echo "[DRY-RUN] Would run: dstack server >> $DSTACK_SERVER_LOG 2>&1 &"
+        echo "[DRY-RUN] Would run: $DSTACK_BIN server >> $DSTACK_SERVER_LOG 2>&1 &"
+        return 0
     else
-        dstack server >> "$DSTACK_SERVER_LOG" 2>&1 &
+        dstack_cli server >> "$DSTACK_SERVER_LOG" 2>&1 &
         log "dstack server started (log: $DSTACK_SERVER_LOG)"
     fi
 
@@ -163,6 +274,7 @@ cmd_remote() {
         log "EXIT trap fired (exit_code=$exit_code)"
         kill_tunnel
         stop_tracked_runs
+        rm -f "$REPO_ROOT/.tmp/pretrain.task.rendered.yml"
     }
 
     # ── Step 1: Preflight ────────────────────────────────────────────────────
@@ -173,12 +285,15 @@ cmd_remote() {
         exit 1
     }
 
+    load_remote_env
+    require_vcr_auth
+
     # ── Step 2: Verify MLflow stack ──────────────────────────────────────────
     log "[STEP 2] Verifying MLflow stack..."
     if ! curl -fsS "http://127.0.0.1:5000/health" >/dev/null 2>&1; then
         echo "[run.sh] ERROR: MLflow not responding at http://127.0.0.1:5000/health" >&2
         echo "[run.sh] Start it with:" >&2
-        echo "  docker compose -f training/mlflow-stack/docker-compose.mlflow.yml up -d" >&2
+        echo "  ./infrastructure/mlflow/start.sh up" >&2
         exit 2
     fi
     log "MLflow OK at http://127.0.0.1:5000"
@@ -189,61 +304,65 @@ cmd_remote() {
     # ── Step 4: Build + push image ───────────────────────────────────────────
     if [ "$OPT_SKIP_BUILD" -eq 0 ]; then
         log "[STEP 2] Building and pushing image..."
-        dry_run_guard bash "$REPO_ROOT/training/build-and-push.sh"
+        dry_run_guard bash "$REPO_ROOT/training/start.sh" build-remote
     else
         log "[STEP 2] Skipping build (--skip-build)"
     fi
 
     # ── Step 5: Start CF tunnel ───────────────────────────────────────────────
     log "[STEP 3] Starting Cloudflare Quick Tunnel..."
-    dry_run_guard bash "$REPO_ROOT/training/mlflow-stack/run-tunnel.sh"
+    dry_run_guard bash "$REPO_ROOT/infrastructure/mlflow/start.sh" tunnel
 
     # ── Step 6: Read runtime values ───────────────────────────────────────────
     if [ "$OPT_DRY_RUN" -eq 1 ]; then
         MLFLOW_URL="https://dry-run-example.trycloudflare.com"
-        IMAGE_SHA="dryrun0"
-        GH_USER="dry-run-user"
+        if [ "$OPT_SKIP_BUILD" -eq 1 ]; then
+            IMAGE_SHA="${REMOTE_IMAGE_TAG:-latest}"
+        else
+            IMAGE_SHA="dryrun0"
+        fi
     else
         MLFLOW_URL=$(cat "$TUNNEL_URL_FILE")
-        IMAGE_SHA=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
-        GH_USER=$(cat "$REPO_ROOT/.omc/state/gh_user.cache")
+        if [ "$OPT_SKIP_BUILD" -eq 1 ]; then
+            IMAGE_SHA="${REMOTE_IMAGE_TAG:-latest}"
+        else
+            IMAGE_SHA=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
+        fi
     fi
 
     log "[STEP 6] Runtime values:"
     log "  MLFLOW_URL = $MLFLOW_URL"
     log "  IMAGE_SHA  = $IMAGE_SHA"
-    log "  GH_USER    = $GH_USER"
+    log "  VCR_IMAGE_BASE = $VCR_IMAGE_BASE"
 
     # ── Step 7: dstack apply with pull-budget enforcement ────────────────────
-    log "[STEP 6] Submitting dstack task (timeout 180s)..."
+    log "[STEP 6] Submitting dstack task..."
 
     RUN_NAME=""
     APPLY_RC=0
+    local rendered_task_file="$REPO_ROOT/.tmp/pretrain.task.rendered.yml"
 
     if [ "$OPT_DRY_RUN" -eq 1 ]; then
-        echo "[DRY-RUN] Would run: IMAGE_SHA=$IMAGE_SHA GH_USER=$GH_USER HF_TOKEN=... MLFLOW_TRACKING_URI=$MLFLOW_URL ... dstack apply -f dstack/pretrain.dstack.yml -y"
+        echo "[DRY-RUN] Would run: IMAGE_SHA=$IMAGE_SHA dstack/scripts/render-pretrain-task.sh .tmp/pretrain.task.rendered.yml"
+        echo "[DRY-RUN] Would run: HF_TOKEN=... MLFLOW_TRACKING_URI=$MLFLOW_URL ... dstack apply -f .tmp/pretrain.task.rendered.yml -y -d"
         APPLY_RC=0
     else
-        # Inject env and run with timeout
+        IMAGE_SHA="$IMAGE_SHA" bash "$REPO_ROOT/dstack/scripts/render-pretrain-task.sh" "$rendered_task_file" >/dev/null
         set +e
-        timeout 180s env \
-            IMAGE_SHA="$IMAGE_SHA" \
-            GH_USER="$GH_USER" \
+        env \
             HF_TOKEN="$(cat "$REPO_ROOT/hf_token")" \
             MLFLOW_TRACKING_URI="$MLFLOW_URL" \
             MLFLOW_EXPERIMENT_NAME="${MLFLOW_EXPERIMENT_NAME:-minimind-pretrain}" \
             MLFLOW_ARTIFACT_UPLOAD=0 \
             VERDA_PROFILE=remote \
-            dstack apply -f "$REPO_ROOT/dstack/pretrain.dstack.yml" -y
+            dstack_cli apply -f "$rendered_task_file" -y -d
         APPLY_RC=$?
         set -e
     fi
 
     # Track run name for teardown (best-effort; dstack ps may not have it yet)
-    if [ "$OPT_DRY_RUN" -ne 1 ] && command -v dstack &>/dev/null; then
-        LAST_RUN=$(dstack ps --json 2>/dev/null \
-            | python3 -c "import json,sys; d=json.load(sys.stdin); print(d[0]['run_name'] if d else '')" 2>/dev/null \
-            || dstack ps 2>/dev/null | awk 'NR==2{print $1}' || true)
+    if [ "$OPT_DRY_RUN" -ne 1 ]; then
+        LAST_RUN=$(dstack_latest_run_name 2>/dev/null || true)
         if [ -n "$LAST_RUN" ]; then
             echo "$LAST_RUN" >> "$RUN_IDS_FILE"
             RUN_NAME="$LAST_RUN"
@@ -251,85 +370,35 @@ cmd_remote() {
         fi
     fi
 
-    # ── Step 6: Pull-budget enforcement (exit 124 = timeout) ─────────────────
-    if [ "$APPLY_RC" -eq 124 ]; then
-        log "WARN: dstack apply timed out after 180s (pull budget exceeded)"
-        if [ -n "$RUN_NAME" ]; then
-            log "Stopping orphaned run: $RUN_NAME"
-            dstack stop "$RUN_NAME" -y 2>/dev/null || true
-            # Remove from tracking since we've stopped it
-            sed -i "/^${RUN_NAME}$/d" "$RUN_IDS_FILE" 2>/dev/null || true
-        fi
-        log "Exit 124 — no orphan should remain"
-        exit 124
-    fi
-
     if [ "$APPLY_RC" -ne 0 ]; then
         log "WARN: dstack apply exited with code $APPLY_RC"
         exit "$APPLY_RC"
     fi
 
-    log "[STEP 6] dstack apply completed successfully"
+    log "[STEP 6] dstack apply submitted successfully"
 
-    # ── Step 8: Optional artifact pull ───────────────────────────────────────
-    if [ "$OPT_PULL_ARTIFACTS" -eq 1 ] && [ -n "$RUN_NAME" ]; then
-        log "[STEP 8] Pulling artifacts from run $RUN_NAME ..."
-        ARTIFACT_DIR="$REPO_ROOT/artifacts-pull/$RUN_NAME"
-        mkdir -p "$ARTIFACT_DIR"
-
-        set +e
-        dstack ssh "$RUN_NAME" -- "cd /workspace/out && tar -cz ." \
-            | tar -xz -C "$ARTIFACT_DIR"
-        RSYNC_RC=$?
-        set -e
-
-        if [ "$RSYNC_RC" -ne 0 ]; then
-            log "WARN: Artifact pull failed (exit $RSYNC_RC) — instance may be gone (accepted trade-off: checkpoint forfeit on preemption)"
-        else
-            log "Artifacts pulled to: $ARTIFACT_DIR"
-            ls -lh "$ARTIFACT_DIR/" 2>/dev/null || true
+    if [ -n "$RUN_NAME" ] && [ "$OPT_DRY_RUN" -ne 1 ]; then
+        if ! wait_for_run_start "$RUN_NAME"; then
+            log "WARN: run '$RUN_NAME' did not reach a stable running state cleanly"
         fi
     fi
 
-    log "[run.sh] Remote training complete"
+    # ── Step 8: Optional artifact pull ───────────────────────────────────────
+    if [ "$OPT_PULL_ARTIFACTS" -eq 1 ] && [ -n "$RUN_NAME" ]; then
+        log "WARN: --pull-artifacts is not automated on the current dstack CLI; attach manually after the run if needed"
+    fi
+
+    log "[run.sh] Remote training submitted"
 }
 
 # ── Subcommand: dashboard ─────────────────────────────────────────────────────
 cmd_dashboard() {
     local action="${1:-up}"
     shift || true
-    local compose_file="$REPO_ROOT/dashboard/docker-compose.dashboard.yml"
-
-    if [ ! -f "$compose_file" ]; then
-        die "dashboard/docker-compose.dashboard.yml not found. Run from repo root."
+    if [ -z "${DSTACK_SERVER_ADMIN_TOKEN:-}" ] && [ "$action" = "up" ]; then
+        log "WARN: DSTACK_SERVER_ADMIN_TOKEN not set — dstack panels will be degraded"
     fi
-
-    # Ensure verda-mlflow network exists (create if absent)
-    if ! docker network inspect verda-mlflow >/dev/null 2>&1; then
-        log "Creating external network 'verda-mlflow'..."
-        docker network create verda-mlflow || true
-    fi
-
-    case "$action" in
-        up)
-            log "Starting Verda Dashboard..."
-            if [ -z "${DSTACK_SERVER_ADMIN_TOKEN:-}" ]; then
-                log "WARN: DSTACK_SERVER_ADMIN_TOKEN not set — dstack panels will be degraded"
-            fi
-            docker compose -f "$compose_file" up -d --build "$@"
-            log "Dashboard available at http://localhost:7860"
-            ;;
-        down)
-            log "Stopping Verda Dashboard..."
-            docker compose -f "$compose_file" down "$@"
-            ;;
-        logs)
-            docker compose -f "$compose_file" logs -f "$@"
-            ;;
-        *)
-            die "Unknown dashboard action: $action  (try: up | down | logs)"
-            ;;
-    esac
+    exec bash "$REPO_ROOT/infrastructure/dashboard/start.sh" "$action" "$@"
 }
 
 # ── Dispatch ──────────────────────────────────────────────────────────────────
@@ -338,6 +407,7 @@ shift || true
 
 case "$SUBCOMMAND" in
     setup)     cmd_setup ;;
+    fix-clock) cmd_fix_clock ;;
     local)     cmd_local "$@" ;;
     remote)    cmd_remote "$@" ;;
     teardown)  cmd_teardown ;;
@@ -347,6 +417,7 @@ case "$SUBCOMMAND" in
         echo ""
         echo "Subcommands:"
         echo "  setup               Preflight checks + dstack config"
+        echo "  fix-clock           Sync WSL2 clock from Windows"
         echo "  local [args...]     Local docker-compose training"
         echo "  remote [flags]      Remote training on Verda via dstack"
         echo "  teardown            Kill tunnel, stop dstack runs"
@@ -360,6 +431,6 @@ case "$SUBCOMMAND" in
         exit 1
         ;;
     *)
-        die "Unknown subcommand: $SUBCOMMAND  (try: setup | local | remote | teardown | dashboard)"
+        die "Unknown subcommand: $SUBCOMMAND  (try: setup | fix-clock | local | remote | teardown | dashboard)"
         ;;
 esac
