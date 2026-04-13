@@ -7,8 +7,15 @@ import sys
 import types
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HELPER_PATH = REPO_ROOT / "training" / "src" / "minimind" / "trainer" / "_mlflow_helper.py"
+
+pytestmark = pytest.mark.skipif(
+    not HELPER_PATH.is_file(),
+    reason="training/src/minimind/trainer/_mlflow_helper.py not checked out (gitignored vendor tree)",
+)
 
 
 def _load_helper():

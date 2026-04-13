@@ -22,8 +22,11 @@ secrets, regenerate the fixture via:
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -38,9 +41,36 @@ def normalize(text: str) -> str:
     return text.replace(str(REPO_ROOT), "<REPO_ROOT>").replace(home, "<HOME>")
 
 
+def missing_precondition() -> str | None:
+    """Return a skip reason string when the environment can't drive the dry-run.
+
+    The `launch dstack --dry-run` path intentionally exercises the full
+    remote pipeline short of `dstack apply` and the tunnel start, so it
+    requires the same operator environment that a real launch does:
+    VCR registry creds, a reachable local MLflow, and the dstack CLI.
+    CI runners lack all three — the test skips cleanly there and stays
+    green on developer machines with the environment present.
+    """
+    if not (REPO_ROOT / ".env.remote").is_file() and not os.environ.get("VCR_USERNAME"):
+        return "VCR creds missing (no .env.remote and no VCR_USERNAME env)"
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:5000/health", timeout=2) as response:
+            if response.status != 200:
+                return f"MLflow health check returned {response.status}"
+    except (urllib.error.URLError, OSError) as exc:
+        return f"MLflow at localhost:5000 unreachable ({exc})"
+    dstack_venv = Path.home() / ".dstack-cli-venv" / "bin" / "dstack"
+    if not dstack_venv.exists() and not shutil.which("dstack"):
+        return "dstack CLI not installed"
+    return None
+
+
 def test_dstack_dry_run_matches_golden_fixture() -> None:
     if not GOLDEN_FIXTURE.exists():
         pytest.skip(f"Golden fixture missing at {GOLDEN_FIXTURE}; regenerate per module docstring.")
+    reason = missing_precondition()
+    if reason is not None:
+        pytest.skip(reason)
 
     expected = GOLDEN_FIXTURE.read_text()
     proc = subprocess.run(

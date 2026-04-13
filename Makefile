@@ -1,7 +1,9 @@
 PYTHON ?= python3
 PYTEST ?= $(PYTHON) -m pytest
 
-PY_DIRS := src/gpupoor tests training/src/minimind training/tests infrastructure/dashboard/src infrastructure/dashboard/tests
+# training/src/minimind/ is a gitignored vendor tree; drop it from lint/format
+# when the checkout doesn't materialize it (e.g. in CI).
+PY_DIRS := $(wildcard src/gpupoor tests training/src/minimind training/tests infrastructure/dashboard/src infrastructure/dashboard/tests)
 REQUIRED_TEST_DIRS := tests training/tests infrastructure/dashboard/tests
 FAST_MARKERS := not live_dashboard and not docker and not remote and not slow
 ARTIFACT_DIR := .artifacts

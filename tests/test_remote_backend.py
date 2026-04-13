@@ -33,8 +33,12 @@ def test_remote_image_tag_prefers_skip_build_tag() -> None:
 
 
 def test_task_max_duration_rounds_up_to_minutes() -> None:
-    assert dstack.task_max_duration(600) == "10m"
-    assert dstack.task_max_duration(601) == "11m"
+    # 2-minute buffer keeps dstack's max_duration strictly greater than the
+    # in-container `timeout --signal=SIGTERM --kill-after=30` so the training
+    # script's SIGTERM handler can finalize MLflow before dstack's last-resort cap.
+    assert dstack.task_max_duration(600) == "12m"
+    assert dstack.task_max_duration(601) == "13m"
+    assert dstack.task_max_duration(1) == "3m"
 
 
 def test_render_task_uses_config_name_and_duration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -56,7 +60,7 @@ def test_render_task_uses_config_name_and_duration(tmp_path: Path, monkeypatch: 
 
     assert rendered == tmp_path / ".tmp" / "pretrain.task.rendered.yml"
     assert calls[0]["env"]["TASK_NAME"] == "verda-remote-10m"
-    assert calls[0]["env"]["TASK_MAX_DURATION"] == "10m"
+    assert calls[0]["env"]["TASK_MAX_DURATION"] == "12m"
     # Baseline config sets no GPU overrides; shell defaults must apply.
     assert "TASK_GPU_NAMES" not in calls[0]["env"]
     assert "TASK_GPU_COUNT" not in calls[0]["env"]

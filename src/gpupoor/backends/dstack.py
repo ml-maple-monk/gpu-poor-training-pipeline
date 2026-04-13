@@ -48,7 +48,24 @@ def ensure_dstack_server(
 
     print("[gpupoor] dstack server not running; starting it in background")
     with log_file.open("ab") as handle:
-        subprocess.Popen([dstack_bin, "server"], stdout=handle, stderr=subprocess.STDOUT, start_new_session=True)
+        # dstack >=0.20.16 prompts `Update the main project in ~/.dstack/config.yml?`
+        # on first start. With no TTY the interactive `input()` raises EOFError and
+        # the server crashes before binding to port 3000. Feed "y\n" on stdin so
+        # startup is non-interactive, then close stdin so the daemon doesn't wait
+        # for more input.
+        process = subprocess.Popen(
+            [dstack_bin, "server"],
+            stdin=subprocess.PIPE,
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        try:
+            assert process.stdin is not None
+            process.stdin.write(b"y\n")
+            process.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
 
     for _ in range(start_timeout_seconds):
         if http_ok(health_url, timeout_seconds=health_timeout_seconds):
@@ -88,7 +105,12 @@ def remote_image_tag(backend: BackendConfig, *, skip_build: bool, dry_run: bool,
 def task_max_duration(time_cap_seconds: int) -> str:
     if time_cap_seconds <= 0:
         raise ValueError("time_cap_seconds must be positive")
-    minutes = max(1, (time_cap_seconds + 59) // 60)
+    # Give the in-container `timeout --signal=SIGTERM --kill-after=30` a clean
+    # head start so the SIGTERM handler in train_pretrain.py can call
+    # _mlflow_helper.finish(status='KILLED') before dstack's max_duration fires
+    # as last-resort safety. 2-minute buffer covers SIGTERM grace (30s) plus
+    # MLflow finalize over a slow Cloudflare tunnel.
+    minutes = max(2, (time_cap_seconds + 59) // 60 + 2)
     return f"{minutes}m"
 
 
