@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 def test_env_file_parsing_strips_quotes(tmp_path: Path) -> None:
     env_file = tmp_path / ".env.remote"
-    env_file.write_text('VCR_USERNAME="user"\nVCR_PASSWORD=\'pass\'\n', encoding="utf-8")
+    env_file.write_text("VCR_USERNAME=\"user\"\nVCR_PASSWORD='pass'\n", encoding="utf-8")
 
     assert parse_env_file(env_file) == {
         "VCR_USERNAME": "user",
@@ -33,7 +33,40 @@ def test_remote_image_tag_prefers_skip_build_tag() -> None:
     assert tag == "existing-tag"
 
 
-def test_launch_remote_keeps_tunnel_alive_after_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_task_max_duration_rounds_up_to_minutes() -> None:
+    assert dstack.task_max_duration(600) == "10m"
+    assert dstack.task_max_duration(601) == "11m"
+
+
+def test_render_task_uses_config_name_and_duration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
+    config.name = "verda_remote_10m"
+    calls: list[dict[str, object]] = []
+
+    def fake_repo_path(*parts: str) -> Path:
+        return tmp_path.joinpath(*parts)
+
+    def fake_bash_script(
+        script: Path, *args: str, env: dict[str, str] | None = None, **kwargs: object
+    ) -> None:
+        calls.append({"script": script, "args": args, "env": env or {}})
+        Path(args[0]).write_text("# rendered\n", encoding="utf-8")
+
+    monkeypatch.setattr(dstack, "repo_path", fake_repo_path)
+    monkeypatch.setattr(dstack, "bash_script", fake_bash_script)
+
+    rendered = dstack.render_task({"VCR_IMAGE_BASE": "vccr.io/example"}, config, "abc123")
+
+    assert rendered == tmp_path / ".tmp" / "pretrain.task.rendered.yml"
+    assert calls[0]["env"]["TASK_NAME"] == "verda_remote_10m"
+    assert calls[0]["env"]["TASK_MAX_DURATION"] == "10m"
+
+
+def test_launch_remote_keeps_tunnel_alive_after_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
     (tmp_path / ".cf-tunnel.url").write_text("https://mlflow.example", encoding="utf-8")
 
@@ -44,11 +77,18 @@ def test_launch_remote_keeps_tunnel_alive_after_success(tmp_path: Path, monkeypa
     monkeypatch.setattr(
         dstack,
         "load_remote_settings",
-        lambda config=None: {"VCR_IMAGE_BASE": "vccr.io/example", "VCR_USERNAME": "user", "VCR_PASSWORD": "pass"},
+        lambda config=None: {
+            "VCR_IMAGE_BASE": "vccr.io/example",
+            "VCR_USERNAME": "user",
+            "VCR_PASSWORD": "pass",
+            "OUT_DIR": "/workspace/custom-out",
+            "HF_DATASET_REPO": "example/dataset",
+            "HF_DATASET_FILENAME": "custom.jsonl",
+        },
     )
     monkeypatch.setattr(dstack, "require_remote_settings", lambda settings: None)
     monkeypatch.setattr(dstack, "find_dstack_bin", lambda: "dstack")
-    monkeypatch.setattr(dstack.maintenance, "run_preflight", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack.ops, "run_preflight", lambda *args, **kwargs: None)
     mlflow_urls: list[str] = []
     dstack_urls: list[str] = []
     dstack_timeouts: list[tuple[int, int]] = []
@@ -56,26 +96,48 @@ def test_launch_remote_keeps_tunnel_alive_after_success(tmp_path: Path, monkeypa
     monkeypatch.setattr(
         dstack,
         "verify_mlflow",
-        lambda url, **kwargs: (mlflow_urls.append(url), mlflow_timeouts.append(kwargs["timeout_seconds"])),
+        lambda url, **kwargs: (
+            mlflow_urls.append(url),
+            mlflow_timeouts.append(kwargs["timeout_seconds"]),
+        ),
     )
     monkeypatch.setattr(
         dstack,
         "ensure_dstack_server",
         lambda *args, **kwargs: (
             dstack_urls.append(kwargs["health_url"]),
-            dstack_timeouts.append((kwargs["health_timeout_seconds"], kwargs["start_timeout_seconds"])),
+            dstack_timeouts.append(
+                (kwargs["health_timeout_seconds"], kwargs["start_timeout_seconds"])
+            ),
         ),
     )
     monkeypatch.setattr(dstack, "bash_script", lambda *args, **kwargs: None)
-    monkeypatch.setattr(dstack, "render_task", lambda settings, image_sha: fake_repo_path(".tmp", "task.yml"))
+    monkeypatch.setattr(
+        dstack,
+        "render_task",
+        lambda settings, config, image_sha: fake_repo_path(".tmp", "task.yml"),
+    )
     monkeypatch.setattr(dstack, "read_required_secret", lambda filename: "hf-token")
-    monkeypatch.setattr(dstack, "dstack_latest_run_name", lambda dstack_bin: "verda-minimind-pretrain")
+    monkeypatch.setattr(
+        dstack, "dstack_latest_run_name", lambda dstack_bin: "verda-minimind-pretrain"
+    )
     wait_limits: list[int] = []
-    monkeypatch.setattr(dstack, "wait_for_run_start", lambda *args, **kwargs: wait_limits.append(kwargs["max_wait"]))
+    monkeypatch.setattr(
+        dstack, "wait_for_run_start", lambda *args, **kwargs: wait_limits.append(kwargs["max_wait"])
+    )
 
     kill_calls: list[bool] = []
-    monkeypatch.setattr(dstack, "kill_tunnel", lambda *, keep_tunnel: kill_calls.append(keep_tunnel))
-    monkeypatch.setattr(dstack, "run_command", lambda *args, **kwargs: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(
+        dstack, "kill_tunnel", lambda *, keep_tunnel: kill_calls.append(keep_tunnel)
+    )
+    apply_envs: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        dstack,
+        "run_command",
+        lambda *args, **kwargs: (apply_envs.append(kwargs["env"]), SimpleNamespace(returncode=0))[
+            1
+        ],
+    )
 
     dstack.launch_remote(config, skip_build=True)
 
@@ -87,9 +149,17 @@ def test_launch_remote_keeps_tunnel_alive_after_success(tmp_path: Path, monkeypa
         (config.remote.health_timeout_seconds, config.remote.dstack_server_start_timeout_seconds)
     ]
     assert wait_limits == [config.remote.run_start_timeout_seconds]
+    assert apply_envs[0]["DSTACK_RUN_NAME"] == config.name
+    assert apply_envs[0]["OUT_DIR"] == "/workspace/custom-out"
+    assert apply_envs[0]["HF_DATASET_REPO"] == "example/dataset"
+    assert apply_envs[0]["HF_DATASET_FILENAME"] == "custom.jsonl"
+    assert apply_envs[0]["TIME_CAP_SECONDS"] == str(config.recipe.time_cap_seconds)
+    assert apply_envs[0]["MLFLOW_EXPERIMENT_NAME"] == config.mlflow.experiment_name
 
 
-def test_launch_remote_cleans_up_tunnel_when_startup_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_launch_remote_cleans_up_tunnel_when_startup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
     (tmp_path / ".cf-tunnel.url").write_text("https://mlflow.example", encoding="utf-8")
 
@@ -100,24 +170,56 @@ def test_launch_remote_cleans_up_tunnel_when_startup_fails(tmp_path: Path, monke
     monkeypatch.setattr(
         dstack,
         "load_remote_settings",
-        lambda config=None: {"VCR_IMAGE_BASE": "vccr.io/example", "VCR_USERNAME": "user", "VCR_PASSWORD": "pass"},
+        lambda config=None: {
+            "VCR_IMAGE_BASE": "vccr.io/example",
+            "VCR_USERNAME": "user",
+            "VCR_PASSWORD": "pass",
+        },
     )
     monkeypatch.setattr(dstack, "require_remote_settings", lambda settings: None)
     monkeypatch.setattr(dstack, "find_dstack_bin", lambda: "dstack")
-    monkeypatch.setattr(dstack.maintenance, "run_preflight", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack.ops, "run_preflight", lambda *args, **kwargs: None)
     monkeypatch.setattr(dstack, "verify_mlflow", lambda url, **kwargs: None)
     monkeypatch.setattr(dstack, "ensure_dstack_server", lambda *args, **kwargs: None)
     monkeypatch.setattr(dstack, "bash_script", lambda *args, **kwargs: None)
-    monkeypatch.setattr(dstack, "render_task", lambda settings, image_sha: fake_repo_path(".tmp", "task.yml"))
+    monkeypatch.setattr(
+        dstack,
+        "render_task",
+        lambda settings, config, image_sha: fake_repo_path(".tmp", "task.yml"),
+    )
     monkeypatch.setattr(dstack, "read_required_secret", lambda filename: "hf-token")
-    monkeypatch.setattr(dstack, "dstack_latest_run_name", lambda dstack_bin: "verda-minimind-pretrain")
-    monkeypatch.setattr(dstack, "wait_for_run_start", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("startup failed")))
+    monkeypatch.setattr(
+        dstack, "dstack_latest_run_name", lambda dstack_bin: "verda-minimind-pretrain"
+    )
+    monkeypatch.setattr(
+        dstack,
+        "wait_for_run_start",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("startup failed")),
+    )
 
     kill_calls: list[bool] = []
-    monkeypatch.setattr(dstack, "kill_tunnel", lambda *, keep_tunnel: kill_calls.append(keep_tunnel))
-    monkeypatch.setattr(dstack, "run_command", lambda *args, **kwargs: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(
+        dstack, "kill_tunnel", lambda *, keep_tunnel: kill_calls.append(keep_tunnel)
+    )
+    monkeypatch.setattr(
+        dstack, "run_command", lambda *args, **kwargs: SimpleNamespace(returncode=0)
+    )
 
     with pytest.raises(RuntimeError, match="startup failed"):
         dstack.launch_remote(config, skip_build=True)
 
     assert kill_calls == [False]
+
+
+def test_wait_for_run_start_tolerates_retrying_no_capacity(monkeypatch: pytest.MonkeyPatch) -> None:
+    statuses = iter(
+        [
+            ("pending", "failed", "failed_to_start_due_to_no_capacity"),
+            ("running", "running", ""),
+        ]
+    )
+
+    monkeypatch.setattr(dstack, "dstack_run_status_triplet", lambda *args, **kwargs: next(statuses))
+    monkeypatch.setattr(dstack.time, "sleep", lambda seconds: None)
+
+    dstack.wait_for_run_start("dstack", "verda-remote-10m", max_wait=20)

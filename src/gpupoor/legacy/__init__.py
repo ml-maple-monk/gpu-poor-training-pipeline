@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import sys
 
-from gpupoor import maintenance
+from gpupoor import ops
 from gpupoor.backends import dstack as dstack_backend
 from gpupoor.backends.local import local_training_command
-from gpupoor.paths import repo_path
 from gpupoor.subprocess_utils import bash_script, run_command
+from gpupoor.utils import repo_path
 
 
 def _default_remote_config():
@@ -105,11 +105,11 @@ def run_root(subcommand: str, args: list[str]) -> None:
         _print(_root_help())
         return
     if subcommand == "setup":
-        maintenance.run_preflight(remote=True)
+        ops.run_preflight(remote=True)
         bash_script(repo_path("dstack", "scripts", "setup-config.sh"))
         return
     if subcommand == "fix-clock":
-        maintenance.fix_wsl_clock()
+        ops.fix_wsl_clock()
         return
     if subcommand == "local":
         run_command(local_training_command(args))
@@ -168,7 +168,16 @@ def run_dstack(subcommand: str, args: list[str]) -> None:
         return
     if subcommand == "fleet-apply":
         dstack_bin = dstack_backend.find_dstack_bin()
-        run_command([dstack_bin, "apply", "-f", str(repo_path("dstack", "config", "fleet.dstack.yml")), "-y", *args])
+        run_command(
+            [
+                dstack_bin,
+                "apply",
+                "-f",
+                str(repo_path("dstack", "config", "fleet.dstack.yml")),
+                "-y",
+                *args,
+            ]
+        )
         return
     _fail_help("dstack/start.sh", f"unknown command '{subcommand}'", _dstack_help())
 
@@ -250,5 +259,9 @@ def run_infra(service: str, action: str, args: list[str]) -> None:
 
             emulator_service.health(args)
             return
-    prefix = f"infrastructure/{service}/start.sh" if service != "emulator" else "infrastructure/local-emulator/start.sh"
+    prefix = (
+        f"infrastructure/{service}/start.sh"
+        if service != "emulator"
+        else "infrastructure/local-emulator/start.sh"
+    )
     _fail_help(prefix, f"unknown command '{action}'", _infra_help(service))

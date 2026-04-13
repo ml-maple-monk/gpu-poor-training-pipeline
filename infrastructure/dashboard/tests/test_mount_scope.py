@@ -54,6 +54,8 @@ def _container_running():
 
 
 @pytest.mark.skipif(not _container_running(), reason="verda-dashboard container not running")
+@pytest.mark.docker
+@pytest.mark.live_dashboard
 def test_readonly_rootfs():
     """Container must have ReadonlyRootfs: true."""
     data = _docker_inspect()
@@ -65,6 +67,8 @@ def test_readonly_rootfs():
 
 
 @pytest.mark.skipif(not _container_running(), reason="verda-dashboard container not running")
+@pytest.mark.docker
+@pytest.mark.live_dashboard
 def test_tmpfs_mounts_present():
     """Container must have /tmp, /tmp/.cache, /tmp/mpl tmpfs mounts."""
     data = _docker_inspect()
@@ -76,6 +80,8 @@ def test_tmpfs_mounts_present():
 
 
 @pytest.mark.skipif(not _container_running(), reason="verda-dashboard container not running")
+@pytest.mark.docker
+@pytest.mark.live_dashboard
 def test_no_dstack_home_mount_in_c22():
     """In C2.2 path: no ~/.dstack directory mount on the container."""
     data = _docker_inspect()
@@ -102,6 +108,8 @@ def test_no_dstack_home_mount_in_c22():
 
 
 @pytest.mark.skipif(not _container_running(), reason="verda-dashboard container not running")
+@pytest.mark.docker
+@pytest.mark.live_dashboard
 def test_whitelisted_mounts_only():
     """Only whitelisted mount sources are present."""
     data = _docker_inspect()

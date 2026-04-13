@@ -1,6 +1,6 @@
-Your repo already has the right bones: a clear three-part mental model (`training/`, `dstack/`, `infrastructure/`), repo-owned training code, and useful operator entrypoints. The gap is that it is still system-repo-first and shell-first, not yet framework-first and package-first. The repo notes already point in the right direction: move the reusable contract into a real Python package under `src/`, make one CLI the public surface, keep MiniMind as a reference recipe, and treat dstack as a backend/provider rather than the center of the architecture.  
+Your repo already has the right bones: a clear three-part mental model (`training/`, `dstack/`, `infrastructure/`), repo-owned training code, and useful operator entrypoints. The gap is that it is still system-repo-first and shell-first, not yet framework-first and package-first. The repo notes already point in the right direction: move the reusable contract into a real Python package under `src/`, make one CLI the public surface, keep MiniMind as a reference recipe, and treat dstack as a backend/provider rather than the center of the architecture.
 
-The strongest backbone is already in your design draft: one declarative config, a thin orchestrator with fat recipes, swappable backends, opt-in plugins, and parity before replacing old shell flows. I would keep those, but rewrite them in beginner language and use them as the “house rules” for every PR. 
+The strongest backbone is already in your design draft: one declarative config, a thin orchestrator with fat recipes, swappable backends, opt-in plugins, and parity before replacing old shell flows. I would keep those, but rewrite them in beginner language and use them as the “house rules” for every PR.
 
 ## The philosophy I would use
 
@@ -48,7 +48,7 @@ Done when:
 * the framework can print the fully resolved config before execution
 * public config is typed, documented, and stable
 
-This matches the existing recommendation to move away from shell-owned config toward a typed contract usable from YAML, Python, and CLI.  
+This matches the existing recommendation to move away from shell-owned config toward a typed contract usable from YAML, Python, and CLI.
 
 ### 2. Keep the current mental model, but move the contract into `src/`
 
@@ -60,7 +60,7 @@ Done when:
 * reusable framework code lives under `src/<package>/`
 * shell scripts become wrappers, not the real API
 
-That keeps the repo understandable while turning it into something installable and teachable.  
+That keeps the repo understandable while turning it into something installable and teachable.
 
 ### 3. Thin core, fat recipes
 
@@ -72,7 +72,7 @@ Done when:
 * training loops, optimizer logic, checkpoint policy, and model-specific behavior live in `recipes/`
 * reviewers can reject PRs that put model/training logic into orchestration code
 
-This is one of the best teaching lessons in the design doc because it forces a clean boundary between framework and experiment code. 
+This is one of the best teaching lessons in the design doc because it forces a clean boundary between framework and experiment code.
 
 ### 4. Concrete first, abstract later
 
@@ -84,7 +84,7 @@ Done when:
 * you only extract a generic `Recipe` interface after a second real recipe needs it
 * every abstraction can point to at least two working implementations
 
-This is beginner-friendly because it teaches “abstraction follows evidence,” which is a core framework habit. 
+This is beginner-friendly because it teaches “abstraction follows evidence,” which is a core framework habit.
 
 ### 5. MiniMind should be a built-in example, not the framework identity
 
@@ -96,7 +96,7 @@ Done when:
 * adding a second model does not require changing the framework’s main concepts
 * package names and docs are model-agnostic
 
-That change matters because your current notes already flag that the repo still feels too centered on `minimind`. 
+That change matters because your current notes already flag that the repo still feels too centered on `minimind`.
 
 ### 6. One public CLI should be the main interface
 
@@ -108,7 +108,7 @@ Done when:
 * `run.sh`, `training/start.sh`, and `dstack/start.sh` delegate to that CLI
 * a user can ignore the shell layer entirely
 
-This matches both the repo review and the public framework recommendations.  
+This matches both the repo review and the public framework recommendations.
 
 ### 7. Backends must be swappable
 
@@ -120,7 +120,7 @@ Done when:
 * recipes never check `if backend == "dstack"`
 * switching backend is a config change, not a recipe rewrite
 
-This is one of the most important framework lessons because it prevents infra from contaminating experiment code. 
+This is one of the most important framework lessons because it prevents infra from contaminating experiment code.
 
 ### 8. GPU-poor should be a first-class design constraint
 
@@ -184,7 +184,7 @@ Done when:
 * `pip install "gpupoor[mlflow]"` adds observability
 * `pip install "gpupoor[docker]"` adds image-building helpers
 
-That keeps the beginner path clean and matches your repo’s own recommendation to separate optional tools from the base contract.  
+That keeps the beginner path clean and matches your repo’s own recommendation to separate optional tools from the base contract.
 
 ### 12. Nothing should auto-magically change behavior
 
@@ -196,7 +196,7 @@ Done when:
 * the framework can print which plugins were loaded
 * installing a package never silently changes behavior
 
-That is both ADHD-friendly and good framework engineering. 
+That is both ADHD-friendly and good framework engineering.
 
 ### 13. Secrets and provider config should be explicit
 
@@ -213,7 +213,7 @@ This prevents the “I have no idea why this run worked yesterday” feeling.
 
 ### 14. Docs should follow the user’s learning order
 
-The public recommendations are right here: keep the root README short, and move deeper learning into `tutorials/`, `how-to/`, `concepts/`, and `reference/`. 
+The public recommendations are right here: keep the root README short, and move deeper learning into `tutorials/`, `how-to/`, `concepts/`, and `reference/`.
 
 Done when:
 
@@ -235,7 +235,7 @@ Reject PRs that:
 * auto-load plugins without declaration
 * remove old shell behavior before parity is proven
 
-Your design doc already points toward exactly this style of mechanical review. 
+Your design doc already points toward exactly this style of mechanical review.
 
 ## The GPU-poor rules I would hard-code
 
@@ -253,7 +253,7 @@ That last point is especially good because it keeps CI, docs, and new-user onboa
 
 ## A README that is fancy but calm
 
-The current repo README already does one thing well: it names the core subsystems and shows the main entry surfaces. Keep that clarity, but tighten the root README into a landing page instead of a full operator manual.  
+The current repo README already does one thing well: it names the core subsystems and shows the main entry surfaces. Keep that clarity, but tighten the root README into a landing page instead of a full operator manual.
 
 I would structure it like this:
 

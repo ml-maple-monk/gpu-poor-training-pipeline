@@ -83,6 +83,8 @@ def _check_enospc_in_logs():
 
 @pytest.mark.skipif(not _container_running(), reason="verda-dashboard container not running")
 @pytest.mark.slow
+@pytest.mark.docker
+@pytest.mark.live_dashboard
 def test_tmpfs_pressure_under_50_percent():
     """Sample tmpfs usage at 30s and assert < 50% used."""
     # Quick version: just sample once rather than waiting 300s in CI
@@ -100,6 +102,8 @@ def test_tmpfs_pressure_under_50_percent():
 
 
 @pytest.mark.skipif(not _container_running(), reason="verda-dashboard container not running")
+@pytest.mark.docker
+@pytest.mark.live_dashboard
 def test_tmpfs_mounts_have_expected_sizes():
     """Verify tmpfs mounts are configured with expected minimum sizes."""
     import json

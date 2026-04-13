@@ -109,6 +109,7 @@ def test_queue_cap_constant():
     "queue(max_size=5) cap is hard-asserted above",
     strict=False,
 )
+@pytest.mark.live_dashboard
 def test_live_bandwidth_under_50kbs():
     """Live test: 5 sessions, 500-line ring, bandwidth <= 50 KB/s each.
 

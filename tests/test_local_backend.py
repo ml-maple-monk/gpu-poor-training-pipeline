@@ -57,7 +57,11 @@ def test_local_training_rejects_paths_outside_data_mount(monkeypatch) -> None:
     config = load_run_config(REPO_ROOT / "examples" / "tiny_cpu.toml")
     config.recipe.output_dir = "artifacts/out"
 
-    monkeypatch.setattr(local, "ensure_local_dataset", lambda config: REPO_ROOT / "data" / "datasets" / "pretrain_t2t_mini.jsonl")
+    monkeypatch.setattr(
+        local,
+        "ensure_local_dataset",
+        lambda config: REPO_ROOT / "data" / "datasets" / "pretrain_t2t_mini.jsonl",
+    )
 
     try:
         local.run_training(config)

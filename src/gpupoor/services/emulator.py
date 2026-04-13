@@ -8,8 +8,8 @@ from pathlib import Path
 import time
 import urllib.request
 
-from gpupoor.paths import repo_path
 from gpupoor.subprocess_utils import run_command
+from gpupoor.utils import repo_path
 
 
 def _base_compose() -> Path:
@@ -41,15 +41,23 @@ def _compose_command(*extra_files: Path) -> list[str]:
 
 
 def up(extra_args: list[str] | None = None) -> None:
-    run_command([*_compose_command(), "up", "-d", "--build", *(extra_args or [])], env=_load_hf_token())
+    run_command(
+        [*_compose_command(), "up", "-d", "--build", *(extra_args or [])], env=_load_hf_token()
+    )
 
 
 def cpu(extra_args: list[str] | None = None) -> None:
-    run_command([*_compose_command(_cpu_compose()), "up", "-d", "--build", *(extra_args or [])], env=_load_hf_token())
+    run_command(
+        [*_compose_command(_cpu_compose()), "up", "-d", "--build", *(extra_args or [])],
+        env=_load_hf_token(),
+    )
 
 
 def nvcr(extra_args: list[str] | None = None) -> None:
-    run_command([*_compose_command(_nvcr_compose()), "up", "-d", "--build", *(extra_args or [])], env=_load_hf_token())
+    run_command(
+        [*_compose_command(_nvcr_compose()), "up", "-d", "--build", *(extra_args or [])],
+        env=_load_hf_token(),
+    )
 
 
 def down(extra_args: list[str] | None = None) -> None:

@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import tomllib
 
-from gpupoor.paths import repo_path
+from gpupoor.utils import repo_path
 
 
 DEFAULT_LOCAL_BASE_IMAGE = "nvidia/cuda:12.4.1-runtime-ubuntu22.04"
@@ -204,7 +204,10 @@ def load_remote_settings(config: RemoteConfig | None = None) -> dict[str, str]:
     settings = parse_env_file(repo_path(remote.env_file))
     settings.update(os.environ)
     settings.setdefault("VCR_IMAGE_BASE", remote.vcr_image_base)
-    settings.setdefault("VCR_LOGIN_REGISTRY", remote.vcr_login_registry or settings["VCR_IMAGE_BASE"].rsplit("/", 1)[0])
+    settings.setdefault(
+        "VCR_LOGIN_REGISTRY",
+        remote.vcr_login_registry or settings["VCR_IMAGE_BASE"].rsplit("/", 1)[0],
+    )
     return settings
 
 
@@ -229,7 +232,12 @@ def find_dstack_bin() -> str:
             continue
         if not os.access(candidate, os.X_OK):
             continue
-        result = subprocess.run([candidate, "--version"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        result = subprocess.run(
+            [candidate, "--version"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
         if result.returncode == 0:
             return candidate
     raise RuntimeError("No working dstack CLI found")
@@ -260,7 +268,9 @@ def load_run_config(path: str | Path) -> RunConfig:
     recipe = RecipeConfig(
         kind=_require_str(recipe_data, "kind", default="minimind_pretrain"),
         prepare_data=_require_bool(recipe_data, "prepare_data", default=True),
-        dataset_path=_require_str(recipe_data, "dataset_path", default="data/datasets/pretrain_t2t_mini.jsonl"),
+        dataset_path=_require_str(
+            recipe_data, "dataset_path", default="data/datasets/pretrain_t2t_mini.jsonl"
+        ),
         output_dir=_require_str(recipe_data, "output_dir", default="data/minimind-out"),
         time_cap_seconds=_require_int(recipe_data, "time_cap_seconds", default=600),
     )
@@ -277,16 +287,24 @@ def load_run_config(path: str | Path) -> RunConfig:
     mlflow = MlflowConfig(
         experiment_name=_require_str(mlflow_data, "experiment_name", default="minimind-pretrain"),
         artifact_upload=_require_bool(mlflow_data, "artifact_upload", default=False),
-        tracking_uri=_require_str(mlflow_data, "tracking_uri", default="http://host.docker.internal:5000"),
-        enable_system_metrics_logging=_require_bool(mlflow_data, "enable_system_metrics_logging", default=True),
-        system_metrics_sampling_interval=_require_int(mlflow_data, "system_metrics_sampling_interval", default=5),
+        tracking_uri=_require_str(
+            mlflow_data, "tracking_uri", default="http://host.docker.internal:5000"
+        ),
+        enable_system_metrics_logging=_require_bool(
+            mlflow_data, "enable_system_metrics_logging", default=True
+        ),
+        system_metrics_sampling_interval=_require_int(
+            mlflow_data, "system_metrics_sampling_interval", default=5
+        ),
         system_metrics_samples_before_logging=_require_int(
             mlflow_data,
             "system_metrics_samples_before_logging",
             default=1,
         ),
         http_request_max_retries=_require_int(mlflow_data, "http_request_max_retries", default=7),
-        http_request_timeout_seconds=_require_int(mlflow_data, "http_request_timeout_seconds", default=120),
+        http_request_timeout_seconds=_require_int(
+            mlflow_data, "http_request_timeout_seconds", default=120
+        ),
         start_timeout_seconds=_require_int(mlflow_data, "start_timeout_seconds", default=180),
         start_retry_seconds=_require_int(mlflow_data, "start_retry_seconds", default=5),
     )
@@ -313,14 +331,18 @@ def load_run_config(path: str | Path) -> RunConfig:
             "dstack_server_health_url",
             default=DEFAULT_DSTACK_SERVER_HEALTH_URL,
         ),
-        mlflow_health_url=_require_str(remote_data, "mlflow_health_url", default=DEFAULT_MLFLOW_HEALTH_URL),
+        mlflow_health_url=_require_str(
+            remote_data, "mlflow_health_url", default=DEFAULT_MLFLOW_HEALTH_URL
+        ),
         health_timeout_seconds=_require_int(remote_data, "health_timeout_seconds", default=5),
         dstack_server_start_timeout_seconds=_require_int(
             remote_data,
             "dstack_server_start_timeout_seconds",
             default=30,
         ),
-        run_start_timeout_seconds=_require_int(remote_data, "run_start_timeout_seconds", default=480),
+        run_start_timeout_seconds=_require_int(
+            remote_data, "run_start_timeout_seconds", default=480
+        ),
     )
     return RunConfig(
         name=name,

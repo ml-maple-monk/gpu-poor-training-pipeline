@@ -32,6 +32,27 @@ gpupoor doctor
 gpupoor train examples/tiny_cpu.toml
 ```
 
+## Quality And Tests
+
+Install dev tooling once:
+
+```bash
+python -m pip install -e ".[dev]"
+pre-commit install
+```
+
+Run the standard local gates:
+
+```bash
+make lint
+make test-fast
+make ci-local
+```
+
+PR-required checks are `quality` and `tests`. They are intentionally fast and
+deterministic. Live/container/remote-dependent paths are kept in optional or
+scheduled lanes.
+
 ## Remote Quickstart
 
 Start MLflow locally, then launch the Verda path from the config-driven CLI:

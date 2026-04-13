@@ -60,4 +60,3 @@ def bash_script(
 ) -> subprocess.CompletedProcess[None]:
     """Run a bash helper script."""
     return run_command(["bash", str(script), *args], cwd=cwd, env=env, check=check)
-

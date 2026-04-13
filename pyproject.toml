@@ -12,6 +12,21 @@ license = { text = "Proprietary" }
 authors = [{ name = "Codex" }]
 dependencies = []
 
+[project.optional-dependencies]
+quality = [
+    "ruff>=0.6.0",
+]
+test = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+dev = [
+    "pre-commit>=3.8.0",
+    "ruff>=0.6.0",
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
 [project.scripts]
 gpupoor = "gpupoor.cli:main"
 
@@ -23,4 +38,21 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "training/tests", "infrastructure/dashboard/tests"]
+addopts = "-ra --strict-config --strict-markers"
+markers = [
+    "slow: slow-running tests (excluded from required PR lanes).",
+    "docker: tests requiring local Docker runtime.",
+    "live_dashboard: tests requiring running dashboard/live services.",
+    "remote: tests requiring remote provider capacity or external remote services.",
+]
 
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = [
+    "src/gpupoor",
+    "tests",
+]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

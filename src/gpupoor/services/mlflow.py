@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 import urllib.request
 
-from gpupoor.paths import repo_path
 from gpupoor.subprocess_utils import bash_script, run_command
+from gpupoor.utils import repo_path
 
 
 def _compose_file() -> Path:
@@ -21,7 +21,18 @@ def ensure_network() -> None:
 
 def up(extra_args: list[str] | None = None) -> None:
     ensure_network()
-    run_command(["docker", "compose", "-f", str(_compose_file()), "up", "-d", "--build", *(extra_args or [])])
+    run_command(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(_compose_file()),
+            "up",
+            "-d",
+            "--build",
+            *(extra_args or []),
+        ]
+    )
 
 
 def down(extra_args: list[str] | None = None) -> None:
@@ -29,11 +40,15 @@ def down(extra_args: list[str] | None = None) -> None:
 
 
 def logs(extra_args: list[str] | None = None) -> None:
-    run_command(["docker", "compose", "-f", str(_compose_file()), "logs", "-f", *(extra_args or [])])
+    run_command(
+        ["docker", "compose", "-f", str(_compose_file()), "logs", "-f", *(extra_args or [])]
+    )
 
 
 def tunnel(extra_args: list[str] | None = None) -> None:
-    bash_script(repo_path("infrastructure", "mlflow", "scripts", "run-tunnel.sh"), *(extra_args or []))
+    bash_script(
+        repo_path("infrastructure", "mlflow", "scripts", "run-tunnel.sh"), *(extra_args or [])
+    )
 
 
 def healthcheck(url: str = "http://127.0.0.1:5000/health") -> bool:
@@ -42,4 +57,3 @@ def healthcheck(url: str = "http://127.0.0.1:5000/health") -> bool:
             return response.status == 200
     except Exception:
         return False
-

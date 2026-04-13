@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from gpupoor.config import RunConfig
-from gpupoor.paths import repo_path
 from gpupoor.subprocess_utils import bash_script
+from gpupoor.utils import repo_path
 
 
 def _assert_recipe(config: RunConfig) -> None:
@@ -25,4 +25,3 @@ def ensure_local_dataset(config: RunConfig) -> Path:
             f"{dataset_path} not found and prepare_data=false; run gpupoor data prep or enable prepare_data"
         )
     return dataset_path
-

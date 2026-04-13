@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import subprocess
 import time
 import urllib.request
 
-from gpupoor import maintenance
+from gpupoor import ops
 from gpupoor.config import (
     BackendConfig,
     RunConfig,
@@ -16,8 +17,8 @@ from gpupoor.config import (
     load_remote_settings,
     require_remote_settings,
 )
-from gpupoor.paths import repo_path
 from gpupoor.subprocess_utils import CommandError, bash_script, run_command
+from gpupoor.utils import repo_path
 
 
 def http_ok(url: str, *, timeout_seconds: int = 5) -> bool:
@@ -47,7 +48,9 @@ def ensure_dstack_server(
 
     print("[gpupoor] dstack server not running; starting it in background")
     with log_file.open("ab") as handle:
-        subprocess.Popen([dstack_bin, "server"], stdout=handle, stderr=subprocess.STDOUT, start_new_session=True)
+        subprocess.Popen(
+            [dstack_bin, "server"], stdout=handle, stderr=subprocess.STDOUT, start_new_session=True
+        )
 
     for _ in range(start_timeout_seconds):
         if http_ok(health_url, timeout_seconds=health_timeout_seconds):
@@ -76,7 +79,9 @@ def verify_mlflow(health_url: str, *, timeout_seconds: int) -> None:
         raise RuntimeError(f"MLflow is not responding at {health_url}")
 
 
-def remote_image_tag(backend: BackendConfig, *, skip_build: bool, dry_run: bool, settings: dict[str, str]) -> str:
+def remote_image_tag(
+    backend: BackendConfig, *, skip_build: bool, dry_run: bool, settings: dict[str, str]
+) -> str:
     if dry_run and not skip_build:
         return "dryrun0"
     if skip_build:
@@ -84,17 +89,28 @@ def remote_image_tag(backend: BackendConfig, *, skip_build: bool, dry_run: bool,
     return git_short_sha()
 
 
-def render_task(settings: dict[str, str], image_sha: str) -> Path:
+def task_max_duration(time_cap_seconds: int) -> str:
+    if time_cap_seconds <= 0:
+        raise ValueError("time_cap_seconds must be positive")
+    minutes = max(1, (time_cap_seconds + 59) // 60)
+    return f"{minutes}m"
+
+
+def render_task(settings: dict[str, str], config: RunConfig, image_sha: str) -> Path:
     rendered_task = repo_path(".tmp", "pretrain.task.rendered.yml")
     rendered_task.parent.mkdir(parents=True, exist_ok=True)
     render_env = dict(settings)
     render_env["IMAGE_SHA"] = image_sha
+    render_env["TASK_NAME"] = config.name
+    render_env["TASK_MAX_DURATION"] = task_max_duration(config.recipe.time_cap_seconds)
     bash_script(
         repo_path("dstack", "scripts", "render-pretrain-task.sh"),
         str(rendered_task),
         env=render_env,
     )
     return rendered_task
+
+
 def dstack_latest_run_name(dstack_bin: str) -> str:
     output = subprocess.check_output([dstack_bin, "ps", "--json"], text=True)
     data = json.loads(output)
@@ -126,11 +142,26 @@ def wait_for_run_start(dstack_bin: str, run_name: str, *, max_wait: int = 480) -
     print(f"[gpupoor] Waiting for run '{run_name}' to leave startup states")
     elapsed = 0
     while elapsed < max_wait:
-        _, job_status, termination_reason = dstack_run_status_triplet(dstack_bin, run_name)
-        if job_status == "running":
+        run_status, job_status, termination_reason = dstack_run_status_triplet(dstack_bin, run_name)
+        if run_status == "running" or job_status == "running":
             print(f"[gpupoor] Run '{run_name}' is running")
             return
-        if job_status in {"terminated", "failed", "stopped", "completed"}:
+        if (
+            run_status in {"pending", "submitted"}
+            and termination_reason == "failed_to_start_due_to_no_capacity"
+        ):
+            print(
+                f"[gpupoor] Run '{run_name}' is retrying after a no-capacity offer; waiting for the next submission"
+            )
+            time.sleep(10)
+            elapsed += 10
+            continue
+        if run_status in {"terminated", "failed", "stopped", "completed"} or job_status in {
+            "terminated",
+            "failed",
+            "stopped",
+            "completed",
+        }:
             raise RuntimeError(
                 f"Run '{run_name}' reached terminal job status '{job_status}' "
                 f"before steady-state attach ({termination_reason or 'none'})"
@@ -200,10 +231,12 @@ def launch_remote(
     require_remote_settings(settings)
     dstack_bin = find_dstack_bin()
 
-    maintenance.run_preflight(remote=True, doctor=config.doctor, remote_config=config.remote)
+    ops.run_preflight(remote=True, doctor=config.doctor, remote_config=config.remote)
     if configure_server:
         bash_script(repo_path("dstack", "scripts", "setup-config.sh"))
-    verify_mlflow(config.remote.mlflow_health_url, timeout_seconds=config.remote.health_timeout_seconds)
+    verify_mlflow(
+        config.remote.mlflow_health_url, timeout_seconds=config.remote.health_timeout_seconds
+    )
     ensure_dstack_server(
         dstack_bin,
         health_url=config.remote.dstack_server_health_url,
@@ -229,8 +262,14 @@ def launch_remote(
     else:
         bash_script(repo_path("infrastructure", "mlflow", "scripts", "run-tunnel.sh"))
 
-    image_sha = remote_image_tag(config.backend, skip_build=use_skip_build, dry_run=dry_run, settings=settings)
-    mlflow_url = "https://dry-run-example.trycloudflare.com" if dry_run else repo_path(".cf-tunnel.url").read_text(encoding="utf-8").strip()
+    image_sha = remote_image_tag(
+        config.backend, skip_build=use_skip_build, dry_run=dry_run, settings=settings
+    )
+    mlflow_url = (
+        "https://dry-run-example.trycloudflare.com"
+        if dry_run
+        else repo_path(".cf-tunnel.url").read_text(encoding="utf-8").strip()
+    )
 
     print(f"[gpupoor] Config: {config.source}")
     print(f"[gpupoor] Backend: {config.backend.kind}")
@@ -248,29 +287,48 @@ def launch_remote(
             return
 
         started_tunnel = True
-        rendered_task = render_task(settings, image_sha)
+        rendered_task = render_task(settings, config, image_sha)
         apply_env = {
             "HF_TOKEN": read_required_secret("hf_token"),
             "MLFLOW_TRACKING_URI": mlflow_url,
             "MLFLOW_EXPERIMENT_NAME": config.mlflow.experiment_name,
             "MLFLOW_ARTIFACT_UPLOAD": "1" if config.mlflow.artifact_upload else "0",
-            "MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING": "true" if config.mlflow.enable_system_metrics_logging else "false",
-            "MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL": str(config.mlflow.system_metrics_sampling_interval),
-            "MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING": str(config.mlflow.system_metrics_samples_before_logging),
+            "MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING": "true"
+            if config.mlflow.enable_system_metrics_logging
+            else "false",
+            "MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL": str(
+                config.mlflow.system_metrics_sampling_interval
+            ),
+            "MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING": str(
+                config.mlflow.system_metrics_samples_before_logging
+            ),
             "MLFLOW_HTTP_REQUEST_MAX_RETRIES": str(config.mlflow.http_request_max_retries),
             "MLFLOW_HTTP_REQUEST_TIMEOUT": str(config.mlflow.http_request_timeout_seconds),
             "MLFLOW_START_TIMEOUT_SECONDS": str(config.mlflow.start_timeout_seconds),
             "MLFLOW_START_RETRY_SECONDS": str(config.mlflow.start_retry_seconds),
             "VERDA_PROFILE": "remote",
+            "DSTACK_RUN_NAME": config.name,
+            "OUT_DIR": settings.get("OUT_DIR", "/workspace/out"),
+            "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", "jingyaogong/minimind_dataset"),
+            "HF_DATASET_FILENAME": settings.get(
+                "HF_DATASET_FILENAME", Path(config.recipe.dataset_path).name
+            ),
+            "TIME_CAP_SECONDS": str(config.recipe.time_cap_seconds),
         }
-        result = run_command([dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], env=apply_env, check=False)
+        result = run_command(
+            [dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], env=apply_env, check=False
+        )
         if result.returncode != 0:
-            raise CommandError([dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], result.returncode)
+            raise CommandError(
+                [dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"], result.returncode
+            )
 
         run_name = dstack_latest_run_name(dstack_bin)
         if run_name:
             track_run(run_name)
-            wait_for_run_start(dstack_bin, run_name, max_wait=config.remote.run_start_timeout_seconds)
+            wait_for_run_start(
+                dstack_bin, run_name, max_wait=config.remote.run_start_timeout_seconds
+            )
             launched_remote_run = True
         if use_pull_artifacts:
             print("[gpupoor] WARN: pull-artifacts is still manual on the current dstack CLI")
@@ -282,6 +340,8 @@ def launch_remote(
                 if use_keep_tunnel:
                     print("[gpupoor] Keeping Cloudflare tunnel alive")
                 else:
-                    print("[gpupoor] Keeping Cloudflare tunnel alive until teardown so remote MLflow stays reachable")
+                    print(
+                        "[gpupoor] Keeping Cloudflare tunnel alive until teardown so remote MLflow stays reachable"
+                    )
             else:
                 kill_tunnel(keep_tunnel=False)

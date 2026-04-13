@@ -39,8 +39,8 @@ def test_old_clone_based_training_entrypoints_are_gone():
     assert not (REPO_ROOT / "training" / "run-train.sh").exists()
 
 
-def test_obsolete_top_level_artifacts_are_gone():
-    assert not (REPO_ROOT / "Makefile").exists()
+def test_top_level_artifacts_match_current_guardrail_contract():
+    assert (REPO_ROOT / "Makefile").exists()
     assert not (REPO_ROOT / "PARITY.md").exists()
     assert not (REPO_ROOT / "REPO_REVIEW.md").exists()
     assert not (REPO_ROOT / "PR_DRAFT.md").exists()

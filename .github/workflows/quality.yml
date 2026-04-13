@@ -1,0 +1,36 @@
+name: quality
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install quality dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[quality]"
+
+      - name: Ruff lint
+        run: python -m ruff check src/gpupoor tests
+
+      - name: Ruff format check
+        run: python -m ruff format --check src/gpupoor tests
+
+      - name: Package sanity
+        run: python -m gpupoor --help
