@@ -5,11 +5,18 @@ Provides a minimal trainer-shaped script that reproduces the atomic save
 pattern + SIGTERM handler WITHOUT requiring a real GPU, real dataset, or
 real MLflow. Goal: validate the PATTERN, not full minimind integration.
 """
-import os
-import sys
+
 import textwrap
+from pathlib import Path
+
 import pytest
 
+# training/src/minimind/ is gitignored in this repo (vendored upstream that
+# developers materialize locally). Tests that import files from that tree
+# must gate on MINIMIND_AVAILABLE so CI runners without the checkout skip
+# them cleanly instead of crashing on FileNotFoundError.
+MINIMIND_ROOT = Path(__file__).resolve().parents[1] / "src" / "minimind"
+MINIMIND_AVAILABLE = MINIMIND_ROOT.is_dir()
 
 TRAINER_STUB = textwrap.dedent("""\
     #!/usr/bin/env python3

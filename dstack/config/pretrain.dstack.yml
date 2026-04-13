@@ -61,5 +61,3 @@ retry:
     - no-capacity
     - interruption
   duration: 30m       # max total retry window
-
-

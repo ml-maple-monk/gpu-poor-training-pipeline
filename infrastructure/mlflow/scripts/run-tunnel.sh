@@ -15,8 +15,12 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 TUNNEL_LOG="$REPO_ROOT/.cf-tunnel.log"
 TUNNEL_PID_FILE="$REPO_ROOT/.cf-tunnel.pid"
 TUNNEL_URL_FILE="$REPO_ROOT/.cf-tunnel.url"
-MLFLOW_LOCAL="http://127.0.0.1:5000"
-POLL_TIMEOUT=30
+MLFLOW_LOCAL="${MLFLOW_LOCAL_URL:-http://127.0.0.1:5000}"
+POLL_TIMEOUT="${CF_TUNNEL_URL_POLL_TIMEOUT:-30}"
+MAX_HEALTH_ATTEMPTS="${CF_TUNNEL_HEALTH_MAX_ATTEMPTS:-90}"
+RETRY_ATTEMPTS="${CF_TUNNEL_RETRY_ATTEMPTS:-3}"
+RETRY_BACKOFF_SECONDS="${CF_TUNNEL_RETRY_BACKOFF_SECONDS:-2}"
+STRICT_VALIDATION="${CF_TUNNEL_STRICT_VALIDATION:-0}"
 
 echo "[STEP 3] Starting Cloudflare Quick Tunnel for MLflow..."
 
@@ -36,67 +40,110 @@ if ! curl -fsS "$MLFLOW_LOCAL/health" >/dev/null 2>&1; then
 fi
 echo "[tunnel] MLflow OK"
 
-# Kill any existing cloudflared tunnel from a previous run
-if [ -f "$TUNNEL_PID_FILE" ]; then
-    OLD_PID=$(cat "$TUNNEL_PID_FILE")
-    if kill -0 "$OLD_PID" 2>/dev/null; then
-        echo "[tunnel] Killing existing cloudflared (PID $OLD_PID)"
-        kill "$OLD_PID" 2>/dev/null || true
-    fi
-    rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE"
-fi
-
-# Start cloudflared in background
-rm -f "$TUNNEL_LOG"
-cloudflared tunnel --protocol http2 --url "$MLFLOW_LOCAL" >"$TUNNEL_LOG" 2>&1 &
-CF_PID=$!
-echo "$CF_PID" > "$TUNNEL_PID_FILE"
-echo "[tunnel] cloudflared started (PID $CF_PID), polling log for URL..."
-
-# doc-anchor: cf-tunnel-url-capture
-# Poll log for the tunnel URL (timeout POLL_TIMEOUT seconds)
-ELAPSED=0
-TUNNEL_URL=""
-while [ $ELAPSED -lt $POLL_TIMEOUT ]; do
-    if [ -f "$TUNNEL_LOG" ]; then
-        TUNNEL_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | head -1 || true)
-        if [ -n "$TUNNEL_URL" ]; then
-            break
+stop_tunnel() {
+    if [ -f "$TUNNEL_PID_FILE" ]; then
+        OLD_PID=$(cat "$TUNNEL_PID_FILE")
+        if kill -0 "$OLD_PID" 2>/dev/null; then
+            kill "$OLD_PID" 2>/dev/null || true
         fi
     fi
-    sleep 0.5
-    ELAPSED=$(( ELAPSED + 1 ))
-done
+    rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE"
+}
 
-if [ -z "$TUNNEL_URL" ]; then
-    echo "[tunnel] ERROR: Timed out after ${POLL_TIMEOUT}s waiting for tunnel URL" >&2
-    echo "[tunnel] Check $TUNNEL_LOG for details" >&2
-    kill "$CF_PID" 2>/dev/null || true
-    rm -f "$TUNNEL_PID_FILE"
-    exit 1
-fi
+start_tunnel() {
+    stop_tunnel
+    rm -f "$TUNNEL_LOG"
+    cloudflared tunnel --protocol http2 --url "$MLFLOW_LOCAL" >"$TUNNEL_LOG" 2>&1 &
+    CF_PID=$!
+    echo "$CF_PID" > "$TUNNEL_PID_FILE"
+    echo "[tunnel] cloudflared started (PID $CF_PID), polling log for URL..."
 
-echo "$TUNNEL_URL" > "$TUNNEL_URL_FILE"
-echo "[tunnel] Tunnel URL: $TUNNEL_URL"
+    ELAPSED=0
+    TUNNEL_URL=""
+    # POLL_TIMEOUT is documented in seconds; sleep 1 + ELAPSED+=1 keeps
+    # the budget honest. The earlier sleep 0.5 + ELAPSED+=1 gave only
+    # ~POLL_TIMEOUT/2 seconds while the error message claimed the full
+    # value, making tunnel startup twice as timing-sensitive as config
+    # implied.
+    while [ $ELAPSED -lt $POLL_TIMEOUT ]; do
+        if [ -f "$TUNNEL_LOG" ]; then
+            TUNNEL_URL=$(grep -oP 'https://[a-z0-9-]+\.trycloudflare\.com' "$TUNNEL_LOG" 2>/dev/null | head -1 || true)
+            if [ -n "$TUNNEL_URL" ]; then
+                break
+            fi
+        fi
+        sleep 1
+        ELAPSED=$(( ELAPSED + 1 ))
+    done
 
-# Validate tunnel is reachable
-echo "[tunnel] Validating tunnel health endpoint..."
-MAX_HEALTH_ATTEMPTS=10
-HEALTH_OK=0
-for i in $(seq 1 $MAX_HEALTH_ATTEMPTS); do
-    if curl -fsS "$TUNNEL_URL/health" >/dev/null 2>&1; then
-        HEALTH_OK=1
+    if [ -z "$TUNNEL_URL" ]; then
+        echo "[tunnel] ERROR: Timed out after ${POLL_TIMEOUT}s waiting for tunnel URL" >&2
+        echo "[tunnel] Check $TUNNEL_LOG for details" >&2
+        stop_tunnel
+        return 1
+    fi
+
+    echo "$TUNNEL_URL" > "$TUNNEL_URL_FILE"
+    echo "[tunnel] Tunnel URL: $TUNNEL_URL"
+    return 0
+}
+
+validate_tunnel() {
+    echo "[tunnel] Validating tunnel health endpoint..."
+    for i in $(seq 1 $MAX_HEALTH_ATTEMPTS); do
+        if curl -fsS "$TUNNEL_URL/health" >/dev/null 2>&1; then
+            echo "[tunnel] Tunnel validated — MLflow reachable at $TUNNEL_URL"
+            return 0
+        fi
+        if [ $(( i % 5 )) -eq 0 ]; then
+            echo "[tunnel] Waiting for public tunnel readiness... (${i}/${MAX_HEALTH_ATTEMPTS})"
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+tunnel_pid_is_live() {
+    if [ ! -f "$TUNNEL_PID_FILE" ]; then
+        return 1
+    fi
+    LIVE_PID=$(cat "$TUNNEL_PID_FILE")
+    kill -0 "$LIVE_PID" 2>/dev/null
+}
+
+ATTEMPT=1
+while [ $ATTEMPT -le $RETRY_ATTEMPTS ]; do
+    echo "[tunnel] Quick Tunnel attempt ${ATTEMPT}/${RETRY_ATTEMPTS}"
+    if ! start_tunnel; then
+        ATTEMPT=$(( ATTEMPT + 1 ))
+        sleep "$RETRY_BACKOFF_SECONDS"
+        continue
+    fi
+
+    if validate_tunnel; then
+        echo "[STEP 3] CF Quick Tunnel ready: $TUNNEL_URL"
+        exit 0
+    fi
+
+    echo "[tunnel] WARNING: Tunnel URL $TUNNEL_URL/health never became reachable" >&2
+    if [ $ATTEMPT -ge $RETRY_ATTEMPTS ]; then
         break
     fi
-    sleep 1
+    stop_tunnel
+    if [ $ATTEMPT -lt $RETRY_ATTEMPTS ]; then
+        echo "[tunnel] Retrying with a fresh Quick Tunnel allocation..."
+        sleep "$RETRY_BACKOFF_SECONDS"
+    fi
+    ATTEMPT=$(( ATTEMPT + 1 ))
 done
 
-if [ "$HEALTH_OK" -ne 1 ]; then
-    echo "[tunnel] ERROR: Tunnel URL $TUNNEL_URL/health not reachable after $MAX_HEALTH_ATTEMPTS attempts" >&2
-    kill "$CF_PID" 2>/dev/null || true
-    rm -f "$TUNNEL_PID_FILE" "$TUNNEL_URL_FILE"
-    exit 1
+if [ "$STRICT_VALIDATION" != "1" ] && [ -f "$TUNNEL_URL_FILE" ] && tunnel_pid_is_live; then
+    echo "[tunnel] WARNING: Proceeding without public /health validation because local DNS/edge propagation never completed" >&2
+    echo "[tunnel] WARNING: Tunnel URL retained for downstream remote MLflow verification: $TUNNEL_URL" >&2
+    echo "[STEP 3] CF Quick Tunnel URL emitted (validation deferred): $TUNNEL_URL"
+    exit 0
 fi
 
-echo "[tunnel] Tunnel validated — MLflow reachable at $TUNNEL_URL"
-echo "[STEP 3] CF Quick Tunnel ready: $TUNNEL_URL"
+stop_tunnel
+echo "[tunnel] ERROR: Failed to allocate a reachable Quick Tunnel after ${RETRY_ATTEMPTS} attempts" >&2
+exit 1

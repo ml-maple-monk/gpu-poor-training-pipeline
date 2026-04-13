@@ -1,0 +1,19 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-merge-conflict
+      - id: check-yaml
+        args: [--unsafe]
+      - id: check-toml
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.10
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^(src/gpupoor/|tests/|training/src/minimind/|training/tests/|infrastructure/dashboard/src/|infrastructure/dashboard/tests/)
+      - id: ruff-format
+        files: ^(src/gpupoor/|tests/|training/src/minimind/|training/tests/|infrastructure/dashboard/src/|infrastructure/dashboard/tests/)

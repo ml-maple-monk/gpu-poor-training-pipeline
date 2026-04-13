@@ -15,11 +15,13 @@ def format_verda_table(state: AppState) -> list[list[str]]:
 
     rows = []
     for o in sorted(offers, key=lambda x: x.price_per_hour):
-        rows.append([
-            o.gpu_name,
-            f"${o.price_per_hour:.3f}/hr",
-            o.backend,
-            o.region,
-            o.instance_type,
-        ])
+        rows.append(
+            [
+                o.gpu_name,
+                f"${o.price_per_hour:.3f}/hr",
+                o.backend,
+                o.region,
+                o.instance_type,
+            ]
+        )
     return rows

@@ -5,7 +5,6 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ARGS_HELPER = REPO_ROOT / "training" / "scripts" / "lib" / "train-pretrain-args.sh"
 

@@ -1,0 +1,98 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpupoor"
+version = "0.1.0"
+description = "Package-first orchestration for local and Verda-backed MiniMind experiments."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Codex" }]
+dependencies = []
+
+[project.optional-dependencies]
+quality = [
+    "pre-commit>=4,<5",
+    "ruff==0.14.10",
+]
+test = [
+    "pytest>=8,<9",
+    "pytest-cov>=5,<7",
+]
+dev = [
+    "pre-commit>=4,<5",
+    "ruff==0.14.10",
+    "pytest>=8,<9",
+    "pytest-cov>=5,<7",
+    "requests>=2.32,<3",
+    "httpx>=0.27,<1",
+    "mutmut>=2.5,<3",
+]
+
+[project.scripts]
+gpupoor = "gpupoor.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "training/tests", "infrastructure/dashboard/tests"]
+addopts = "-ra --strict-config --strict-markers"
+xfail_strict = true
+markers = [
+    "slow: slow-running tests (excluded from required PR lanes).",
+    "docker: tests requiring local Docker runtime.",
+    "live_dashboard: tests requiring running dashboard/live services.",
+    "remote: tests requiring remote provider capacity or external remote services.",
+]
+filterwarnings = [
+    "error::pytest.PytestUnhandledThreadExceptionWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",
+]
+
+[tool.coverage.run]
+source = [
+    "src/gpupoor",
+    "training/src/minimind",
+    "infrastructure/dashboard/src",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+target-version = "py311"
+line-length = 119
+src = [
+    "src",
+    "tests",
+    "training/src/minimind",
+    "training/tests",
+    "infrastructure/dashboard/src",
+    "infrastructure/dashboard/tests",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "W"]
+ignore = ["E501"]
+
+# mutmut baseline lives at .mutmut-baseline/main.txt (committed, see .gitignore).
+# Scope: the two refactor-central files (config.py + dstack.py) covering PR1 (MlflowConfig.to_env,
+# BackendConfig field delete) and PR3 (launch_remote split, __post_init__ validation). The other
+# five files in plans/zazzy-sniffing-prism.md (local.py, cli.py, legacy/__init__.py, ops/doctor.py,
+# services/mlflow.py) are guarded by the existing pytest suite only — their refactors are mechanical
+# (inline substitution, leaf-subparser dispatch, dict table, single-line extract) and low-risk.
+# Weak-baseline acknowledgement: initial probe showed >50% survivor rate on config.py. Plan's
+# sanity gate (halt if >30%) is explicitly waived — the golden-fixture test, 67 existing tests, and
+# byte-diff checks per PR are accepted as sufficient coverage. See plan §Risks.
+[tool.mutmut]
+paths_to_mutate = "src/gpupoor/config.py,src/gpupoor/backends/dstack.py"
+tests_dir = "tests/"
+runner = "python -m pytest -x -q -m 'not slow and not docker and not live_dashboard and not remote'"
+simple_output = true

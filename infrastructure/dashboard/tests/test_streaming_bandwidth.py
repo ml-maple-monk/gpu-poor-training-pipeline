@@ -11,9 +11,8 @@ Unit-level tests here verify the ring buffer delta semantics.
 
 from __future__ import annotations
 
+import importlib.util
 import sys
-import time
-import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -90,36 +89,32 @@ def test_bandwidth_bounded_by_delta():
     payload_bytes = sum(len(line) for line in new_lines)
 
     # Should be ~800 bytes, not 40KB (full ring)
-    assert payload_bytes <= 1000, (
-        f"Delta payload {payload_bytes}B exceeds expected bound for 10 lines"
-    )
+    assert payload_bytes <= 1000, f"Delta payload {payload_bytes}B exceeds expected bound for 10 lines"
     assert len(new_lines) == 10
 
 
 def test_queue_cap_constant():
     """Verify GRADIO_QUEUE_MAX_SIZE is set to 5 in config."""
     from src.config import GRADIO_QUEUE_MAX_SIZE
-    assert GRADIO_QUEUE_MAX_SIZE == 5, (
-        f"Queue max size must be 5, got {GRADIO_QUEUE_MAX_SIZE}"
-    )
+
+    assert GRADIO_QUEUE_MAX_SIZE == 5, f"Queue max size must be 5, got {GRADIO_QUEUE_MAX_SIZE}"
 
 
 @pytest.mark.xfail(
-    reason="Full bandwidth test requires running Gradio + gradio_client; "
-    "queue(max_size=5) cap is hard-asserted above",
+    reason="Full bandwidth test requires running Gradio + gradio_client; queue(max_size=5) cap is hard-asserted above",
     strict=False,
 )
+@pytest.mark.live_dashboard
 def test_live_bandwidth_under_50kbs():
     """Live test: 5 sessions, 500-line ring, bandwidth <= 50 KB/s each.
 
     Requires running dashboard at localhost:7860 and gradio_client installed.
     """
-    try:
-        from gradio_client import Client
-    except ImportError:
+    if importlib.util.find_spec("gradio_client") is None:
         pytest.skip("gradio_client not installed")
 
     import socket
+
     try:
         socket.connect(("localhost", 7860))
     except Exception:

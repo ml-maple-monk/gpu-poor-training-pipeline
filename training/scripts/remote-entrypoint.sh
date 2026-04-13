@@ -17,6 +17,7 @@ DATASET_MIN_BYTES=524288000  # 500 MB loose lower bound
 OUT_DIR="${OUT_DIR:-/workspace/out}"
 HF_DATASET_REPO="${HF_DATASET_REPO:-jingyaogong/minimind_dataset}"
 HF_DATASET_FILENAME="${HF_DATASET_FILENAME:-pretrain_t2t_mini.jsonl}"
+TIME_CAP_SECONDS="${TIME_CAP_SECONDS:-600}"
 TRAIN_ARGS_FILE="/opt/training/scripts/lib/train-pretrain-args.sh"
 HF_BOOTSTRAP_HELPER="/opt/training/scripts/lib/hf-dataset-bootstrap.sh"
 
@@ -47,6 +48,7 @@ echo "  DSTACK_RUN_NAME          = ${DSTACK_RUN_NAME:-<not set>}"
 echo "  HF_TOKEN                 = ${HF_TOKEN:+set (${#HF_TOKEN} chars)}"
 echo "  DATA_DIR                 = $DATA_DIR"
 echo "  OUT_DIR                  = $OUT_DIR"
+echo "  TIME_CAP_SECONDS         = $TIME_CAP_SECONDS"
 echo "  Hostname                 = $(hostname)"
 echo "  Date UTC                 = $(date -u -Iseconds)"
 python3 -c "import torch; print(f'  torch={torch.__version__}  cuda={torch.cuda.is_available()}  device={torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"cpu\"}')" || true
@@ -77,5 +79,18 @@ echo "[remote-entrypoint] Starting train_pretrain.py ..."
 cd /opt/training/minimind/trainer
 minimind_train_pretrain_args "$DATASET_FILE" "$OUT_DIR"
 
-exec python train_pretrain.py \
-    "${MINIMIND_TRAIN_PRETRAIN_ARGS[@]}"
+set +e
+timeout --signal=SIGTERM --kill-after=30 "${TIME_CAP_SECONDS}" \
+    python train_pretrain.py \
+        "${MINIMIND_TRAIN_PRETRAIN_ARGS[@]}"
+RC=$?
+set -e
+
+echo "[remote-entrypoint] End UTC: $(date -u -Iseconds)"
+echo "[remote-entrypoint] Training exit code: $RC  (124 = reached ${TIME_CAP_SECONDS}s cap)"
+# 124 = timeout's SIGTERM cap (expected end of the capped run).
+# 137 = SIGKILL (OOM, cgroup kill, external kill); propagate as failure.
+if [ "$RC" -eq 124 ]; then
+    exit 0
+fi
+exit "$RC"

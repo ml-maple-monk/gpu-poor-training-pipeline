@@ -1,0 +1,18 @@
+PREFLIGHT WARN: jq not found — python3 fallback will be used for JSON parsing (safe, but slower)
+PREFLIGHT WARN: gh_token is not used by the default remote path anymore; GHCR is optional fallback only
+[STEP 4] Configuring dstack server with Verda backend...
+[dstack-setup] Written: <HOME>/.dstack/server/config.yml (mode 600)
+[STEP 4] dstack server config ready
+Preflight OK
+Remote preflight OK (VCR_IMAGE_BASE=vccr.io/f53909d3-a071-4826-8635-a62417ffc867/verda-minimind)
+[gpupoor] $ bash <REPO_ROOT>/dstack/scripts/setup-config.sh
+[gpupoor] dstack server already running
+[DRY-RUN] Would build and push the remote image
+[DRY-RUN] Would start the MLflow Cloudflare tunnel
+[gpupoor] Config: <REPO_ROOT>/examples/verda_remote.toml
+[gpupoor] Backend: dstack
+[gpupoor] MLFLOW_URL=https://dry-run-example.trycloudflare.com
+[gpupoor] IMAGE_SHA=dryrun0
+[gpupoor] VCR_IMAGE_BASE=vccr.io/f53909d3-a071-4826-8635-a62417ffc867/verda-minimind
+[DRY-RUN] Would render task with IMAGE_SHA=dryrun0
+[DRY-RUN] Would call dstack apply with HF_TOKEN and MLflow env

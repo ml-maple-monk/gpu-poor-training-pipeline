@@ -2,8 +2,8 @@
 set -uo pipefail
 
 SOURCE_ROOT=/workspace/minimind
-DATASET=/data/datasets/pretrain_t2t_mini.jsonl
-OUT=/data/minimind-out
+DATASET=${DATASET_PATH:-/data/datasets/pretrain_t2t_mini.jsonl}
+OUT=${OUTPUT_DIR:-/data/minimind-out}
 TIME_CAP_SECONDS=${TIME_CAP_SECONDS:-600}
 TRAIN_ARGS_FILE=/workspace/train-pretrain-args.sh
 
@@ -44,6 +44,7 @@ echo "============================================="
 echo "End UTC: $(date -u -Iseconds)"
 echo "Training exit code: $RC  (124 = reached ${TIME_CAP_SECONDS}s cap — expected SUCCESS for this run)"
 ls -la "$OUT/" 2>/dev/null || echo "(no checkpoints written)"
-# treat timeout (124) as success for the 10-min simulation
-if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then exit 0; fi
+# 124 = timeout's SIGTERM cap (expected end of the simulation).
+# 137 = SIGKILL (OOM, cgroup kill, external kill); propagate as failure.
+if [ "$RC" -eq 124 ]; then exit 0; fi
 exit "$RC"

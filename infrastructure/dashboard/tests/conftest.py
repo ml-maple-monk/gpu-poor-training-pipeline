@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import sys
 import os
+import sys
 
 # Ensure the moved infrastructure dashboard src/ tree is importable.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
-from src.state import reset_state, AppState
+from src.state import AppState, reset_state
 
 
 @pytest.fixture

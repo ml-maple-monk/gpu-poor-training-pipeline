@@ -44,6 +44,7 @@ This file is intentionally short and path-accurate for the current repo layout.
 
 - MLflow stack: `./infrastructure/mlflow/start.sh up`
 - Tunnel bootstrap: `./infrastructure/mlflow/start.sh tunnel`
+- Successful remote launches intentionally keep the tunnel alive until teardown so the worker can keep talking to MLflow.
 - Anchored tunnel capture path: `doc-anchor: cf-tunnel-url-capture`
 
 ### SIGTERM and checkpoint safety
@@ -54,8 +55,8 @@ This file is intentionally short and path-accurate for the current repo layout.
 ## Validation Commands
 
 ```bash
-bash scripts/preflight.sh
-bash scripts/doc-anchor-check.sh
+gpupoor doctor
+gpupoor check-anchors
 python3 -m pytest infrastructure/dashboard/tests -q
 python3 -m pytest training/tests -q
 ./run.sh remote --dry-run --skip-build

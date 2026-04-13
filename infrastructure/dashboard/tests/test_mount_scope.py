@@ -26,10 +26,7 @@ CONTAINER_NAME = "verda-dashboard-gradio"
 def _docker_inspect():
     """Return parsed docker inspect output, or None if container not running."""
     try:
-        result = subprocess.run(
-            ["docker", "inspect", CONTAINER_NAME],
-            capture_output=True, text=True, timeout=5
-        )
+        result = subprocess.run(["docker", "inspect", CONTAINER_NAME], capture_output=True, text=True, timeout=5)
         if result.returncode != 0:
             return None
         return json.loads(result.stdout)
@@ -46,25 +43,23 @@ def _container_running():
     name = data[0].get("Name", "")
     host_config = data[0].get("HostConfig", {})
     # Must be our dashboard: running, correct name, AND ReadonlyRootfs (our marker)
-    return (
-        state.get("Running", False)
-        and CONTAINER_NAME in name
-        and host_config.get("ReadonlyRootfs") is True
-    )
+    return state.get("Running", False) and CONTAINER_NAME in name and host_config.get("ReadonlyRootfs") is True
 
 
 @pytest.mark.skipif(not _container_running(), reason="verda-dashboard container not running")
+@pytest.mark.docker
+@pytest.mark.live_dashboard
 def test_readonly_rootfs():
     """Container must have ReadonlyRootfs: true."""
     data = _docker_inspect()
     assert data is not None
     host_config = data[0].get("HostConfig", {})
-    assert host_config.get("ReadonlyRootfs") is True, (
-        "Container must have ReadonlyRootfs: true"
-    )
+    assert host_config.get("ReadonlyRootfs") is True, "Container must have ReadonlyRootfs: true"
 
 
 @pytest.mark.skipif(not _container_running(), reason="verda-dashboard container not running")
+@pytest.mark.docker
+@pytest.mark.live_dashboard
 def test_tmpfs_mounts_present():
     """Container must have /tmp, /tmp/.cache, /tmp/mpl tmpfs mounts."""
     data = _docker_inspect()
@@ -76,6 +71,8 @@ def test_tmpfs_mounts_present():
 
 
 @pytest.mark.skipif(not _container_running(), reason="verda-dashboard container not running")
+@pytest.mark.docker
+@pytest.mark.live_dashboard
 def test_no_dstack_home_mount_in_c22():
     """In C2.2 path: no ~/.dstack directory mount on the container."""
     data = _docker_inspect()
@@ -85,9 +82,7 @@ def test_no_dstack_home_mount_in_c22():
     dstack_dir = os.path.join(home, ".dstack")
 
     dstack_mounts = [
-        m for m in mounts
-        if m.get("Source", "") == dstack_dir
-        or m.get("Source", "").startswith(dstack_dir + os.sep)
+        m for m in mounts if m.get("Source", "") == dstack_dir or m.get("Source", "").startswith(dstack_dir + os.sep)
     ]
     # If C2.2 is active, there should be no dstack mounts
     # This test is informational if C2.1 is active
@@ -96,12 +91,13 @@ def test_no_dstack_home_mount_in_c22():
         for m in dstack_mounts:
             source = m.get("Source", "")
             assert source.endswith("config.yml") or "/projects/" in source, (
-                f"Overly broad dstack mount: {source} "
-                "(expected config.yml or a named subtree)"
+                f"Overly broad dstack mount: {source} (expected config.yml or a named subtree)"
             )
 
 
 @pytest.mark.skipif(not _container_running(), reason="verda-dashboard container not running")
+@pytest.mark.docker
+@pytest.mark.live_dashboard
 def test_whitelisted_mounts_only():
     """Only whitelisted mount sources are present."""
     data = _docker_inspect()
@@ -112,7 +108,7 @@ def test_whitelisted_mounts_only():
     home = str(Path.home())
     allowed_prefixes = (
         "/var/run/docker.sock",
-        "/usr/bin/docker",           # host docker CLI binary (read-only)
+        "/usr/bin/docker",  # host docker CLI binary (read-only)
         os.path.join(home, ".dstack-cli-venv"),
         os.path.join(home, ".local", "share", "uv", "python"),
         os.path.join(repo_root, "artifacts-pull"),

@@ -25,5 +25,10 @@ data/*
 *.pyc
 __pycache__/
 .pytest_cache/
+.artifacts/
 .omx/
 dstack/.*rendered*.yml
+*.egg-info/
+.mutmut-cache
+.mutmut-baseline/*.txt
+!.mutmut-baseline/main.txt

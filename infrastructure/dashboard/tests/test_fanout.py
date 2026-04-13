@@ -10,13 +10,11 @@ import sys
 import threading
 import time
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import pytest
-from src.state import reset_state
 from src.collector_workers import CollectorWorker
+from src.state import reset_state
 
 
 def test_collector_worker_tick_count():
@@ -72,9 +70,7 @@ def test_multiple_readers_no_extra_collections():
 
     # But collect_calls is O(1) per cadence, not O(sessions)
     # At 0.05s cadence over 0.3s ≈ 6 ticks — not 500
-    assert collect_calls[0] < 20, (
-        f"Expected O(1) collection ticks, got {collect_calls[0]}"
-    )
+    assert collect_calls[0] < 20, f"Expected O(1) collection ticks, got {collect_calls[0]}"
 
 
 def test_collector_crash_isolates():

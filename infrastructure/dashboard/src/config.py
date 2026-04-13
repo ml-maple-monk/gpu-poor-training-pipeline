@@ -15,9 +15,7 @@ MLFLOW_URL: str = os.environ.get("MLFLOW_URL", "http://localhost:5000")
 TRAINER_CONTAINER: str = os.environ.get("TRAINER_CONTAINER", "minimind-trainer")
 
 # CF tunnel file path (mounted at /tunnel in container)
-CF_TUNNEL_URL_FILE: str = os.environ.get(
-    "CF_TUNNEL_URL_FILE", "/tunnel/.cf-tunnel.url"
-)
+CF_TUNNEL_URL_FILE: str = os.environ.get("CF_TUNNEL_URL_FILE", "/tunnel/.cf-tunnel.url")
 
 # Log ring size
 LOG_RING_SIZE: int = int(os.environ.get("LOG_RING_SIZE", "500"))

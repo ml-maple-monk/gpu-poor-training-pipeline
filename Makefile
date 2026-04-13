@@ -1,51 +1,77 @@
-.PHONY: preflight env build run cpu nvcr health logs shell push smoke clean
+PYTHON ?= python3
+PYTEST ?= $(PYTHON) -m pytest
 
-APP_PORT ?= 8000
-TAG := $(shell git rev-parse --short HEAD 2>/dev/null)
+# training/src/minimind/ is a gitignored vendor tree; drop it from lint/format
+# when the checkout doesn't materialize it (e.g. in CI).
+PY_DIRS := $(wildcard src/gpupoor tests training/src/minimind training/tests infrastructure/dashboard/src infrastructure/dashboard/tests)
+REQUIRED_TEST_DIRS := tests training/tests infrastructure/dashboard/tests
+FAST_MARKERS := not live_dashboard and not docker and not remote and not slow
+ARTIFACT_DIR := .artifacts
+JUNIT_XML := $(ARTIFACT_DIR)/junit.xml
+COVERAGE_XML := $(ARTIFACT_DIR)/coverage.xml
+REQUIRED_TEST_COMMAND = PYTHONHASHSEED=0 TZ=UTC $(PYTEST) $(REQUIRED_TEST_DIRS) -m "$(FAST_MARKERS)" --strict-config --strict-markers --junitxml=$(JUNIT_XML) --cov=src/gpupoor --cov=training/src/minimind --cov=infrastructure/dashboard/src --cov-report=xml:$(COVERAGE_XML) --cov-report=term-missing:skip-covered
 
-preflight:
-	./scripts/preflight.sh
+MUTANT_PATHS ?=
+MUTANT_BASELINE_DIR := .mutmut-baseline
+MUTANT_BASELINE_FILE := $(MUTANT_BASELINE_DIR)/main.txt
 
-env:
-	./scripts/parse-secrets.sh
+.PHONY: install-dev format format-check lint lint-fix test test-fast test-integration test-live ci-local mutants mutants-report mutants-baseline
 
-build: preflight
-	@if [ -z "$(TAG)" ]; then echo "ERROR: git HEAD not found — run git init and commit first" >&2; exit 1; fi
-ifndef ALLOW_DIRTY
-	@git diff-index --quiet HEAD -- || (echo "ERROR: dirty tree — commit or set ALLOW_DIRTY=1" >&2; exit 1)
-endif
-	docker build --build-arg BASE_IMAGE=$${BASE_IMAGE:-nvidia/cuda:12.4.1-runtime-ubuntu22.04} \
-		-f infrastructure/local-emulator/docker/Dockerfile -t verda-local:$(TAG) infrastructure/local-emulator
+install-dev:
+	$(PYTHON) -m pip install --upgrade pip
+	$(PYTHON) -m pip install -e ".[dev]"
+	$(PYTHON) -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.10.0+cpu
 
-run: preflight
-	./infrastructure/local-emulator/start.sh up
-	$(MAKE) health
+format:
+	$(PYTHON) -m ruff format $(PY_DIRS)
 
-cpu: preflight
-	./infrastructure/local-emulator/start.sh cpu
-	@docker compose -f infrastructure/local-emulator/compose/docker-compose.yml -f infrastructure/local-emulator/compose/docker-compose.cpu.yml config | grep -q 'nvidia' \
-		&& (echo "CPU override failed — GPU block still present" >&2; exit 1) || true
+format-check:
+	$(PYTHON) -m ruff format --check $(PY_DIRS)
 
-nvcr:
-	./infrastructure/local-emulator/start.sh nvcr
+lint:
+	$(PYTHON) -m ruff check $(PY_DIRS)
 
-health:
-	@./infrastructure/local-emulator/start.sh health
+lint-fix:
+	$(PYTHON) -m ruff check --fix $(PY_DIRS)
 
-logs:
-	./infrastructure/local-emulator/start.sh logs
+test:
+	$(PYTEST) tests training/tests infrastructure/dashboard/tests
 
-shell:
-	./infrastructure/local-emulator/start.sh shell
+test-fast:
+	mkdir -p $(ARTIFACT_DIR)
+	$(REQUIRED_TEST_COMMAND)
 
-push:
-	@if [ -z "$(TAG)" ]; then echo "ERROR: TAG is empty" >&2; exit 1; fi
-	@echo "$(TAG)" | grep -qE '^[0-9a-f]{7,}$$' || (echo "ERROR: TAG '$(TAG)' is not a git short SHA" >&2; exit 1)
-	docker push verda-local:$(TAG)
+test-integration:
+	$(PYTEST) training/tests infrastructure/dashboard/tests \
+		-m "not live_dashboard and not docker and not remote"
 
-smoke:
-	./scripts/smoke.sh
+test-live:
+	$(PYTEST) infrastructure/dashboard/tests \
+		-m "live_dashboard or docker or remote or slow" \
+		--strict-config \
+		--strict-markers \
+		-ra
 
-clean:
-	./infrastructure/local-emulator/start.sh down
-	find data/ -mindepth 1 -not -name '.placeholder' -delete
+ci-local:
+	$(MAKE) format-check
+	$(MAKE) lint
+	$(MAKE) test-fast
+	$(PYTHON) -m gpupoor --help
+
+mutants:
+	@mkdir -p $(MUTANT_BASELINE_DIR)
+	@if [ -n "$(MUTANT_PATHS)" ]; then \
+		$(PYTHON) -m mutmut run --paths-to-mutate "$(MUTANT_PATHS)"; \
+	else \
+		$(PYTHON) -m mutmut run; \
+	fi
+
+mutants-report:
+	@mkdir -p $(MUTANT_BASELINE_DIR)
+	$(PYTHON) -m mutmut results
+
+mutants-baseline:
+	@mkdir -p $(MUTANT_BASELINE_DIR)
+	$(PYTHON) -m mutmut run
+	$(PYTHON) -m mutmut results > $(MUTANT_BASELINE_FILE)
+	@echo "Baseline written to $(MUTANT_BASELINE_FILE)"

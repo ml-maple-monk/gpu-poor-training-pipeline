@@ -7,15 +7,15 @@ Returns the chosen path so the rest of the app can adapt.
 from __future__ import annotations
 
 import logging
-from typing import Literal
-
 import os
+from typing import Literal
 
 from .safe_exec import safe_dstack_rest
 
 log = logging.getLogger(__name__)
 
 AccessPath = Literal["C2.2", "C2.1a", "C2.1b", "FAILED"]
+
 
 # Read at call time (not import time) so tests can monkeypatch os.environ
 def _token() -> str:
@@ -44,6 +44,7 @@ def _probe_rest() -> bool:
 def _probe_dstack_cli() -> bool:
     """Try 'dstack ps' in a subprocess — returns True if exit 0."""
     import subprocess
+
     try:
         result = subprocess.run(
             ["dstack", "ps"],

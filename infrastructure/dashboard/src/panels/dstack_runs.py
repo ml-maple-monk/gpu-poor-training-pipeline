@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import time
-from typing import Generator
+from collections.abc import Generator
 
 from ..log_tailer import LogTailer
-from ..state import AppState, DstackRun
+from ..state import AppState
 
 
 def format_dstack_table(state: AppState) -> list[list[str]]:
@@ -19,14 +19,16 @@ def format_dstack_table(state: AppState) -> list[list[str]]:
 
     rows = []
     for r in runs:
-        rows.append([
-            r.run_name,
-            r.status,
-            r.backend,
-            r.instance_type,
-            r.region,
-            f"${r.cost_per_hour:.3f}/hr" if r.cost_per_hour else "N/A",
-        ])
+        rows.append(
+            [
+                r.run_name,
+                r.status,
+                r.backend,
+                r.instance_type,
+                r.region,
+                f"${r.cost_per_hour:.3f}/hr" if r.cost_per_hour else "N/A",
+            ]
+        )
     return rows
 
 

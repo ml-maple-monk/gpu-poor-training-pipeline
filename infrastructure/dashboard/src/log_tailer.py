@@ -12,7 +12,7 @@ import signal
 import subprocess
 import threading
 import time
-from typing import Literal, Optional
+from typing import Literal
 
 from .collectors.dstack_logs import stream_dstack_logs
 from .redact import redact
@@ -68,7 +68,7 @@ class LogTailer:
         self._httpx_cm = None
         self._httpx_resp = None
 
-        self._thread: Optional[threading.Thread] = None
+        self._thread: threading.Thread | None = None
         self._running = False
 
     # ── Public API ──────────────────────────────────────────────────────────────
@@ -155,8 +155,7 @@ class LogTailer:
                     _, cur = self.ring.snapshot()
                     if cur != last_missing_notice_seq:
                         self.ring.append(
-                            f"[remote] streaming dstack logs for run '{remote_run}' "
-                            f"(local container '{target}' idle)"
+                            f"[remote] streaming dstack logs for run '{remote_run}' (local container '{target}' idle)"
                         )
                         _, last_missing_notice_seq = self.ring.snapshot()
                     try:

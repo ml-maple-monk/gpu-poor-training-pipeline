@@ -1,0 +1,29 @@
+name = "verda-remote"
+
+[recipe]
+kind = "minimind_pretrain"
+prepare_data = false
+dataset_path = "data/datasets/pretrain_t2t_mini.jsonl"
+output_dir = "data/minimind-out"
+time_cap_seconds = 600
+
+[backend]
+kind = "dstack"
+skip_build = false
+
+[mlflow]
+experiment_name = "minimind-pretrain-remote"
+artifact_upload = false
+
+[doctor]
+skip_preflight = false
+max_clock_skew_seconds = 5
+
+[remote]
+env_file = ".env.remote"
+vcr_image_base = "vccr.io/f53909d3-a071-4826-8635-a62417ffc867/verda-minimind"
+dstack_server_health_url = "http://127.0.0.1:3000/"
+mlflow_health_url = "http://127.0.0.1:5000/health"
+health_timeout_seconds = 5
+dstack_server_start_timeout_seconds = 30
+run_start_timeout_seconds = 480
