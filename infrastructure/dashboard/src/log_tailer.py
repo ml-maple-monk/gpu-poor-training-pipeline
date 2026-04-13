@@ -15,6 +15,7 @@ import time
 from typing import Literal
 
 from .collectors.dstack_logs import stream_dstack_logs
+from .dstack_project import infer_dstack_project
 from .redact import redact
 from .ring_buffer import RingBuffer
 from .safe_exec import safe_docker
@@ -30,18 +31,21 @@ def _safe_dstack_cli(argv: list[str]) -> subprocess.Popen:
     """Spawn dstack CLI with argv[0] in a whitelist of read-only verbs."""
     if not argv or argv[0] not in _ALLOWED_DSTACK_CLI_VERBS:
         raise ValueError(f"dstack CLI verb {argv[:1]!r} not in whitelist")
+    env = {
+        **os.environ,
+        "DSTACK_SERVER": os.environ.get("DSTACK_SERVER", "http://host.docker.internal:3000"),
+        "DSTACK_TOKEN": os.environ.get("DSTACK_TOKEN", ""),
+    }
+    project = infer_dstack_project()
+    if project:
+        env["DSTACK_PROJECT"] = project
     return subprocess.Popen(
         [_DSTACK_CLI] + argv,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
-        env={
-            **os.environ,
-            "DSTACK_PROJECT": os.environ.get("DSTACK_PROJECT", "main"),
-            "DSTACK_SERVER": os.environ.get("DSTACK_SERVER", "http://host.docker.internal:3000"),
-            "DSTACK_TOKEN": os.environ.get("DSTACK_TOKEN", ""),
-        },
+        env=env,
     )
 
 

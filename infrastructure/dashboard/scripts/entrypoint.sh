@@ -7,16 +7,17 @@ set -euo pipefail
 # Using http://host.docker.internal:3000 so the CLI inside the container
 # can reach the dstack server running on the WSL2 host.
 if [ -n "${DSTACK_TOKEN:-}" ] && [ -n "${DSTACK_SERVER:-}" ]; then
+    DSTACK_PROJECT_NAME="${DSTACK_PROJECT:-dashboard}"
     mkdir -p /tmp/.dstack
     cat > /tmp/.dstack/config.yml <<EOF
 projects:
 - default: true
-  name: ${DSTACK_PROJECT:-main}
+  name: ${DSTACK_PROJECT_NAME}
   token: ${DSTACK_TOKEN}
   url: ${DSTACK_SERVER}
 EOF
     chmod 600 /tmp/.dstack/config.yml
-    echo "[entrypoint] wrote /tmp/.dstack/config.yml (project=${DSTACK_PROJECT:-main} url=${DSTACK_SERVER})"
+    echo "[entrypoint] wrote /tmp/.dstack/config.yml (project=${DSTACK_PROJECT_NAME} url=${DSTACK_SERVER})"
 fi
 
 exec "$@"

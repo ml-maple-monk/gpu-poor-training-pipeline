@@ -13,7 +13,8 @@ from src.state import DstackRun, TrainingSnapshot, get_state, reset_state
 
 
 def test_fresh_state_defaults(fresh_state):
-    """AppState has expected default fields."""
+    """Proves a fresh AppState starts in an empty, safe baseline so the
+    dashboard does not invent data before collectors populate it."""
     s = fresh_state
     assert isinstance(s.lock, type(threading.Lock()))
     assert isinstance(s.shutdown_event, threading.Event)
@@ -23,24 +24,30 @@ def test_fresh_state_defaults(fresh_state):
     assert s.mlflow_runs == []
     assert s.tunnel_url == ""
     assert s.collector_health == {}
+    snap = TrainingSnapshot(container_name="test", status="running")
+    run = DstackRun(run_name="my-run", status="RUNNING", gpu_count=1)
+    assert snap.container_name == "test"
+    assert run.run_name == "my-run"
+    assert run.gpu_count == 1
 
 
-def test_state_singleton():
-    """get_state returns same object on repeated calls."""
+def test_state_singleton_and_reset_define_lifecycle():
+    """Proves the module-level state has a stable singleton identity until an
+    explicit reset, which is the core state-management contract for the app."""
     s1 = get_state()
     s2 = get_state()
-    assert s1 is s2
-
-
-def test_reset_state_creates_new():
-    """reset_state creates a fresh AppState."""
-    s1 = get_state()
     s2 = reset_state()
+    s3 = get_state()
     assert s1 is not s2
+    assert s2 is s3
+    s4 = reset_state()
+    assert s1 is not s2
+    assert s4 is not s3
 
 
 def test_state_mutation_under_lock(fresh_state):
-    """State mutations under lock are thread-safe."""
+    """Proves the shared state lock is sufficient for concurrent writers, so
+    readers do not observe torn or partially written values."""
     state = fresh_state
     errors = []
 
@@ -60,19 +67,9 @@ def test_state_mutation_under_lock(fresh_state):
     assert not errors
 
 
-def test_training_snapshot_fields():
-    snap = TrainingSnapshot(container_name="test", status="running")
-    assert snap.container_name == "test"
-    assert snap.status == "running"
-
-
-def test_dstack_run_fields():
-    run = DstackRun(run_name="my-run", status="RUNNING", gpu_count=1)
-    assert run.run_name == "my-run"
-    assert run.gpu_count == 1
-
-
-def test_shutdown_event():
+def test_shutdown_event_exposes_stop_signal():
+    """Proves the state object carries a usable stop signal for background
+    workers, which is the app's clean-shutdown mechanism."""
     state = reset_state()
     assert not state.shutdown_event.is_set()
     state.shutdown_event.set()

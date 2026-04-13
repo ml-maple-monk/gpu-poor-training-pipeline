@@ -8,99 +8,51 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
+from src.safe_exec import ALLOWED_ENDPOINTS, ALLOWED_VERBS
 
 README = Path(__file__).parent.parent / "docs" / "README.md"
 SRC_SAFE_EXEC = Path(__file__).parent.parent / "src" / "safe_exec.py"
 
 
-def test_readme_has_threat_model_section():
-    """README must have ## Threat Model section."""
+def _threat_model_section() -> str:
     text = README.read_text()
     assert "## Threat Model" in text, "README missing '## Threat Model' section"
-
-
-def test_readme_names_docker_sock():
-    """Threat Model section must mention docker.sock."""
-    text = README.read_text()
     tm_start = text.index("## Threat Model")
-    # Find next ## heading or end
     next_h2 = text.find("\n## ", tm_start + 1)
-    section = text[tm_start:next_h2] if next_h2 != -1 else text[tm_start:]
+    return text[tm_start:next_h2] if next_h2 != -1 else text[tm_start:]
+
+
+def test_dashboard_docs_and_allowlists_explain_the_read_only_contract():
+    """Proves the dashboard still documents the threat boundary and that the
+    exported allowlists match that documented read-only model."""
+    section = _threat_model_section()
+
     assert "docker.sock" in section, "Threat Model must mention 'docker.sock'"
-
-
-def test_readme_names_argv_whitelist():
-    """Threat Model section must mention argv-whitelist."""
-    text = README.read_text()
-    assert "argv-whitelist" in text, "README must mention 'argv-whitelist'"
-
-
-def test_readme_names_rest_whitelist():
-    """Threat Model section must mention REST-whitelist."""
-    text = README.read_text()
-    assert "REST-whitelist" in text, "README must mention 'REST-whitelist'"
-
-
-def test_safe_exec_exposes_allowed_verbs():
-    """safe_exec.py must export ALLOWED_VERBS as a frozenset."""
-    from src.safe_exec import ALLOWED_VERBS
-
+    assert "argv-whitelist" in section, "README must mention 'argv-whitelist'"
+    assert "REST-whitelist" in section, "README must mention 'REST-whitelist'"
     assert isinstance(ALLOWED_VERBS, frozenset), "ALLOWED_VERBS must be a frozenset"
-    assert "logs" in ALLOWED_VERBS
-    assert "ps" in ALLOWED_VERBS
-    assert "inspect" in ALLOWED_VERBS
-    # Must NOT contain mutating verbs
-    assert "stop" not in ALLOWED_VERBS
-    assert "kill" not in ALLOWED_VERBS
-    assert "rm" not in ALLOWED_VERBS
-
-
-def test_safe_exec_exposes_allowed_endpoints():
-    """safe_exec.py must export ALLOWED_ENDPOINTS as a frozenset."""
-    from src.safe_exec import ALLOWED_ENDPOINTS
-
+    assert {"logs", "ps", "inspect"}.issubset(ALLOWED_VERBS)
+    assert {"stop", "kill", "rm"}.isdisjoint(ALLOWED_VERBS)
     assert isinstance(ALLOWED_ENDPOINTS, frozenset), "ALLOWED_ENDPOINTS must be a frozenset"
-    assert "runs/get_plan" in ALLOWED_ENDPOINTS
-    assert "runs/list" in ALLOWED_ENDPOINTS
-    assert "runs/get_logs" in ALLOWED_ENDPOINTS
-    # Must NOT contain mutating endpoints
-    assert "runs/stop" not in ALLOWED_ENDPOINTS
-    assert "runs/delete" not in ALLOWED_ENDPOINTS
-    assert "runs/apply" not in ALLOWED_ENDPOINTS
+    assert {"runs/get_plan", "runs/list", "runs/get_logs"}.issubset(ALLOWED_ENDPOINTS)
+    assert {"runs/stop", "runs/delete", "runs/apply"}.isdisjoint(ALLOWED_ENDPOINTS)
 
 
-def test_safe_docker_blocks_bad_verb():
-    """safe_docker must raise ValueError on disallowed verb."""
+@pytest.mark.parametrize("argv", [["stop", "my-container"], ["kill", "my-container"], ["rm", "-f", "my-container"]])
+def test_safe_docker_rejects_mutating_verbs(argv):
+    """Proves the docker wrapper blocks mutating verbs, so the dashboard cannot
+    escalate from observability into a container control plane."""
     from src.safe_exec import safe_docker
 
     with pytest.raises(ValueError, match="not in whitelist"):
-        safe_docker(["stop", "my-container"])
+        safe_docker(argv)
 
 
-def test_safe_docker_blocks_kill():
-    from src.safe_exec import safe_docker
-
-    with pytest.raises(ValueError):
-        safe_docker(["kill", "my-container"])
-
-
-def test_safe_docker_blocks_rm():
-    from src.safe_exec import safe_docker
-
-    with pytest.raises(ValueError):
-        safe_docker(["rm", "-f", "my-container"])
-
-
-def test_safe_dstack_rest_blocks_bad_endpoint():
-    """safe_dstack_rest must raise ValueError on disallowed endpoint."""
+@pytest.mark.parametrize("endpoint", ["runs/stop", "users/list"])
+def test_safe_dstack_rest_rejects_non_allowlisted_endpoints(endpoint):
+    """Proves the dstack REST wrapper blocks endpoints outside the read-only
+    contract, so the dashboard cannot mutate remote runs."""
     from src.safe_exec import safe_dstack_rest
 
     with pytest.raises(ValueError, match="not in whitelist"):
-        safe_dstack_rest("runs/stop")
-
-
-def test_safe_dstack_rest_blocks_users():
-    from src.safe_exec import safe_dstack_rest
-
-    with pytest.raises(ValueError):
-        safe_dstack_rest("users/list")
+        safe_dstack_rest(endpoint)
