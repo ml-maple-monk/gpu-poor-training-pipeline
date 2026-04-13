@@ -1,0 +1,14 @@
+sequenceDiagram
+    autonumber
+    participant W as CollectorWorker
+    participant G as safe_exec gates
+    participant S as External source
+
+    loop every cadence_s
+        W->>G: argv or endpoint allowlist check
+        G-->>W: ValueError on unsafe input
+        W->>S: httpx get or subprocess Popen
+        S-->>W: raw payload
+        W->>W: update AppState under lock
+        W->>W: shutdown_event.wait(cadence)
+    end

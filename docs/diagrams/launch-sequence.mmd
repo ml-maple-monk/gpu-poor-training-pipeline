@@ -1,0 +1,28 @@
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant CLI as gpupoor CLI
+    participant D as dstack backend
+    participant O as ops
+    participant T as tunnel and dstack
+    participant V as Verda fleet
+
+    U->>CLI: launch dstack config.toml
+    CLI->>CLI: load_run_config (strict TOML)
+    CLI->>D: launch_remote(config, skip_build, dry_run)
+    D->>O: run_preflight (doctor, secrets, mlflow probe)
+    Note over D: abort early on any FAIL
+    D->>D: build and push image (unless skip-build)
+    D->>T: start Cloudflare tunnel
+    T-->>D: cf-tunnel.url
+    D->>T: dstack apply -f rendered.yml
+    T->>V: schedule run
+    V-->>T: state = running
+    D->>D: track_run (flock on .run-ids)
+    D->>D: wait_for_run_start (poll ps)
+    alt success
+        D-->>U: remote running, tunnel kept alive
+    else failure
+        D->>T: kill_tunnel (verify proc comm)
+        D-->>U: error and cleanup
+    end
