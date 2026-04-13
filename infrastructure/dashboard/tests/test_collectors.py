@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -87,7 +88,7 @@ def test_collect_training_snapshot_reports_container_state(
 @pytest.mark.parametrize(
     ("side_effect", "response_payload", "expected_status", "expected_run_name"),
     [
-        (Exception("connection refused"), None, SourceStatus.ERROR, None),
+        (httpx.ConnectError("connection refused"), None, SourceStatus.ERROR, None),
         (
             None,
             {"runs": [{"run_name": "run-1", "status": "RUNNING", "backend": "vastai", "gpu_count": 1}]},

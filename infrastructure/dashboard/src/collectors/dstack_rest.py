@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import httpx
+
 from ..errors import SourceStatus
 from ..safe_exec import safe_dstack_rest
 from ..state import DstackRun
@@ -24,7 +26,7 @@ def collect_dstack_runs() -> tuple[list[DstackRun], SourceStatus]:
         for r in runs_raw:
             runs.append(_parse_run(r))
         return runs, SourceStatus.OK
-    except Exception as exc:
+    except (httpx.HTTPError, ValueError, TypeError, KeyError) as exc:
         log.warning("dstack_runs collect failed: %s", exc)
         return [], SourceStatus.ERROR
 

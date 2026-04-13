@@ -39,9 +39,9 @@ def collect_artifacts() -> tuple[list[Artifact], SourceStatus]:
                             modified_at=datetime.utcfromtimestamp(stat.st_mtime),
                         )
                     )
-                except Exception:
+                except OSError:
                     pass
         return artifacts, SourceStatus.OK
-    except Exception as exc:
+    except OSError as exc:
         log.warning("artifacts collect failed: %s", exc)
         return [], SourceStatus.ERROR
