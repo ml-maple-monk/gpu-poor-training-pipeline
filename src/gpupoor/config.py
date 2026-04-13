@@ -131,6 +131,13 @@ def _require_table(data: dict[str, object], key: str) -> dict[str, object]:
     return value
 
 
+def _reject_unknown(data: dict[str, object], known: set[str], section: str) -> None:
+    extras = sorted(set(data.keys()) - known)
+    if extras:
+        joined = ", ".join(extras)
+        raise ConfigError(f"[{section}] has unknown key(s): {joined}")
+
+
 def _require_str(data: dict[str, object], key: str, *, default: str | None = None) -> str:
     value = data.get(key, default)
     if not isinstance(value, str) or not value:
@@ -248,8 +255,56 @@ def find_dstack_bin() -> str:
     raise RuntimeError("No working dstack CLI found")
 
 
+_KNOWN_TOP_LEVEL = {"name", "recipe", "backend", "mlflow", "doctor", "smoke", "remote"}
+_KNOWN_RECIPE = {"kind", "prepare_data", "dataset_path", "output_dir", "time_cap_seconds"}
+_KNOWN_BACKEND = {"kind", "skip_build", "remote_image_tag"}
+_KNOWN_MLFLOW = {
+    "experiment_name",
+    "artifact_upload",
+    "tracking_uri",
+    "enable_system_metrics_logging",
+    "system_metrics_sampling_interval",
+    "system_metrics_samples_before_logging",
+    "http_request_max_retries",
+    "http_request_timeout_seconds",
+    "start_timeout_seconds",
+    "start_retry_seconds",
+}
+_KNOWN_DOCTOR = {"skip_preflight", "max_clock_skew_seconds"}
+_KNOWN_SMOKE = {
+    "cpu",
+    "base_image",
+    "health_port",
+    "health_timeout_seconds",
+    "strict_port",
+    "degraded_port",
+    "sigterm_timeout_seconds",
+    "data_wait_timeout_seconds",
+}
+_KNOWN_REMOTE = {
+    "env_file",
+    "vcr_image_base",
+    "vcr_login_registry",
+    "dstack_server_health_url",
+    "mlflow_health_url",
+    "health_timeout_seconds",
+    "dstack_server_start_timeout_seconds",
+    "run_start_timeout_seconds",
+    "gpu_names",
+    "gpu_count",
+    "spot_policy",
+    "max_price",
+}
+
+
 def load_run_config(path: str | Path) -> RunConfig:
-    """Load a milestone-1 TOML run config."""
+    """Load a milestone-1 TOML run config.
+
+    Unknown keys at any level raise ConfigError. TOML typos (``keep-tunnel``
+    vs ``keep_tunnel``, a new field added to one example but not the loader,
+    etc.) surface at load time with the offending key named instead of
+    silently defaulting.
+    """
     config_path = Path(path).resolve()
     if config_path.suffix != ".toml":
         raise ConfigError("Milestone-1 configs must use the .toml format")
@@ -262,9 +317,13 @@ def load_run_config(path: str | Path) -> RunConfig:
     if not isinstance(data, dict):
         raise ConfigError("Top-level config must be a TOML table")
 
+    _reject_unknown(data, _KNOWN_TOP_LEVEL, "<root>")
+
     name = _require_str(data, "name")
     recipe_data = _require_table(data, "recipe")
+    _reject_unknown(recipe_data, _KNOWN_RECIPE, "recipe")
     backend_data = _require_table(data, "backend")
+    _reject_unknown(backend_data, _KNOWN_BACKEND, "backend")
     # dstack rejects resource names that don't match its regex; local backend
     # has no such constraint, so we only gate the dstack path here.
     if backend_data.get("kind") == "dstack" and not DSTACK_NAME_RE.match(name):
@@ -273,9 +332,13 @@ def load_run_config(path: str | Path) -> RunConfig:
             f"{DSTACK_NAME_RE.pattern} (lowercase, hyphens only, no underscores)"
         )
     mlflow_data = _require_table(data, "mlflow")
+    _reject_unknown(mlflow_data, _KNOWN_MLFLOW, "mlflow")
     doctor_data = _require_table(data, "doctor")
+    _reject_unknown(doctor_data, _KNOWN_DOCTOR, "doctor")
     smoke_data = _require_table(data, "smoke")
+    _reject_unknown(smoke_data, _KNOWN_SMOKE, "smoke")
     remote_data = _require_table(data, "remote")
+    _reject_unknown(remote_data, _KNOWN_REMOTE, "remote")
 
     recipe = RecipeConfig(
         kind=_require_str(recipe_data, "kind", default="minimind_pretrain"),

@@ -1,30 +1,69 @@
-"""Characterization test locking in load_run_config's unknown-key behavior.
+"""Strict-unknown-key regression tests for load_run_config.
 
-This contract lets us delete TOML keys without breaking operator
-configs that still set them. The fixture intentionally includes
-`mystery_top_level`, `mystery_backend_key`, plus the now-removed
-`keep_tunnel` and `pull_artifacts` keys. If a future change tightens
-the loader to reject unknown keys, this test fails — that is the
-signal to add a one-cycle deprecation step before removing any
-public TOML keys.
+`load_run_config` rejects any key it doesn't recognize at the top level
+or inside any section table. Silent-ignore hurt intuitiveness — a TOML
+typo (`keep-tunnel` vs `keep_tunnel`) or a post-refactor leftover key
+used to load clean and default everything, making drift invisible.
+
+These tests lock in the strict contract and document the exact error
+shape so operators can fix their configs without reading the source.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from gpupoor.config import load_run_config
+import pytest
+
+from gpupoor.config import ConfigError, load_run_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-UNKNOWN_KEY_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "toml_unknown_keys" / "unknown_key_config.toml"
+VALID_EXAMPLE = REPO_ROOT / "examples" / "tiny_cpu.toml"
 
 
-def test_load_run_config_silently_ignores_unknown_keys() -> None:
-    config = load_run_config(UNKNOWN_KEY_FIXTURE)
+def write_toml(tmp_path: Path, body: str) -> Path:
+    target = tmp_path / "run.toml"
+    target.write_text(body, encoding="utf-8")
+    return target
 
-    assert config.name == "unknown_key_probe"
-    assert config.backend.kind == "local"
-    assert not hasattr(config, "mystery_top_level")
-    assert not hasattr(config.backend, "mystery_backend_key")
-    assert not hasattr(config.backend, "keep_tunnel")
-    assert not hasattr(config.backend, "pull_artifacts")
+
+def test_examples_load_cleanly() -> None:
+    """All checked-in examples must parse under strict validation."""
+    config = load_run_config(VALID_EXAMPLE)
+    assert config.name == "tiny_cpu"
+
+
+def test_rejects_unknown_top_level_key(tmp_path: Path) -> None:
+    path = write_toml(
+        tmp_path,
+        'name = "probe"\n'
+        'mystery_top_level = "x"\n'
+        '[recipe]\n[backend]\nkind = "local"\n'
+        "[mlflow]\n[doctor]\n[smoke]\n[remote]\n",
+    )
+    with pytest.raises(ConfigError, match=r"\[<root>\] has unknown key\(s\): mystery_top_level"):
+        load_run_config(path)
+
+
+def test_rejects_unknown_section_key(tmp_path: Path) -> None:
+    path = write_toml(
+        tmp_path,
+        'name = "probe"\n'
+        '[recipe]\n[backend]\nkind = "local"\nmystery_backend_key = "x"\n'
+        "[mlflow]\n[doctor]\n[smoke]\n[remote]\n",
+    )
+    with pytest.raises(ConfigError, match=r"\[backend\] has unknown key\(s\): mystery_backend_key"):
+        load_run_config(path)
+
+
+def test_rejects_legacy_backend_flags(tmp_path: Path) -> None:
+    """keep_tunnel and pull_artifacts were removed in the PR1 refactor; operator
+    TOMLs still carrying them must fail fast with the key named."""
+    path = write_toml(
+        tmp_path,
+        'name = "probe"\n'
+        '[recipe]\n[backend]\nkind = "local"\nkeep_tunnel = false\npull_artifacts = false\n'
+        "[mlflow]\n[doctor]\n[smoke]\n[remote]\n",
+    )
+    with pytest.raises(ConfigError, match=r"\[backend\] has unknown key\(s\): keep_tunnel, pull_artifacts"):
+        load_run_config(path)
