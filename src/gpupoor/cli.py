@@ -17,8 +17,8 @@ from gpupoor.config import (
     SmokeConfig,
     load_run_config,
 )
-from gpupoor.legacy import run_dstack, run_infra, run_root, run_training
-from gpupoor.subprocess_utils import CommandError
+from gpupoor.subprocess_utils import CommandError, bash_script, run_command
+from gpupoor.utils import repo_path
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -68,6 +68,19 @@ def build_parser() -> argparse.ArgumentParser:
     dstack_parser.add_argument("--skip-build", action="store_true", default=None, help="Skip image build and push")
     dstack_parser.add_argument("--dry-run", action="store_true", help="Print the remote plan without mutating")
 
+    dstack_admin_parser = subparsers.add_parser("dstack", help="Manage repo-owned dstack helper flows")
+    dstack_admin_subparsers = dstack_admin_parser.add_subparsers(dest="dstack_action", required=True)
+    dstack_setup = dstack_admin_subparsers.add_parser("setup", help="Render and validate dstack config")
+    dstack_setup.add_argument("extra_args", nargs=argparse.REMAINDER)
+    dstack_registry = dstack_admin_subparsers.add_parser(
+        "registry-login",
+        help="Log in to the configured remote registry",
+    )
+    dstack_registry.add_argument("--dry-run", action="store_true", help="Print the registry login command only")
+    dstack_fleet = dstack_admin_subparsers.add_parser("fleet-apply", help="Apply the repo-owned fleet config")
+    dstack_fleet.add_argument("extra_args", nargs=argparse.REMAINDER)
+    dstack_admin_subparsers.add_parser("teardown", help="Stop tracked remote runs and clean up tunnel state")
+
     infra_parser = subparsers.add_parser("infra", help="Manage local debug/runtime services")
     infra_subparsers = infra_parser.add_subparsers(dest="infra_target", required=True)
     for service, actions in {
@@ -78,26 +91,6 @@ def build_parser() -> argparse.ArgumentParser:
         service_parser = infra_subparsers.add_parser(service)
         service_parser.add_argument("action", choices=actions)
         service_parser.add_argument("extra_args", nargs=argparse.REMAINDER)
-
-    compat_parser = subparsers.add_parser("compat", help="Internal surface for shell wrappers")
-    compat_subparsers = compat_parser.add_subparsers(dest="compat_target", required=True)
-
-    compat_run = compat_subparsers.add_parser("run")
-    compat_run.add_argument("subcommand", nargs="?", default="")
-    compat_run.add_argument("extra_args", nargs=argparse.REMAINDER)
-
-    compat_training = compat_subparsers.add_parser("training")
-    compat_training.add_argument("subcommand", nargs="?", default="")
-    compat_training.add_argument("extra_args", nargs=argparse.REMAINDER)
-
-    compat_dstack = compat_subparsers.add_parser("dstack")
-    compat_dstack.add_argument("subcommand", nargs="?", default="")
-    compat_dstack.add_argument("extra_args", nargs=argparse.REMAINDER)
-
-    compat_infra = compat_subparsers.add_parser("infra")
-    compat_infra.add_argument("service")
-    compat_infra.add_argument("action", nargs="?", default="up")
-    compat_infra.add_argument("extra_args", nargs=argparse.REMAINDER)
 
     return parser
 
@@ -225,29 +218,83 @@ def dispatch(args: argparse.Namespace) -> None:
         )
         return
 
-    if args.command == "infra":
-        if args.infra_target == "mlflow":
-            run_infra("mlflow", args.action, args.extra_args)
+    if args.command == "dstack":
+        if args.dstack_action == "setup":
+            bash_script(repo_path("dstack", "scripts", "setup-config.sh"), *args.extra_args)
             return
-        if args.infra_target == "dashboard":
-            run_infra("dashboard", args.action, args.extra_args)
+        if args.dstack_action == "registry-login":
+            registry_args = ["--dry-run"] if args.dry_run else []
+            bash_script(repo_path("dstack", "scripts", "registry-login.sh"), *registry_args)
             return
-        if args.infra_target == "emulator":
-            run_infra("emulator", args.action, args.extra_args)
+        if args.dstack_action == "fleet-apply":
+            dstack_bin = dstack_backend.find_dstack_bin()
+            run_command(
+                [
+                    dstack_bin,
+                    "apply",
+                    "-f",
+                    str(repo_path("dstack", "config", "fleet.dstack.yml")),
+                    "-y",
+                    *args.extra_args,
+                ]
+            )
+            return
+        if args.dstack_action == "teardown":
+            dstack_backend.teardown_remote_state()
             return
 
-    if args.command == "compat":
-        if args.compat_target == "run":
-            run_root(args.subcommand, args.extra_args)
-            return
-        if args.compat_target == "training":
-            run_training(args.subcommand, args.extra_args)
-            return
-        if args.compat_target == "dstack":
-            run_dstack(args.subcommand, args.extra_args)
-            return
-        if args.compat_target == "infra":
-            run_infra(args.service, args.action, args.extra_args)
+    if args.command == "infra":
+        if args.infra_target == "mlflow":
+            from gpupoor.services import mlflow as mlflow_service
+
+            if args.action == "up":
+                mlflow_service.up(args.extra_args)
+                return
+            if args.action == "down":
+                mlflow_service.down(args.extra_args)
+                return
+            if args.action == "logs":
+                mlflow_service.logs(args.extra_args)
+                return
+            if args.action == "tunnel":
+                mlflow_service.tunnel(args.extra_args)
+                return
+        if args.infra_target == "dashboard":
+            from gpupoor.services import dashboard as dashboard_service
+
+            if args.action == "up":
+                dashboard_service.up(args.extra_args)
+                return
+            if args.action == "down":
+                dashboard_service.down(args.extra_args)
+                return
+            if args.action == "logs":
+                dashboard_service.logs(args.extra_args)
+                return
+        if args.infra_target == "emulator":
+            from gpupoor.services import emulator as emulator_service
+
+            if args.action == "up":
+                emulator_service.up(args.extra_args)
+                return
+            if args.action == "cpu":
+                emulator_service.cpu(args.extra_args)
+                return
+            if args.action == "nvcr":
+                emulator_service.nvcr(args.extra_args)
+                return
+            if args.action == "down":
+                emulator_service.down(args.extra_args)
+                return
+            if args.action == "logs":
+                emulator_service.logs(args.extra_args)
+                return
+            if args.action == "shell":
+                emulator_service.shell(args.extra_args)
+                return
+            if args.action == "health":
+                emulator_service.health(args.extra_args)
+                return
             return
 
     raise ValueError(f"Unsupported command: {args.command}")

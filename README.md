@@ -4,7 +4,7 @@ Train readable, reproducible MiniMind experiments on limited GPUs without
 living in bash.
 
 This repo now exposes a package-first `gpupoor` surface under `src/` while
-keeping the old shell entrypoints as compatibility shims. The first milestone is
+keeping a few shell shortcuts for convenience. The first milestone is
 intentionally concrete: one recipe, one local backend, one Verda/dstack backend,
 and the existing local debug surfaces.
 
@@ -65,7 +65,7 @@ gpupoor launch dstack examples/verda_remote.toml --skip-build
 Use `--skip-build` only when you intentionally want to reuse an existing remote
 image tag. Otherwise omit it and let the CLI build and push the image first.
 Successful remote launches now keep the MLflow Cloudflare tunnel alive until
-`./run.sh teardown` or `gpupoor compat run teardown`, because the remote trainer
+`./run.sh teardown` or `gpupoor dstack teardown`, because the remote trainer
 needs the tunnel for live tracking.
 
 ## Local Debug Surfaces
@@ -98,6 +98,7 @@ gpupoor leak-scan [image]
 gpupoor check-anchors
 gpupoor train <config.toml>
 gpupoor launch dstack <config.toml>
+gpupoor dstack <setup|registry-login|fleet-apply|teardown>
 gpupoor infra mlflow <up|down|logs|tunnel>
 gpupoor infra dashboard <up|down|logs>
 gpupoor infra emulator <up|cpu|nvcr|down|logs|shell|health>
@@ -106,10 +107,10 @@ gpupoor infra emulator <up|cpu|nvcr|down|logs|shell|health>
 `doctor`, `smoke`, and `launch dstack` now resolve their operational defaults
 from the typed TOML config first, with CLI flags available for one-off overrides.
 
-## Compatibility Wrappers
+## Shell Shortcuts
 
-These shell entrypoints still work, but they now delegate one-way into the
-Python CLI:
+These shell entrypoints still work, but they are thin repo-local shortcuts
+around the canonical `gpupoor` commands and helper scripts:
 
 - `./run.sh`
 - `./training/start.sh`
@@ -118,8 +119,8 @@ Python CLI:
 - `./infrastructure/dashboard/start.sh`
 - `./infrastructure/local-emulator/start.sh`
 
-The CLI does not call those wrappers back, which keeps the wrapper layer thin
-and avoids recursion.
+The Python CLI no longer routes back through a hidden compatibility surface,
+which keeps the public command graph simpler and avoids recursion.
 
 ## Repo Shape
 
