@@ -13,7 +13,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 # Collect all anchor names defined in source files
 defined=$(grep -rh 'doc-anchor:' \
-        dashboard/ training/ dstack/ app/ scripts/ \
+        infrastructure/ training/ dstack/ scripts/ \
     2>/dev/null \
     | grep -oP 'doc-anchor:\s*\K[\w-]+' \
     | sort -u)
@@ -21,8 +21,7 @@ defined=$(grep -rh 'doc-anchor:' \
 # Collect all anchor names referenced in READMEs / TROUBLESHOOTING
 referenced=$(grep -rh 'doc-anchor:' \
         README.md TROUBLESHOOTING.md \
-        training/README.md training/mlflow-stack/README.md \
-        dashboard/README.md dstack/README.md \
+        training/docs/README.md infrastructure/dashboard/docs/README.md infrastructure/local-emulator/docs/README.md infrastructure/mlflow/docs/README.md dstack/docs/README.md \
     2>/dev/null \
     | grep -oP 'doc-anchor:\s*\K[\w-]+' \
     | sort -u)

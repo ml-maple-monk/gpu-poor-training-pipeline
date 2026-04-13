@@ -1,0 +1,37 @@
+name: minimind-training
+
+services:
+  minimind-trainer:
+    build:
+      context: ../..
+      dockerfile: training/docker/Dockerfile.train
+    image: minimind-trainer:local
+    init: true
+    environment:
+      HF_HOME: /data/hf_cache
+      TOKENIZERS_PARALLELISM: "false"
+      PYTHONUNBUFFERED: "1"
+      # Verda-parity signals (informational; training workload bypasses /health)
+      VERDA_REQUIRE_GPU: "1"
+      VERDA_PROFILE: training
+    volumes:
+      - ../../training/src/minimind:/workspace/minimind
+      - ../../data:/data
+      - ../../training/scripts/run-train.sh:/workspace/run-train.sh:ro
+      - ../../training/scripts/lib/train-pretrain-args.sh:/workspace/train-pretrain-args.sh:ro
+    working_dir: /workspace/minimind
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # shared memory for DataLoader workers
+    shm_size: "4gb"
+    # override at runtime: `docker compose ... run --rm minimind-trainer`
+    command: ["/workspace/run-train.sh"]
+    labels:
+      com.verda.emulation: "true"
+      com.verda.profile: "training"
+      com.verda.data_mount: "/data"
