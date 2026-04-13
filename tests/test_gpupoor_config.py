@@ -81,15 +81,79 @@ def test_non_toml_config_is_rejected(tmp_path: Path) -> None:
         load_run_config(config_file)
 
 
+def _make_fake_root(path: Path, *, name: str = "gpupoor") -> None:
+    (path / "src" / "gpupoor").mkdir(parents=True)
+    (path / "pyproject.toml").write_text(
+        f"[project]\nname = \"{name}\"\n", encoding="utf-8"
+    )
+
+
 def test_repo_root_honors_env_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    (tmp_path / "src" / "gpupoor").mkdir(parents=True)
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='gpupoor'\n", encoding="utf-8")
-    (tmp_path / "design.md").write_text("# design\n", encoding="utf-8")
+    _make_fake_root(tmp_path)
 
     repo_utils.repo_root.cache_clear()
     monkeypatch.setenv("GPUPOOR_ROOT", str(tmp_path))
     try:
         assert repo_utils.repo_root() == tmp_path.resolve()
-        assert repo_utils.repo_path("design.md") == tmp_path.resolve() / "design.md"
+        assert repo_utils.repo_path("anything") == tmp_path.resolve() / "anything"
     finally:
         repo_utils.repo_root.cache_clear()
+
+
+def test_repo_root_rejects_pyproject_from_different_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A sibling project's pyproject + src/gpupoor stub must not match.
+
+    The old fingerprint (`pyproject.toml` + `src/gpupoor/` + `design.md`)
+    could be spoofed by any checkout with those filenames. Verifying
+    the pyproject declares our package name is the durable identity.
+    """
+    _make_fake_root(tmp_path, name="some-other-project")
+
+    repo_utils.repo_root.cache_clear()
+    monkeypatch.setenv("GPUPOOR_ROOT", str(tmp_path))
+    try:
+        with pytest.raises(RuntimeError, match="not a gpupoor checkout"):
+            repo_utils.repo_root()
+    finally:
+        repo_utils.repo_root.cache_clear()
+
+
+def test_repo_root_accepts_root_without_design_md(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Docs files must not be part of the repo fingerprint.
+
+    Renaming or relocating design docs should not break every repo_path
+    call site. Project identity comes from pyproject + src/gpupoor.
+    """
+    _make_fake_root(tmp_path)
+    assert not (tmp_path / "design.md").exists()
+
+    repo_utils.repo_root.cache_clear()
+    monkeypatch.setenv("GPUPOOR_ROOT", str(tmp_path))
+    try:
+        assert repo_utils.repo_root() == tmp_path.resolve()
+    finally:
+        repo_utils.repo_root.cache_clear()
+
+
+def test_repo_root_candidates_prefer_package_over_cwd(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When no env override is set, __file__ ancestry is searched before cwd.
+
+    Previously cwd came first, so invoking the CLI from a sibling
+    checkout that also had pyproject + src/gpupoor would hijack path
+    resolution. The running package's own location is the authoritative
+    answer when the user has not set GPUPOOR_ROOT.
+    """
+    monkeypatch.delenv("GPUPOOR_ROOT", raising=False)
+    candidates = repo_utils._iter_repo_candidates()
+
+    package_dir = Path(repo_utils.__file__).resolve().parent
+    cwd_index = candidates.index(Path.cwd())
+    package_index = candidates.index(package_dir)
+    assert package_index < cwd_index, (
+        "__file__ ancestry must be searched before cwd to keep the "
+        "running package authoritative"
+    )
