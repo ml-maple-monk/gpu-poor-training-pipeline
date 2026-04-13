@@ -45,7 +45,11 @@ def build_parser() -> argparse.ArgumentParser:
     dstack_parser = launch_subparsers.add_parser("dstack", help="Launch a Verda/dstack run from config")
     dstack_parser.add_argument("config", help="Path to a TOML run config")
     dstack_parser.add_argument("--skip-build", action="store_true", help="Skip image build and push")
-    dstack_parser.add_argument("--keep-tunnel", action="store_true", help="Keep the Cloudflare tunnel alive")
+    dstack_parser.add_argument(
+        "--keep-tunnel",
+        action="store_true",
+        help="Compatibility flag; successful remote launches now keep the MLflow tunnel alive until teardown",
+    )
     dstack_parser.add_argument("--pull-artifacts", action="store_true", help="Retain the compatibility flag")
     dstack_parser.add_argument("--dry-run", action="store_true", help="Print the remote plan without mutating")
 

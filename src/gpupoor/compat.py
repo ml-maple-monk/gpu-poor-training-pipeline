@@ -35,7 +35,7 @@ Subcommands:
 
 Remote flags:
   --pull-artifacts    Pull checkpoints after run
-  --keep-tunnel       Do not kill cloudflared on exit
+  --keep-tunnel       Compatibility flag; the MLflow tunnel now stays up until teardown
   --skip-build        Skip image build+push
   --dry-run           Show what would be done
 """

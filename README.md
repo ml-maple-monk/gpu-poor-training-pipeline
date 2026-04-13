@@ -43,6 +43,9 @@ gpupoor launch dstack examples/verda_remote.toml --skip-build
 
 Use `--skip-build` only when you intentionally want to reuse an existing remote
 image tag. Otherwise omit it and let the CLI build and push the image first.
+Successful remote launches now keep the MLflow Cloudflare tunnel alive until
+`./run.sh teardown` or `gpupoor compat run teardown`, because the remote trainer
+needs the tunnel for live tracking.
 
 ## Local Debug Surfaces
 

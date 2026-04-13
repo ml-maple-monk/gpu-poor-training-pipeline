@@ -227,6 +227,7 @@ def launch_remote(
 
     rendered_task = None
     started_tunnel = False
+    launched_remote_run = False
     try:
         if dry_run:
             print(f"[DRY-RUN] Would render task with IMAGE_SHA={image_sha}")
@@ -250,10 +251,17 @@ def launch_remote(
         if run_name:
             track_run(run_name)
             wait_for_run_start(dstack_bin, run_name)
+            launched_remote_run = True
         if use_pull_artifacts:
             print("[gpupoor] WARN: pull-artifacts is still manual on the current dstack CLI")
     finally:
         if rendered_task and rendered_task.exists():
             rendered_task.unlink()
         if started_tunnel:
-            kill_tunnel(keep_tunnel=use_keep_tunnel)
+            if launched_remote_run:
+                if use_keep_tunnel:
+                    print("[gpupoor] Keeping Cloudflare tunnel alive")
+                else:
+                    print("[gpupoor] Keeping Cloudflare tunnel alive until teardown so remote MLflow stays reachable")
+            else:
+                kill_tunnel(keep_tunnel=False)
