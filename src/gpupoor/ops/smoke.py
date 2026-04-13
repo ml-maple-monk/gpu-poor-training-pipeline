@@ -64,12 +64,23 @@ def run_smoke(config: SmokeConfig | None = None, *, doctor: DoctorConfig | None 
             print(exc)
             reporter.failed += 1
     finally:
-        run_command([*compose, "down", "-v", "--remove-orphans"], check=False)
+        run_command([*compose, "down", *_down_flags(settings), "--remove-orphans"], check=False)
 
     print("")
     print(f"=== Smoke Results: {reporter.passed} passed, {reporter.failed} failed ===")
     if reporter.failed:
         raise RuntimeError("Smoke FAILED")
+
+
+def _down_flags(settings: SmokeConfig) -> list[str]:
+    """Return extra flags for `docker compose down`.
+
+    Volume pruning (`-v`) is opt-in: named volumes may hold user data, so
+    the default teardown only removes containers and networks. Callers that
+    explicitly set `prune_volumes=True` (or pass `--prune-volumes` on the
+    CLI) accept the data loss.
+    """
+    return ["-v"] if settings.prune_volumes else []
 
 
 def _runtime_env() -> dict[str, str]:
@@ -245,10 +256,11 @@ def _probe_degraded_gating(runtime_env: dict[str, str], reporter: SmokeReporter,
 
         strict_env = {"APP_PORT": str(settings.strict_port), **runtime_env}
         degraded_env = {"APP_PORT": str(settings.degraded_port), **runtime_env}
+        down_flags = _down_flags(settings)
         try:
             run_command([*strict_compose, "up", "-d", "--build"], env=strict_env)
             _wait_for_health(settings.strict_port, expected=503, timeout_seconds=settings.health_timeout_seconds)
-            run_command([*strict_compose, "down", "-v", "--remove-orphans"], check=False, env=strict_env)
+            run_command([*strict_compose, "down", *down_flags, "--remove-orphans"], check=False, env=strict_env)
 
             run_command([*degraded_compose, "up", "-d", "--build"], env=degraded_env)
             _wait_for_health(
@@ -260,8 +272,8 @@ def _probe_degraded_gating(runtime_env: dict[str, str], reporter: SmokeReporter,
         except RuntimeError as exc:
             reporter.fail_probe("E", str(exc))
         finally:
-            run_command([*strict_compose, "down", "-v", "--remove-orphans"], check=False, env=strict_env)
-            run_command([*degraded_compose, "down", "-v", "--remove-orphans"], check=False, env=degraded_env)
+            run_command([*strict_compose, "down", *down_flags, "--remove-orphans"], check=False, env=strict_env)
+            run_command([*degraded_compose, "down", *down_flags, "--remove-orphans"], check=False, env=degraded_env)
 
 
 def _probe_data_wait_timeout(local_image: str, reporter: SmokeReporter, *, timeout_seconds: int) -> None:

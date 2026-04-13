@@ -42,6 +42,12 @@ def build_parser() -> argparse.ArgumentParser:
     smoke_parser.add_argument("--degraded-port", type=int, help="Port for the degraded-mode probe")
     smoke_parser.add_argument("--sigterm-timeout-seconds", type=int, help="SIGTERM exit budget for the emulator")
     smoke_parser.add_argument("--data-wait-timeout-seconds", type=int, help="WAIT_DATA_TIMEOUT value for probe F")
+    smoke_parser.add_argument(
+        "--prune-volumes",
+        action="store_true",
+        default=None,
+        help="Pass `-v` to `docker compose down` to wipe named volumes (destroys user data)",
+    )
     smoke_parser.add_argument("--skip-preflight", action="store_true", default=None, help="Skip preflight checks")
     smoke_parser.add_argument("--max-clock-skew-seconds", type=int, help="Override the WSL clock skew budget")
 
@@ -141,6 +147,7 @@ _SMOKE_OVERRIDE_KEYS = (
     "degraded_port",
     "sigterm_timeout_seconds",
     "data_wait_timeout_seconds",
+    "prune_volumes",
 )
 
 

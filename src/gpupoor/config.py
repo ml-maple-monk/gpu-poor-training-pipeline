@@ -93,6 +93,9 @@ class SmokeConfig:
     degraded_port: int = 18002
     sigterm_timeout_seconds: int = 30
     data_wait_timeout_seconds: int = 2
+    # Explicit opt-in for `docker compose down -v`. Named volumes may hold
+    # user data; wiping them must be a conscious choice, not a default.
+    prune_volumes: bool = False
 
 
 @dataclass(slots=True)
@@ -286,6 +289,7 @@ _KNOWN_SMOKE = {
     "degraded_port",
     "sigterm_timeout_seconds",
     "data_wait_timeout_seconds",
+    "prune_volumes",
 }
 _KNOWN_REMOTE = {
     "env_file",
@@ -390,6 +394,7 @@ def load_run_config(path: str | Path) -> RunConfig:
         degraded_port=_require_int(smoke_data, "degraded_port", default=18002),
         sigterm_timeout_seconds=_require_int(smoke_data, "sigterm_timeout_seconds", default=30),
         data_wait_timeout_seconds=_require_int(smoke_data, "data_wait_timeout_seconds", default=2),
+        prune_volumes=_require_bool(smoke_data, "prune_volumes", default=False),
     )
     remote = RemoteConfig(
         env_file=_require_str(remote_data, "env_file", default=".env.remote"),
