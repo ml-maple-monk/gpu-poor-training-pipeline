@@ -18,6 +18,7 @@ def _safe(fn):
     return wrapper
 
 
+# doc-anchor: mlflow-helper-start
 def start(args, model_config, script_name="train_pretrain"):
     global _active, _start_time
     uri = os.environ.get("MLFLOW_TRACKING_URI", "").strip()

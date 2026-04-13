@@ -57,6 +57,7 @@ class CollectorWorker:
         if self._thread:
             self._thread.join(timeout=timeout)
 
+    # doc-anchor: collector-worker-loop
     def _loop(self) -> None:
         while not self._shutdown.is_set():
             try:

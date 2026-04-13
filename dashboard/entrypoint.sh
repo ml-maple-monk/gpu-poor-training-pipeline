@@ -2,6 +2,7 @@
 # entrypoint.sh — generate dstack CLI config in tmpfs before launching dashboard
 set -euo pipefail
 
+# doc-anchor: dashboard-config-gen
 # Materialize a ~/.dstack/config.yml the CLI can read.
 # Using http://host.docker.internal:3000 so the CLI inside the container
 # can reach the dstack server running on the WSL2 host.

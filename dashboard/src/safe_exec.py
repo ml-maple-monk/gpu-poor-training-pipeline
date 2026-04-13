@@ -14,6 +14,7 @@ from typing import Any
 
 import httpx
 
+# doc-anchor: safe-exec-allowlist
 # ── Whitelists ──────────────────────────────────────────────────────────────────
 ALLOWED_VERBS: frozenset[str] = frozenset({"logs", "ps", "inspect"})
 

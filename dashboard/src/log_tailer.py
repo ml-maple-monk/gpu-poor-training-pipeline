@@ -129,6 +129,7 @@ class LogTailer:
         else:
             self._run_dstack()
 
+    # doc-anchor: log-tailer-docker-precheck
     def _run_docker(self) -> None:
         last_missing_notice_seq = -1
         while True:

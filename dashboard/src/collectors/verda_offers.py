@@ -24,6 +24,7 @@ GPU_NAMES = [
 ]
 
 
+# doc-anchor: verda-offers-busybox
 def collect_verda_offers() -> tuple[list[VerdaOffer], SourceStatus]:
     """Collect GPU offers from dstack via get_plan endpoint."""
     all_offers: list[VerdaOffer] = []

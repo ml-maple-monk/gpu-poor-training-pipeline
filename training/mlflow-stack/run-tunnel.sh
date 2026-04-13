@@ -53,6 +53,7 @@ CF_PID=$!
 echo "$CF_PID" > "$TUNNEL_PID_FILE"
 echo "[tunnel] cloudflared started (PID $CF_PID), polling log for URL..."
 
+# doc-anchor: cf-tunnel-url-capture
 # Poll log for the tunnel URL (timeout POLL_TIMEOUT seconds)
 ELAPSED=0
 TUNNEL_URL=""

@@ -12,6 +12,7 @@ from ..state import DstackRun
 log = logging.getLogger(__name__)
 
 
+# doc-anchor: dstack-runs-list-post
 def collect_dstack_runs() -> tuple[list[DstackRun], SourceStatus]:
     """Fetch current dstack runs via REST (POST /api/runs/list)."""
     try:

@@ -1,3 +1,4 @@
+# doc-anchor: dstack-fleet-yaml
 type: fleet
 name: verda-spot
 nodes:

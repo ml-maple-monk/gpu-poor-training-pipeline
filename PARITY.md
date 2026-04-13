@@ -1,5 +1,12 @@
 # Verda Local Emulator — Parity Table
 
+## Subsystem cross-references
+
+- Training pipeline (remote image, SIGTERM, atomic save): [training/README.md](./training/README.md) — anchors `remote-entrypoint-train-exec`, `remote-dockerfile-ssh-bake`, `atomic-save-sigterm`
+- MLflow stack (experiment naming, tunnel, patches): [training/mlflow-stack/README.md](./training/mlflow-stack/README.md) — anchors `mlflow-helper-start`, `cf-tunnel-url-capture`
+- dstack fleet + task YAML: [dstack/README.md](./dstack/README.md) — anchors `dstack-task-yaml`, `dstack-fleet-yaml`
+- Dashboard security controls: [dashboard/README.md](./dashboard/README.md) — anchors `safe-exec-allowlist`, `log-tailer-docker-precheck`, `collector-worker-loop`, `dashboard-config-gen`, `dstack-runs-list-post`, `verda-offers-busybox`
+
 Rows marked `(pending)` are updated by `./scripts/smoke.sh` on each run.
 Stale rows (measured_at > 7 days ago) should be re-probed via `make smoke`.
 

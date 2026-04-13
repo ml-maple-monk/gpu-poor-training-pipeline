@@ -30,6 +30,7 @@ else
     exit 1
 fi
 
+# doc-anchor: image-render-template
 # ── Resolve image SHA ────────────────────────────────────────────────────────
 SHA=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo "local")
 IMAGE_BASE="ghcr.io/${GH_USER}/verda-minimind"

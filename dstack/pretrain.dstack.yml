@@ -1,3 +1,4 @@
+# doc-anchor: dstack-task-yaml
 # pretrain.dstack.yml — dstack task for minimind pretraining on Verda spot
 #
 # Usage (via run.sh remote — do not invoke directly):

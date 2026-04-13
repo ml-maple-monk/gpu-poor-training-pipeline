@@ -104,6 +104,7 @@ fi
 echo "[remote-entrypoint] Dataset OK: $(ls -lh "$DATASET_FILE" | awk '{print $5}') @ $DATASET_FILE"
 
 # ── Launch training ───────────────────────────────────────────────────────────
+# doc-anchor: remote-entrypoint-train-exec
 echo "[remote-entrypoint] Starting train_pretrain.py ..."
 cd /opt/minimind/trainer
 

@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && mkdir -p /var/run/sshd /root/.ssh \
     && chmod 700 /root/.ssh
 
+# doc-anchor: remote-dockerfile-ssh-bake
 # Inject operator's SSH pubkey at build time (ARG) — empty value disables sshd.
 ARG SSH_PUBKEY=""
 RUN if [ -n "$SSH_PUBKEY" ]; then \
