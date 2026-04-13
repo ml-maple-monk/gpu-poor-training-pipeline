@@ -8,6 +8,10 @@ import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+from gpupoor.utils.logging import get_logger
+
+log = get_logger(__name__)
+
 
 class CommandError(RuntimeError):
     """Raised when an external command fails."""
@@ -28,7 +32,7 @@ def _merged_env(extra_env: Mapping[str, str] | None = None) -> dict[str, str]:
 
 def log_command(command: Sequence[str]) -> None:
     rendered = " ".join(shlex.quote(part) for part in command)
-    print(f"[gpupoor] $ {rendered}")
+    log.info("$ %s", rendered)
 
 
 def run_command(

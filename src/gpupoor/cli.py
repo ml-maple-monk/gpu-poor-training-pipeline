@@ -22,6 +22,7 @@ from gpupoor.services import emulator as emulator_service
 from gpupoor.services import mlflow as mlflow_service
 from gpupoor.subprocess_utils import CommandError, bash_script, run_command
 from gpupoor.utils import repo_path
+from gpupoor.utils.logging import configure_root
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -305,6 +306,7 @@ def dispatch(args: argparse.Namespace) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_root()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
