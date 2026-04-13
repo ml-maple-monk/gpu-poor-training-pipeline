@@ -114,6 +114,26 @@ class RemoteConfig:
     spot_policy: str | None = None
     max_price: float | None = None
 
+    def to_env(self) -> dict[str, str]:
+        """Return TASK_* env vars for render-pretrain-task.sh.
+
+        Only fields the user set materialize as entries; unset fields
+        stay out of the dict so the shell defaults in
+        render-pretrain-task.sh keep their authority. Mirrors
+        ``MlflowConfig.to_env()`` so callers pick the dataclass API
+        instead of repeating the field-by-field mapping at call sites.
+        """
+        env: dict[str, str] = {}
+        if self.gpu_names:
+            env["TASK_GPU_NAMES"] = "[" + ", ".join(self.gpu_names) + "]"
+        if self.gpu_count is not None:
+            env["TASK_GPU_COUNT"] = str(self.gpu_count)
+        if self.spot_policy:
+            env["TASK_SPOT_POLICY"] = self.spot_policy
+        if self.max_price is not None:
+            env["TASK_MAX_PRICE"] = str(self.max_price)
+        return env
+
 
 @dataclass(slots=True)
 class RunConfig:

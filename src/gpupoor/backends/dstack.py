@@ -141,14 +141,7 @@ def render_task(settings: dict[str, str], config: RunConfig, image_sha: str) -> 
     # Task/GPU overrides: unset fields fall back to shell defaults so the
     # baseline example stays unchanged while targeted runs (e.g. B300) can
     # pick their own instance type from TOML.
-    if config.remote.gpu_names:
-        render_env["TASK_GPU_NAMES"] = "[" + ", ".join(config.remote.gpu_names) + "]"
-    if config.remote.gpu_count is not None:
-        render_env["TASK_GPU_COUNT"] = str(config.remote.gpu_count)
-    if config.remote.spot_policy:
-        render_env["TASK_SPOT_POLICY"] = config.remote.spot_policy
-    if config.remote.max_price is not None:
-        render_env["TASK_MAX_PRICE"] = str(config.remote.max_price)
+    render_env.update(config.remote.to_env())
     bash_script(
         repo_path("dstack", "scripts", "render-pretrain-task.sh"),
         str(rendered_task),
@@ -268,10 +261,7 @@ def kill_tunnel() -> None:
                 should_kill = False
             else:
                 if comm != "cloudflared":
-                    print(
-                        f"[gpupoor] WARN: .cf-tunnel.pid {pid} is '{comm}', "
-                        "not cloudflared; skipping kill"
-                    )
+                    print(f"[gpupoor] WARN: .cf-tunnel.pid {pid} is '{comm}', not cloudflared; skipping kill")
                     should_kill = False
         # On non-Linux (e.g. macOS), /proc is not available. Fall through and
         # trust the pid file; this matches prior behavior on those platforms.

@@ -17,6 +17,9 @@ from gpupoor.config import (
     SmokeConfig,
     load_run_config,
 )
+from gpupoor.services import dashboard as dashboard_service
+from gpupoor.services import emulator as emulator_service
+from gpupoor.services import mlflow as mlflow_service
 from gpupoor.subprocess_utils import CommandError, bash_script, run_command
 from gpupoor.utils import repo_path
 
@@ -252,8 +255,6 @@ def dispatch(args: argparse.Namespace) -> None:
 
     if args.command == "infra":
         if args.infra_target == "mlflow":
-            from gpupoor.services import mlflow as mlflow_service
-
             if args.action == "up":
                 mlflow_service.up(args.extra_args)
                 return
@@ -267,8 +268,6 @@ def dispatch(args: argparse.Namespace) -> None:
                 mlflow_service.tunnel(args.extra_args)
                 return
         if args.infra_target == "dashboard":
-            from gpupoor.services import dashboard as dashboard_service
-
             if args.action == "up":
                 dashboard_service.up(args.extra_args)
                 return
@@ -279,8 +278,6 @@ def dispatch(args: argparse.Namespace) -> None:
                 dashboard_service.logs(args.extra_args)
                 return
         if args.infra_target == "emulator":
-            from gpupoor.services import emulator as emulator_service
-
             if args.action == "up":
                 emulator_service.up(args.extra_args)
                 return
