@@ -6,6 +6,18 @@ BASE_COMPOSE="$REPO_ROOT/infrastructure/local-emulator/compose/docker-compose.ym
 CPU_COMPOSE="$REPO_ROOT/infrastructure/local-emulator/compose/docker-compose.cpu.yml"
 NVCR_COMPOSE="$REPO_ROOT/infrastructure/local-emulator/compose/docker-compose.nvcr.yml"
 APP_PORT="${APP_PORT:-8000}"
+EMULATOR_HEALTH_WAIT_SECONDS="${EMULATOR_HEALTH_WAIT_SECONDS:-300}"
+
+load_hf_token() {
+    if [ -n "${HF_TOKEN:-}" ]; then
+        return 0
+    fi
+
+    if [ -f "$REPO_ROOT/hf_token" ]; then
+        HF_TOKEN="$(tr -d '[:space:]' < "$REPO_ROOT/hf_token")"
+        export HF_TOKEN
+    fi
+}
 
 usage() {
     cat <<'EOF'
@@ -25,12 +37,15 @@ shift || true
 
 case "$cmd" in
     up)
+        load_hf_token
         exec docker compose -f "$BASE_COMPOSE" up -d --build "$@"
         ;;
     cpu)
+        load_hf_token
         exec docker compose -f "$BASE_COMPOSE" -f "$CPU_COMPOSE" up -d --build "$@"
         ;;
     nvcr)
+        load_hf_token
         exec docker compose -f "$BASE_COMPOSE" -f "$NVCR_COMPOSE" up -d --build "$@"
         ;;
     down)
@@ -43,14 +58,14 @@ case "$cmd" in
         docker compose -f "$BASE_COMPOSE" exec verda-local bash "$@" || exec docker compose -f "$BASE_COMPOSE" exec verda-local sh "$@"
         ;;
     health)
-        for _ in $(seq 1 30); do
+        for _ in $(seq 1 "$EMULATOR_HEALTH_WAIT_SECONDS"); do
             code=$(curl -fsS -o /dev/null -w '%{http_code}' "http://localhost:${APP_PORT}/health" 2>/dev/null) && {
                 echo "Health: $code"
                 exit 0
             }
             sleep 1
         done
-        echo "ERROR: /health did not return 200 within 30s" >&2
+        echo "ERROR: /health did not return 200 within ${EMULATOR_HEALTH_WAIT_SECONDS}s" >&2
         exit 1
         ;;
     help|-h|--help)

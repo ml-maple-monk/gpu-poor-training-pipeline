@@ -37,6 +37,7 @@ The emulator is meant to feel like the running container boundary once deployed:
 - auth-protected debug endpoints
 - health checks and GPU gating
 - writable `/data`
+- HF-backed dataset bootstrap into `/data/datasets` using the same `HF_TOKEN`, `HF_DATASET_REPO`, and `HF_DATASET_FILENAME` contract as the remote container
 - explicit degraded-mode behavior when local prerequisites are missing
 
 Non-goals:
@@ -54,6 +55,20 @@ Non-goals:
 | `infrastructure/local-emulator/docker/Dockerfile` | Emulator image build |
 | `infrastructure/local-emulator/scripts/entrypoint.sh` | Runtime boot wrapper |
 | `infrastructure/local-emulator/src/main.py` | FastAPI emulator endpoints |
+| `training/scripts/lib/hf-dataset-bootstrap.sh` | Shared HF dataset bootstrap helper used by both local and remote containers |
+
+## Dataset Bootstrap
+
+When `/data/datasets/pretrain_t2t_mini.jsonl` is missing, the emulator now downloads it from Hugging Face before serving traffic.
+
+The contract mirrors the remote Verda container:
+- `HF_TOKEN`
+- `HF_DATASET_REPO`
+- `HF_DATASET_FILENAME`
+
+Local convenience behavior:
+- `./infrastructure/local-emulator/start.sh up` loads `HF_TOKEN` from the repo-root `hf_token` file if it is not already exported.
+- The dataset is persisted into the host-mounted `data/datasets/` directory so later runs do not re-download it.
 
 ## Related Docs
 

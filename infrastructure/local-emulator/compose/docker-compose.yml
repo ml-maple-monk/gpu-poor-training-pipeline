@@ -3,8 +3,8 @@ name: verda-local-emulator
 services:
   verda-local:
     build:
-      context: ..
-      dockerfile: docker/Dockerfile
+      context: ../../..
+      dockerfile: infrastructure/local-emulator/docker/Dockerfile
       args:
         BASE_IMAGE: ${BASE_IMAGE:-nvidia/cuda:12.4.1-runtime-ubuntu22.04}
         APP_PORT: ${APP_PORT:-8000}
@@ -13,6 +13,11 @@ services:
     environment:
       # environment: overrides env_file: — VERDA_REQUIRE_GPU cannot be weakened via .env.inference
       VERDA_REQUIRE_GPU: "1"
+      HF_TOKEN: "${HF_TOKEN:-}"
+      HF_DATASET_REPO: "${HF_DATASET_REPO:-jingyaogong/minimind_dataset}"
+      HF_DATASET_FILENAME: "${HF_DATASET_FILENAME:-pretrain_t2t_mini.jsonl}"
+      DATASET_MIN_BYTES: "${DATASET_MIN_BYTES:-524288000}"
+      HF_HOME: /data/hf_cache
     volumes:
       - ../../../data:/data
     ports:

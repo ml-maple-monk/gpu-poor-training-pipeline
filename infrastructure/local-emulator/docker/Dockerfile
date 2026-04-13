@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-COPY config/requirements.txt .
+COPY infrastructure/local-emulator/config/requirements.txt .
 RUN python3 -m venv /venv && /venv/bin/pip install --no-cache-dir -r requirements.txt
 
 # --- runtime stage ---
@@ -35,18 +35,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /venv /venv
-ENV PATH="/venv/bin:$PATH"
+ENV PATH="/venv/bin:$PATH" \
+    HF_HOME=/data/hf_cache \
+    HF_HUB_ENABLE_HF_TRANSFER=0 \
+    TRANSFORMERS_OFFLINE=0 \
+    TOKENIZERS_PARALLELISM=false
 
 RUN groupadd -g ${APP_GID} ${APP_USER} && \
     useradd -u ${APP_UID} -g ${APP_GID} -m -s /bin/sh ${APP_USER}
 
 WORKDIR /app
-COPY src/ /app/src/
-COPY scripts/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+COPY infrastructure/local-emulator/src/ /app/src/
+COPY infrastructure/local-emulator/scripts/entrypoint.sh /app/entrypoint.sh
+COPY training/scripts/lib/hf-dataset-bootstrap.sh /app/lib/hf-dataset-bootstrap.sh
+RUN chmod +x /app/entrypoint.sh /app/lib/hf-dataset-bootstrap.sh
 
-# /data owned by verda so the non-root user can write
-RUN mkdir -p /data && chown ${APP_UID}:${APP_GID} /data
+# /data owned by verda so the non-root user can write and bootstrap HF assets
+RUN mkdir -p /data /data/datasets /data/hf_cache && chown -R ${APP_UID}:${APP_GID} /data
 
 EXPOSE ${APP_PORT}
 
