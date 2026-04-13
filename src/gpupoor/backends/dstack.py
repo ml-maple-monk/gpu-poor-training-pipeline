@@ -4,72 +4,18 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
-import shutil
 import subprocess
 import time
 import urllib.request
 
+from gpupoor import maintenance
 from gpupoor.config import BackendConfig, RunConfig
 from gpupoor.paths import repo_path
+from gpupoor.remote_env import find_dstack_bin, load_remote_settings, parse_env_file, require_remote_settings
 from gpupoor.subprocess_utils import CommandError, bash_script, run_command
 
-
-DEFAULT_VCR_IMAGE_BASE = "vccr.io/f53909d3-a071-4826-8635-a62417ffc867/verda-minimind"
 DSTACK_SERVER_HEALTH_URL = "http://127.0.0.1:3000/"
 MLFLOW_HEALTH_URL = "http://127.0.0.1:5000/health"
-
-
-def parse_env_file(path: Path) -> dict[str, str]:
-    data: dict[str, str] = {}
-    if not path.is_file():
-        return data
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        key, sep, value = line.partition("=")
-        if not sep:
-            continue
-        data[key.strip()] = value.strip().strip("'\"")
-    return data
-
-
-def load_remote_settings() -> dict[str, str]:
-    settings = parse_env_file(repo_path(".env.remote"))
-    for key in ("VCR_IMAGE_BASE", "VCR_LOGIN_REGISTRY", "VCR_USERNAME", "VCR_PASSWORD", "REMOTE_IMAGE_TAG"):
-        if os.environ.get(key):
-            settings[key] = os.environ[key]
-    settings.setdefault("VCR_IMAGE_BASE", DEFAULT_VCR_IMAGE_BASE)
-    settings.setdefault("VCR_LOGIN_REGISTRY", settings["VCR_IMAGE_BASE"].rsplit("/", 1)[0])
-    return settings
-
-
-def require_remote_settings(settings: dict[str, str]) -> None:
-    missing = [key for key in ("VCR_USERNAME", "VCR_PASSWORD") if not settings.get(key)]
-    if missing:
-        missing_display = ", ".join(missing)
-        raise RuntimeError(
-            f"Missing remote registry settings: {missing_display}. "
-            "Provide them via env vars or .env.remote."
-        )
-
-
-def find_dstack_bin() -> str:
-    candidates = [
-        os.environ.get("DSTACK_BIN"),
-        str(Path.home() / ".dstack-cli-venv" / "bin" / "dstack"),
-        shutil.which("dstack"),
-    ]
-    for candidate in candidates:
-        if not candidate:
-            continue
-        if not os.access(candidate, os.X_OK):
-            continue
-        result = subprocess.run([candidate, "--version"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if result.returncode == 0:
-            return candidate
-    raise RuntimeError("No working dstack CLI found")
 
 
 def http_ok(url: str) -> bool:
@@ -247,8 +193,7 @@ def launch_remote(
     require_remote_settings(settings)
     dstack_bin = find_dstack_bin()
 
-    preflight_env = {"PREFLIGHT_REMOTE": "1"}
-    bash_script(repo_path("scripts", "preflight.sh"), env=preflight_env)
+    maintenance.run_preflight(remote=True)
     if configure_server:
         bash_script(repo_path("dstack", "scripts", "setup-config.sh"))
     verify_mlflow()

@@ -68,6 +68,10 @@ explicit run contract.
 ```text
 gpupoor doctor
 gpupoor smoke
+gpupoor fix-clock
+gpupoor parse-secrets [secrets]
+gpupoor leak-scan [image]
+gpupoor check-anchors
 gpupoor train <config.toml>
 gpupoor launch dstack <config.toml>
 gpupoor infra mlflow <up|down|logs|tunnel>

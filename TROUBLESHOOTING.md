@@ -54,8 +54,8 @@ This file is intentionally short and path-accurate for the current repo layout.
 ## Validation Commands
 
 ```bash
-bash scripts/preflight.sh
-bash scripts/doc-anchor-check.sh
+gpupoor doctor
+gpupoor check-anchors
 python3 -m pytest infrastructure/dashboard/tests -q
 python3 -m pytest training/tests -q
 ./run.sh remote --dry-run --skip-build

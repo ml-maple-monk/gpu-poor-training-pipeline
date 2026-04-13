@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 
+from gpupoor import maintenance
 from gpupoor.backends import dstack as dstack_backend
 from gpupoor.backends.local import local_training_command
 from gpupoor.paths import repo_path
@@ -104,11 +105,11 @@ def run_root(subcommand: str, args: list[str]) -> None:
         _print(_root_help())
         return
     if subcommand == "setup":
-        bash_script(repo_path("scripts", "preflight.sh"), env={"PREFLIGHT_REMOTE": "1"})
+        maintenance.run_preflight(remote=True)
         bash_script(repo_path("dstack", "scripts", "setup-config.sh"))
         return
     if subcommand == "fix-clock":
-        bash_script(repo_path("scripts", "fix-wsl-clock.sh"))
+        maintenance.fix_wsl_clock()
         return
     if subcommand == "local":
         run_command(local_training_command(args))

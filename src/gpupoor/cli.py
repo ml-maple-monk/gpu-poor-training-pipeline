@@ -11,8 +11,8 @@ from gpupoor.backends import dstack as dstack_backend
 from gpupoor.backends.local import run_training as run_local_training
 from gpupoor.compat import run_dstack, run_infra, run_root, run_training
 from gpupoor.config import ConfigError, load_run_config
-from gpupoor.paths import repo_path
-from gpupoor.subprocess_utils import bash_script
+from gpupoor import maintenance, smoke
+from gpupoor.subprocess_utils import CommandError
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -25,6 +25,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     smoke_parser = subparsers.add_parser("smoke", help="Run repo smoke checks")
     smoke_parser.add_argument("--cpu", action="store_true", help="Use the CPU emulator overlay")
+
+    subparsers.add_parser("fix-clock", help="Sync the WSL2 clock from Windows")
+
+    parse_parser = subparsers.add_parser("parse-secrets", help="Write .env files from the repo secrets file")
+    parse_parser.add_argument("secrets_file", nargs="?", help="Path to the Verda secrets file")
+
+    leak_parser = subparsers.add_parser("leak-scan", help="Scan a local image for leaked secrets")
+    leak_parser.add_argument("image", nargs="?", default="verda-local", help="Image name or repository prefix")
+    leak_parser.add_argument("--canary", action="store_true", help="Run the scanner canary self-test")
+
+    subparsers.add_parser("check-anchors", help="Verify referenced doc anchors resolve")
 
     train_parser = subparsers.add_parser("train", help="Run local training from a config file")
     train_parser.add_argument("config", help="Path to a TOML run config")
@@ -96,13 +107,27 @@ def run_non_mutating(label: str, action) -> None:
 
 def dispatch(args: argparse.Namespace) -> None:
     if args.command == "doctor":
-        env = {"PREFLIGHT_REMOTE": "1"} if args.remote else None
-        run_non_mutating("doctor", lambda: bash_script(repo_path("scripts", "preflight.sh"), env=env))
+        run_non_mutating("doctor", lambda: maintenance.run_preflight(remote=args.remote))
         return
 
     if args.command == "smoke":
-        extra = ["--cpu"] if args.cpu else []
-        run_non_mutating("smoke", lambda: bash_script(repo_path("scripts", "smoke.sh"), *extra))
+        run_non_mutating("smoke", lambda: smoke.run_smoke(cpu=args.cpu))
+        return
+
+    if args.command == "fix-clock":
+        maintenance.fix_wsl_clock()
+        return
+
+    if args.command == "parse-secrets":
+        maintenance.parse_secrets(args.secrets_file)
+        return
+
+    if args.command == "leak-scan":
+        maintenance.leak_scan(args.image, canary=args.canary)
+        return
+
+    if args.command == "check-anchors":
+        maintenance.check_doc_anchors()
         return
 
     if args.command == "train":
@@ -158,7 +183,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         dispatch(args)
-    except (ConfigError, RuntimeError, ValueError, FileNotFoundError) as exc:
+    except (CommandError, ConfigError, RuntimeError, ValueError, FileNotFoundError) as exc:
         print(f"gpupoor: {exc}", file=sys.stderr)
         return 1
     return 0
