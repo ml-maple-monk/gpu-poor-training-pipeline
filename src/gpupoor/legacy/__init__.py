@@ -34,8 +34,6 @@ Subcommands:
   dashboard [action]  Manage the Gradio dashboard (up|down|logs)
 
 Remote flags:
-  --pull-artifacts    Pull checkpoints after run
-  --keep-tunnel       Compatibility flag; the MLflow tunnel now stays up until teardown
   --skip-build        Skip image build+push
   --dry-run           Show what would be done
 """
@@ -117,15 +115,13 @@ def run_root(subcommand: str, args: list[str]) -> None:
     if subcommand == "remote":
         _ensure_only_known_flags(
             args,
-            allowed={"--pull-artifacts", "--keep-tunnel", "--skip-build", "--dry-run"},
+            allowed={"--skip-build", "--dry-run"},
             help_text=_root_help(),
         )
         dry_run = "--dry-run" in args
         dstack_backend.launch_remote(
             _default_remote_config(),
             skip_build="--skip-build" in args,
-            keep_tunnel="--keep-tunnel" in args,
-            pull_artifacts="--pull-artifacts" in args,
             dry_run=dry_run,
             configure_server=False,
         )
