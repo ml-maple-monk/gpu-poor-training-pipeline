@@ -14,17 +14,20 @@ dependencies = []
 
 [project.optional-dependencies]
 quality = [
-    "ruff>=0.6.0",
+    "pre-commit>=4,<5",
+    "ruff==0.14.10",
 ]
 test = [
-    "pytest>=8.0",
-    "pytest-cov>=5.0",
+    "pytest>=8,<9",
+    "pytest-cov>=5,<7",
 ]
 dev = [
-    "pre-commit>=3.8.0",
-    "ruff>=0.6.0",
-    "pytest>=8.0",
-    "pytest-cov>=5.0",
+    "pre-commit>=4,<5",
+    "ruff==0.14.10",
+    "pytest>=8,<9",
+    "pytest-cov>=5,<7",
+    "requests>=2.32,<3",
+    "httpx>=0.27,<1",
 ]
 
 [project.scripts]
@@ -39,20 +42,41 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests", "training/tests", "infrastructure/dashboard/tests"]
 addopts = "-ra --strict-config --strict-markers"
+xfail_strict = true
 markers = [
     "slow: slow-running tests (excluded from required PR lanes).",
     "docker: tests requiring local Docker runtime.",
     "live_dashboard: tests requiring running dashboard/live services.",
     "remote: tests requiring remote provider capacity or external remote services.",
 ]
+filterwarnings = [
+    "error::pytest.PytestUnhandledThreadExceptionWarning",
+    "error::pytest.PytestUnraisableExceptionWarning",
+]
+
+[tool.coverage.run]
+source = [
+    "src/gpupoor",
+    "training/src/minimind",
+    "infrastructure/dashboard/src",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
 
 [tool.ruff]
 target-version = "py311"
-line-length = 100
+line-length = 119
 src = [
-    "src/gpupoor",
+    "src",
     "tests",
+    "training/src/minimind",
+    "training/tests",
+    "infrastructure/dashboard/src",
+    "infrastructure/dashboard/tests",
 ]
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F"]
+select = ["E", "F", "I", "UP", "W"]
+ignore = ["E501"]

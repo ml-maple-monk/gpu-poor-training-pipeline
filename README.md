@@ -147,8 +147,24 @@ remote-access/
 ## Deeper Docs
 
 - [design.md](./design.md)
+- [CONTRIBUTING.md](./CONTRIBUTING.md)
 - [training/docs/README.md](./training/docs/README.md)
 - [dstack/docs/README.md](./dstack/docs/README.md)
 - [infrastructure/mlflow/docs/README.md](./infrastructure/mlflow/docs/README.md)
 - [infrastructure/dashboard/docs/README.md](./infrastructure/dashboard/docs/README.md)
 - [infrastructure/local-emulator/docs/README.md](./infrastructure/local-emulator/docs/README.md)
+
+## Contributor Guardrails
+
+Local contributor commands:
+
+```bash
+make format-check
+make lint
+make test-fast
+make ci-local
+```
+
+The required CI checks are `quality` and `tests`. Live/container/remote checks
+stay in the non-blocking `live-checks` lane until they meet the promotion
+criteria in `.omx/plans/prd-repo-guardrails.md`.
