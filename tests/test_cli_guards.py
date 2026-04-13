@@ -16,11 +16,73 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_run_non_mutating_rejects_tracked_changes(monkeypatch: pytest.MonkeyPatch) -> None:
-    states = iter([" M README.md\n", " M README.md\n M run.sh\n"])
-    monkeypatch.setattr(cli, "tracked_status", lambda: next(states))
+    states = iter(["HEAD-sha\n---\nexisting-diff\n", "HEAD-sha\n---\nexisting-diff\nmore\n"])
+    monkeypatch.setattr(cli, "tracked_fingerprint", lambda: next(states))
 
     with pytest.raises(RuntimeError, match="doctor mutated tracked files"):
         cli.run_non_mutating("doctor", lambda: None)
+
+
+def test_run_non_mutating_detects_remutation_of_already_dirty_file(tmp_path: Path) -> None:
+    """A re-edit of an already-M file must not slip past the guard.
+
+    The old porcelain-only check would see ' M file.txt' both before
+    and after and declare non-mutation.
+    """
+    import subprocess as _sp
+
+    _sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    _sp.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], check=True)
+    _sp.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True)
+    target = tmp_path / "file.txt"
+    target.write_text("first\n", encoding="utf-8")
+    _sp.run(["git", "-C", str(tmp_path), "add", "file.txt"], check=True)
+    _sp.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "seed"], check=True)
+    target.write_text("already-dirty\n", encoding="utf-8")  # leaves worktree in M state
+
+    import os as _os
+
+    prev = _os.getcwd()
+    _os.chdir(tmp_path)
+    try:
+
+        def action() -> None:
+            target.write_text("remutated\n", encoding="utf-8")
+
+        with pytest.raises(RuntimeError, match="mutated tracked files"):
+            cli.run_non_mutating("label", action)
+    finally:
+        _os.chdir(prev)
+
+
+def test_run_non_mutating_detects_commit_by_action(tmp_path: Path) -> None:
+    """An action that creates a new commit must be rejected even if the
+    working tree ends up clean again."""
+    import subprocess as _sp
+
+    _sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    _sp.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t"], check=True)
+    _sp.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True)
+    target = tmp_path / "file.txt"
+    target.write_text("first\n", encoding="utf-8")
+    _sp.run(["git", "-C", str(tmp_path), "add", "file.txt"], check=True)
+    _sp.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "seed"], check=True)
+
+    import os as _os
+
+    prev = _os.getcwd()
+    _os.chdir(tmp_path)
+    try:
+
+        def action() -> None:
+            target.write_text("second\n", encoding="utf-8")
+            _sp.run(["git", "-C", str(tmp_path), "add", "file.txt"], check=True)
+            _sp.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "sneaky"], check=True)
+
+        with pytest.raises(RuntimeError, match="mutated tracked files"):
+            cli.run_non_mutating("label", action)
+    finally:
+        _os.chdir(prev)
 
 
 def test_compat_remote_rejects_unknown_flags() -> None:
@@ -32,7 +94,7 @@ def test_doctor_delegates_to_package_preflight(monkeypatch: pytest.MonkeyPatch) 
     config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
     calls: list[tuple[bool, object, object]] = []
 
-    monkeypatch.setattr(cli, "tracked_status", lambda: "")
+    monkeypatch.setattr(cli, "tracked_fingerprint", lambda: "stable")
     monkeypatch.setattr(cli, "load_run_config", lambda path: config)
     monkeypatch.setattr(
         cli.ops,
@@ -53,7 +115,7 @@ def test_smoke_delegates_to_package_smoke(monkeypatch: pytest.MonkeyPatch) -> No
     config = load_run_config(REPO_ROOT / "examples" / "tiny_cpu.toml")
     calls: list[tuple[object, object]] = []
 
-    monkeypatch.setattr(cli, "tracked_status", lambda: "")
+    monkeypatch.setattr(cli, "tracked_fingerprint", lambda: "stable")
     monkeypatch.setattr(cli, "load_run_config", lambda path: config)
     monkeypatch.setattr(
         cli.ops, "run_smoke", lambda config=None, doctor=None: calls.append((config, doctor))

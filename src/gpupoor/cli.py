@@ -151,25 +151,37 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def tracked_status() -> str:
-    result = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=no"],
+def tracked_fingerprint() -> str:
+    """Snapshot tracked-file content plus HEAD for mutation detection.
+
+    `git status --porcelain` only reports file-status transitions, so
+    re-editing an already-M file leaves the porcelain output unchanged
+    and lets a mutation slip past the guard on a dirty worktree. The
+    diff-against-HEAD form captures content changes to tracked files,
+    and including the HEAD sha catches actions that commit.
+    """
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
         check=True,
         capture_output=True,
         text=True,
-    )
-    return result.stdout
+    ).stdout.strip()
+    diff = subprocess.run(
+        ["git", "diff", "HEAD", "--no-ext-diff", "--no-color"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return f"{head}\n---\n{diff}"
 
 
 def run_non_mutating(label: str, action) -> None:
-    before = tracked_status()
+    before = tracked_fingerprint()
     action()
-    after = tracked_status()
+    after = tracked_fingerprint()
     if before != after:
         raise RuntimeError(
-            f"{label} mutated tracked files.\n"
-            f"Before:\n{before or '<clean>'}\n"
-            f"After:\n{after or '<clean>'}"
+            f"{label} mutated tracked files (HEAD or working-tree content changed)."
         )
 
 
