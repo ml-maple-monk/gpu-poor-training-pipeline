@@ -1,4 +1,4 @@
-"""Tests for non-mutation guards and compat validation."""
+"""Tests for non-mutation guards and direct CLI dispatch."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from gpupoor import cli
-from gpupoor import legacy as compat
 from gpupoor.config import load_run_config
 from gpupoor.subprocess_utils import CommandError
 
@@ -84,11 +83,6 @@ def test_run_non_mutating_detects_commit_by_action(tmp_path: Path) -> None:
         _os.chdir(prev)
 
 
-def test_compat_remote_rejects_unknown_flags() -> None:
-    with pytest.raises(ValueError, match="Unknown flag: --bogus"):
-        compat.run_root("remote", ["--bogus"])
-
-
 def test_doctor_delegates_to_package_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
     config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
     calls: list[tuple[bool, object, object]] = []
@@ -130,15 +124,14 @@ def test_main_catches_command_errors(monkeypatch: pytest.MonkeyPatch, capsys: py
     assert "Command failed (7): boom" in capsys.readouterr().err
 
 
-def test_compat_setup_runs_package_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dstack_setup_runs_repo_script(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[tuple[str, object]] = []
 
-    monkeypatch.setattr(compat.ops, "run_preflight", lambda remote=False: events.append(("preflight", remote)))
-    monkeypatch.setattr(compat, "bash_script", lambda path, *args, **kwargs: events.append(("bash", path.name)))
+    monkeypatch.setattr(cli, "bash_script", lambda path, *args, **kwargs: events.append(("bash", path.name)))
 
-    compat.run_root("setup", [])
+    cli.dispatch(cli.build_parser().parse_args(["dstack", "setup"]))
 
-    assert events == [("preflight", True), ("bash", "setup-config.sh")]
+    assert events == [("bash", "setup-config.sh")]
 
 
 def test_launch_dstack_leaves_config_defaults_in_control_when_flags_omitted(
@@ -159,22 +152,32 @@ def test_launch_dstack_leaves_config_defaults_in_control_when_flags_omitted(
     assert calls == [(None, False)]
 
 
-def test_compat_fix_clock_uses_package_helper(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dstack_registry_login_runs_repo_script(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(cli, "bash_script", lambda path, *args, **kwargs: events.append(("bash", path.name)))
+
+    cli.dispatch(cli.build_parser().parse_args(["dstack", "registry-login", "--dry-run"]))
+
+    assert events == [("bash", "registry-login.sh")]
+
+
+def test_dstack_fleet_apply_uses_repo_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[list[str]] = []
+
+    monkeypatch.setattr(cli.dstack_backend, "find_dstack_bin", lambda: "dstack")
+    monkeypatch.setattr(cli, "run_command", lambda command, **kwargs: events.append(list(command)))
+
+    cli.dispatch(cli.build_parser().parse_args(["dstack", "fleet-apply"]))
+
+    assert events == [["dstack", "apply", "-f", str(REPO_ROOT / "dstack" / "config" / "fleet.dstack.yml"), "-y"]]
+
+
+def test_dstack_teardown_delegates_to_remote_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     called: list[str] = []
 
-    monkeypatch.setattr(compat.ops, "fix_wsl_clock", lambda: called.append("fix-clock"))
+    monkeypatch.setattr(cli.dstack_backend, "teardown_remote_state", lambda: called.append("teardown"))
 
-    compat.run_root("fix-clock", [])
+    cli.dispatch(cli.build_parser().parse_args(["dstack", "teardown"]))
 
-    assert called == ["fix-clock"]
-
-
-def test_compat_emulator_health_forwards_extra_args(monkeypatch: pytest.MonkeyPatch) -> None:
-    from gpupoor.services import emulator as emulator_service
-
-    calls: list[list[str]] = []
-    monkeypatch.setattr(emulator_service, "health", lambda extra_args=None: calls.append(extra_args or []))
-
-    compat.run_infra("emulator", "health", ["--port", "9001", "--timeout-seconds", "15"])
-
-    assert calls == [["--port", "9001", "--timeout-seconds", "15"]]
+    assert called == ["teardown"]

@@ -85,8 +85,8 @@ ignore = ["E501"]
 # mutmut baseline lives at .mutmut-baseline/main.txt (committed, see .gitignore).
 # Scope: the two refactor-central files (config.py + dstack.py) covering PR1 (MlflowConfig.to_env,
 # BackendConfig field delete) and PR3 (launch_remote split, __post_init__ validation). The other
-# five files in plans/zazzy-sniffing-prism.md (local.py, cli.py, legacy/__init__.py, ops/doctor.py,
-# services/mlflow.py) are guarded by the existing pytest suite only — their refactors are mechanical
+# four files in plans/zazzy-sniffing-prism.md (local.py, cli.py, ops/doctor.py, services/mlflow.py)
+# are guarded by the existing pytest suite only — their refactors are mechanical
 # (inline substitution, leaf-subparser dispatch, dict table, single-line extract) and low-risk.
 # Weak-baseline acknowledgement: initial probe showed >50% survivor rate on config.py. Plan's
 # sanity gate (halt if >30%) is explicitly waived — the golden-fixture test, 67 existing tests, and
