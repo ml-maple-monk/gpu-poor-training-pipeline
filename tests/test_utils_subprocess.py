@@ -57,3 +57,30 @@ def test_run_command_timeout_propagates() -> None:
             [sys.executable, "-c", "import time; time.sleep(5)"],
             timeout=0.2,
         )
+
+
+def test_run_command_logs_argv_by_default(caplog) -> None:
+    """Default behavior emits the '$ argv' log line at INFO level so
+    operators can see what the helper is about to execute."""
+    import logging
+
+    caplog.set_level(logging.INFO, logger="gpupoor.subprocess_utils")
+    run_command([sys.executable, "-c", "pass"])
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(msg.startswith("$ ") for msg in messages), (
+        f"expected '$ ' prefix in logs; got {messages!r}"
+    )
+
+
+def test_run_command_quiet_suppresses_argv_log(caplog) -> None:
+    """quiet=True must suppress the '$ argv' log line entirely so probe
+    callers (e.g. doctor preflight) do not leak output that would
+    break the dry-run golden fixture."""
+    import logging
+
+    caplog.set_level(logging.INFO, logger="gpupoor.subprocess_utils")
+    run_command([sys.executable, "-c", "pass"], quiet=True)
+    messages = [record.getMessage() for record in caplog.records]
+    assert not any(msg.startswith("$ ") for msg in messages), (
+        f"quiet=True must suppress '$ ' lines; got {messages!r}"
+    )

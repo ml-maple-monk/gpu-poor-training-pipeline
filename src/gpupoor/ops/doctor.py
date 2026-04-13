@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from gpupoor.config import DoctorConfig, RemoteConfig, find_dstack_bin, load_remote_settings
-from gpupoor.subprocess_utils import run_command
+from gpupoor.subprocess_utils import CommandError, run_command
 from gpupoor.utils import repo_path, repo_root
 
 ANCHOR_PATTERN = re.compile(r"doc-anchor:\s*([\w-]+)")
@@ -41,24 +41,29 @@ def _read_windows_utc_timestamp() -> str:
     fall through to the existing failure path (reporter.warn(...) in
     ``_run_local_preflight``). powershell.exe can hang indefinitely if the
     Windows host is wedged — the timeout prevents preflight from blocking.
+
+    Routed through the shared ``run_command`` helper with ``quiet=True`` so
+    the probe does not emit a ``$ powershell.exe …`` log line that would
+    leak into the dry-run golden fixture (see CS4/CS5 rationale).
     """
     try:
-        result = subprocess.run(
+        result = run_command(
             [
                 "powershell.exe",
                 "-NoProfile",
                 "-Command",
                 "[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()",
             ],
-            text=True,
-            stderr=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            timeout=5,
+            capture_output=True,
             check=True,
+            timeout=5,
+            quiet=True,
         )
     except subprocess.TimeoutExpired:
         return ""
-    return result.stdout.strip()
+    except CommandError:
+        return ""
+    return (result.stdout or "").strip()
 
 
 def _absolute_delta(lhs: int, rhs: int) -> int:

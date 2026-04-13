@@ -36,9 +36,37 @@ _DSTACK_CLI = (
     or shutil.which("dstack")
     or "/home/geeyang/.dstack-cli-venv/bin/dstack"
 )
-# NOTE: "attach" is retained for `attach --logs` which is read-only in practice;
-#       a stricter split (e.g. per-verb arg allowlists) is tracked for a follow-up PR.
+# NOTE: "attach" is retained for `attach --logs` which is read-only in
+#       practice. CS5 fixed in this commit: per-verb argv allowlist below
+#       binds "attach" to the "--logs" flag specifically, so any other
+#       attach invocation (interactive shell, `--tty`, bare `attach`) is
+#       rejected before the subprocess is spawned.
 _ALLOWED_DSTACK_CLI_VERBS = frozenset({"logs", "ps", "attach"})
+
+# Per-verb argv shape allowlist. Each entry has:
+#   * ``flags``: tokens (``-x`` / ``--xyz``) accepted for that verb.
+#     Anything starting with ``-`` outside this set is rejected.
+#   * ``positional``: maximum count of non-flag tokens (each of which
+#     must additionally pass ``_SAFE_TARGET_RE``).
+#   * ``required_flags``: tokens that MUST appear in argv — used to bind
+#     ``attach`` to ``--logs`` so interactive attach is impossible.
+_ALLOWED_DSTACK_ARGV: dict[str, dict[str, object]] = {
+    "logs": {
+        "flags": frozenset({"--follow", "-f", "--tail"}),
+        "positional": 1,
+        "required_flags": frozenset(),
+    },
+    "ps": {
+        "flags": frozenset({"--all", "-a", "--json"}),
+        "positional": 0,
+        "required_flags": frozenset(),
+    },
+    "attach": {
+        "flags": frozenset({"--logs"}),
+        "positional": 1,
+        "required_flags": frozenset({"--logs"}),
+    },
+}
 
 # Argv flag-smuggling defence: reject any target/run-name that could be
 # interpreted as a CLI flag (leading "-") or contains characters outside a
@@ -60,18 +88,55 @@ def _assert_safe_target(value: str) -> str:
 
 
 def _safe_dstack_cli(argv: list[str]) -> subprocess.Popen:
-    """Spawn dstack CLI with argv[0] in a whitelist of read-only verbs."""
+    """Spawn dstack CLI with a per-verb argv shape allowlist.
+
+    The check enforces, in order:
+      1. Verb (argv[0]) must be a key in ``_ALLOWED_DSTACK_ARGV``.
+      2. Every flag-shaped token (``-x`` / ``--xyz``) must be in the
+         per-verb ``flags`` set — unknown flags are rejected so payloads
+         like ``--config=/etc/passwd`` cannot slip in.
+      3. Every non-flag positional must pass ``_SAFE_TARGET_RE`` and the
+         total positional count must not exceed the per-verb budget.
+
+    SECURITY: this binds ``attach`` to ``--logs`` only — interactive
+    attach (``attach run-foo`` with no flag, or ``--tty``) is rejected
+    before any subprocess is spawned.
+    """
     if not argv or argv[0] not in _ALLOWED_DSTACK_CLI_VERBS:
         raise ValueError(f"dstack CLI verb {argv[:1]!r} not in whitelist")
-    # Argv flag-smuggling defence: any positional argv element that is NOT a
-    # known-safe CLI flag (e.g. "--logs") must pass the safe-target regex.
-    # This blocks payloads like `--config=/etc/passwd` from slipping in as a
-    # run name. We allow-list specific flags rather than regex-accept them.
-    _ALLOWED_FLAGS = frozenset({"--logs"})
+    spec = _ALLOWED_DSTACK_ARGV.get(argv[0])
+    if spec is None:
+        # Defensive: keep the two allowlists in sync.
+        raise ValueError(f"dstack CLI verb {argv[0]!r} has no argv spec")
+    allowed_flags: frozenset[str] = spec["flags"]  # type: ignore[assignment]
+    required_flags: frozenset[str] = spec["required_flags"]  # type: ignore[assignment]
+    max_positional: int = spec["positional"]  # type: ignore[assignment]
+    seen_flags: set[str] = set()
+    positional_seen = 0
     for arg in argv[1:]:
-        if arg in _ALLOWED_FLAGS:
+        if arg.startswith("-"):
+            if arg not in allowed_flags:
+                # Don't echo the rejected flag — it could be attacker-controlled.
+                log.warning("rejected dstack CLI flag for verb %s", argv[0])
+                raise ValueError(f"dstack CLI flag not allowed for verb {argv[0]!r}")
+            seen_flags.add(arg)
             continue
         _assert_safe_target(arg)
+        positional_seen += 1
+        if positional_seen > max_positional:
+            raise ValueError(
+                f"dstack CLI verb {argv[0]!r} accepts at most "
+                f"{max_positional} positional arg(s)"
+            )
+    missing = required_flags - seen_flags
+    if missing:
+        # SECURITY: `attach` requires `--logs` so interactive attach is
+        # impossible — bare `attach run-foo` would otherwise spawn an
+        # interactive session that exceeds the read-only contract.
+        raise ValueError(
+            f"dstack CLI verb {argv[0]!r} missing required flag(s): "
+            f"{sorted(missing)!r}"
+        )
     env = {
         **os.environ,
         "DSTACK_SERVER": os.environ.get("DSTACK_SERVER", "http://host.docker.internal:3000"),

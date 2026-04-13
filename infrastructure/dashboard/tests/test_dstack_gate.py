@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.bootstrap import _probe_rest, choose_access_path
+from src.bootstrap import _probe_dstack_cli, _probe_rest, choose_access_path
 
 
 @pytest.mark.parametrize("response_shape", [{"runs": []}, []], ids=["dict-runs", "bare-list"])
@@ -86,3 +86,25 @@ def test_probe_rest_handles_missing_runs_key():
 
     with patch("src.bootstrap.safe_dstack_rest", return_value=mock_resp):
         assert _probe_rest() is False
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        PermissionError("dstack binary not executable"),
+        FileNotFoundError("dstack not on PATH"),
+        __import__("subprocess").TimeoutExpired(cmd="dstack ps", timeout=10),
+    ],
+    ids=["permission-denied", "binary-missing", "probe-timeout"],
+)
+def test_probe_dstack_cli_handles_concrete_exceptions(exc):
+    """Proves the narrowed except tuple covers the realistic failure
+    set (OSError + subprocess.SubprocessError) without re-raising —
+    CS5 replaced the bare `except Exception` with this tighter set.
+
+    ``subprocess`` is imported inside the function under test, so we
+    patch ``subprocess.run`` at the stdlib level rather than on the
+    ``src.bootstrap`` module namespace.
+    """
+    with patch("subprocess.run", side_effect=exc):
+        assert _probe_dstack_cli() is False

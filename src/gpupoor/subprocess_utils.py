@@ -43,6 +43,7 @@ def run_command(
     check: bool = True,
     timeout: float | None = None,
     capture_output: bool = False,
+    quiet: bool = False,
 ) -> subprocess.CompletedProcess:
     """Run a subprocess, optionally capturing stdout/stderr.
 
@@ -50,8 +51,14 @@ def run_command(
     returned ``CompletedProcess`` has ``stdout``/``stderr`` set to
     ``None``. When ``capture_output=True`` the helper captures both
     streams as text and returns them on the ``CompletedProcess``.
+
+    Set ``quiet=True`` to suppress the ``$ argv`` log line for probe
+    callers that must stay silent (e.g., doctor preflight checks
+    where any extra log output would break the dry-run golden
+    fixture). Default behavior is unchanged.
     """
-    log_command(command)
+    if not quiet:
+        log_command(command)
     completed = subprocess.run(
         list(command),
         cwd=str(cwd) if cwd else None,

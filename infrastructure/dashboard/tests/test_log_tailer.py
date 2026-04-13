@@ -188,8 +188,81 @@ def test_safe_docker_rejects_flag_like_target(monkeypatch):
 
 def test_safe_dstack_cli_rejects_flag_like_run_name(monkeypatch):
     """A remote run name that looks like a CLI flag must be rejected with
-    ValueError before reaching the dstack CLI subprocess."""
+    ValueError before reaching the dstack CLI subprocess.
+
+    With the CS5 per-verb allowlist, ``--foo`` is now rejected at the
+    flag-allowlist stage (it starts with ``-`` and is not in the
+    per-verb ``flags`` set) rather than the safe-target regex stage.
+    The security contract — rejection before subprocess spawn — is
+    preserved.
+    """
     from src import log_tailer as log_tailer_mod
 
-    with pytest.raises(ValueError, match="unsafe"):
+    with pytest.raises(ValueError, match="not allowed"):
         log_tailer_mod._safe_dstack_cli(["attach", "--logs", "--foo"])
+
+
+# ── CS5 per-verb argv allowlist tests ─────────────────────────────────────────
+
+
+def test_attach_without_logs_flag_rejected():
+    """`attach` is bound to `--logs` for read-only log streaming. A
+    bare `attach run-foo` (interactive shell) must be rejected
+    before the subprocess is spawned, because interactive attach
+    exceeds the dashboard's read-only contract."""
+    from src import log_tailer as log_tailer_mod
+
+    with pytest.raises(ValueError, match="missing required flag"):
+        log_tailer_mod._safe_dstack_cli(["attach", "run-foo"])
+
+
+def test_attach_with_unknown_flag_rejected():
+    """`attach --tty run-foo` (or any unknown attach flag) is rejected
+    at the per-verb flag allowlist gate so unanticipated CLI modes
+    cannot escalate the dashboard out of read-only access."""
+    from src import log_tailer as log_tailer_mod
+
+    with pytest.raises(ValueError, match="not allowed"):
+        log_tailer_mod._safe_dstack_cli(["attach", "--tty", "run-foo"])
+
+
+def test_logs_follow_flag_accepted(monkeypatch):
+    """`logs --follow run-name` is a valid happy-path argv shape and
+    must pass the per-verb allowlist without raising. We stub
+    subprocess.Popen so the test does not actually spawn dstack."""
+    from src import log_tailer as log_tailer_mod
+
+    fake_popen = MagicMock()
+    monkeypatch.setattr(log_tailer_mod.subprocess, "Popen", lambda *a, **kw: fake_popen)
+    result = log_tailer_mod._safe_dstack_cli(["logs", "--follow", "run-foo"])
+    assert result is fake_popen
+
+
+def test_ps_accepts_json_flag(monkeypatch):
+    """`ps --json` is a valid read-only listing call — the per-verb
+    allowlist must accept it without raising."""
+    from src import log_tailer as log_tailer_mod
+
+    fake_popen = MagicMock()
+    monkeypatch.setattr(log_tailer_mod.subprocess, "Popen", lambda *a, **kw: fake_popen)
+    result = log_tailer_mod._safe_dstack_cli(["ps", "--json"])
+    assert result is fake_popen
+
+
+def test_unknown_flag_rejected_for_logs():
+    """Any flag outside the per-verb allowlist must be rejected, even
+    on otherwise-allowed verbs. This blocks payloads like
+    `logs --evil run-foo` from passing through."""
+    from src import log_tailer as log_tailer_mod
+
+    with pytest.raises(ValueError, match="not allowed"):
+        log_tailer_mod._safe_dstack_cli(["logs", "--evil", "run-foo"])
+
+
+def test_ps_rejects_positional_overflow():
+    """`ps` accepts zero positionals — a positional run name must be
+    rejected as overflow rather than silently passed to the CLI."""
+    from src import log_tailer as log_tailer_mod
+
+    with pytest.raises(ValueError, match="positional"):
+        log_tailer_mod._safe_dstack_cli(["ps", "run-foo"])

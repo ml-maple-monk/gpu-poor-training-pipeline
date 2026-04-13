@@ -63,7 +63,15 @@ def _probe_dstack_cli() -> bool:
             timeout=10,
         )
         return result.returncode == 0
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
+        # OSError: FileNotFoundError (no dstack on PATH),
+        #          PermissionError (binary not executable).
+        # subprocess.SubprocessError: TimeoutExpired (>10s),
+        #          CalledProcessError (n/a here since check=False but
+        #          kept for future-proofing).
+        # Note: returncode is parsed via the existing `.returncode == 0`
+        # check, no JSON decoding happens here, so JSONDecodeError is
+        # intentionally absent from the tuple.
         log.info("dstack CLI probe failed: %s", exc)
         return False
 
