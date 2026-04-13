@@ -1,0 +1,42 @@
+# Mutmut Baseline — main @ refactor/zazzy-sniffing-prism Task 0
+# Captured: 2026-04-13
+# Scope: src/gpupoor/config.py, src/gpupoor/backends/dstack.py
+# Tool: mutmut 2.5.1 via python -m pytest -x -q -m 'not slow and not docker and not live_dashboard and not remote'
+#
+# IMPORTANT — This baseline is PARTIAL. The full run was projected at ~2h and stopped
+# early after observing that the tested sample already crossed the plan's advisory
+# >30% survivor-rate threshold on config.py. Per user decision recorded in the
+# plan file (§Risks: "Gate waived at Task 0 implementation time"), the refactor
+# proceeds with weak mutmut coverage and relies on the golden-fixture test,
+# 67 existing pytest cases, and byte-diff checks per PR.
+#
+# mutmut 2.5.1 has a runtime bug in its `mutmut results` command
+# (TypeError: 'QueryResultIterator' object is not iterable, when pony>=0.7.19
+# is installed). Numbers below were extracted directly from the SQLite cache
+# at .mutmut-cache via: sqlite3 .mutmut-cache and aggregating the Mutant table
+# joined on Line + SourceFile.
+#
+# Per-PR comparison semantics:
+#   - PR1/PR2/PR3 may RE-RUN mutmut against the same two files (config.py + dstack.py).
+#   - The comparison target is "no new survived mutants on lines unchanged by the PR."
+#   - Mutants on refactored lines are fresh and compared to pytest outcomes only.
+#   - This file is informational; it does NOT gate PR merges.
+
+File: src/gpupoor/config.py
+  Total mutants generated: 316
+  Tested:   69  (killed=11, survived=58)
+  Untested: 247 (mutmut baseline stopped before completion)
+  Survivor rate on tested sample: 84.1% (58 / 69)
+
+File: src/gpupoor/backends/dstack.py
+  Total mutants generated: 300
+  Tested:   0
+  Untested: 300 (mutmut baseline stopped before reaching this file)
+  Survivor rate on tested sample: n/a
+
+Aggregate:
+  Total mutants: 616
+  Tested:  69 (11.2%)
+  Killed:  11 (15.9% of tested)
+  Survived: 58 (84.1% of tested)
+  Untested: 547

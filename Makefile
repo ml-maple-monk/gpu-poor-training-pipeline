@@ -9,7 +9,11 @@ JUNIT_XML := $(ARTIFACT_DIR)/junit.xml
 COVERAGE_XML := $(ARTIFACT_DIR)/coverage.xml
 REQUIRED_TEST_COMMAND = PYTHONHASHSEED=0 TZ=UTC $(PYTEST) $(REQUIRED_TEST_DIRS) -m "$(FAST_MARKERS)" --strict-config --strict-markers --junitxml=$(JUNIT_XML) --cov=src/gpupoor --cov=training/src/minimind --cov=infrastructure/dashboard/src --cov-report=xml:$(COVERAGE_XML) --cov-report=term-missing:skip-covered
 
-.PHONY: install-dev format format-check lint lint-fix test test-fast test-integration test-live ci-local
+MUTANT_PATHS ?=
+MUTANT_BASELINE_DIR := .mutmut-baseline
+MUTANT_BASELINE_FILE := $(MUTANT_BASELINE_DIR)/main.txt
+
+.PHONY: install-dev format format-check lint lint-fix test test-fast test-integration test-live ci-local mutants mutants-report mutants-baseline
 
 install-dev:
 	$(PYTHON) -m pip install --upgrade pip
@@ -51,3 +55,21 @@ ci-local:
 	$(MAKE) lint
 	$(MAKE) test-fast
 	$(PYTHON) -m gpupoor --help
+
+mutants:
+	@mkdir -p $(MUTANT_BASELINE_DIR)
+	@if [ -n "$(MUTANT_PATHS)" ]; then \
+		$(PYTHON) -m mutmut run --paths-to-mutate "$(MUTANT_PATHS)"; \
+	else \
+		$(PYTHON) -m mutmut run; \
+	fi
+
+mutants-report:
+	@mkdir -p $(MUTANT_BASELINE_DIR)
+	$(PYTHON) -m mutmut results
+
+mutants-baseline:
+	@mkdir -p $(MUTANT_BASELINE_DIR)
+	$(PYTHON) -m mutmut run
+	$(PYTHON) -m mutmut results > $(MUTANT_BASELINE_FILE)
+	@echo "Baseline written to $(MUTANT_BASELINE_FILE)"
