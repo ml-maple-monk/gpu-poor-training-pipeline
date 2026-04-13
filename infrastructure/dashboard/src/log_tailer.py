@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import shutil
 import signal
 import subprocess
 import threading
@@ -25,14 +27,51 @@ from .safe_exec import safe_docker
 log = logging.getLogger(__name__)
 
 _RING_SIZE = 500
-_DSTACK_CLI = "/home/geeyang/.dstack-cli-venv/bin/dstack"
+# Resolve the dstack CLI path from env first, then $PATH, then the legacy
+# hardcoded user-scoped venv (kept as a last-resort fallback for existing
+# local setups). This removes the hardcoded /home/geeyang path from the
+# source tree — callers that need a specific binary set $DSTACK_CLI_PATH.
+_DSTACK_CLI = (
+    os.environ.get("DSTACK_CLI_PATH")
+    or shutil.which("dstack")
+    or "/home/geeyang/.dstack-cli-venv/bin/dstack"
+)
+# NOTE: "attach" is retained for `attach --logs` which is read-only in practice;
+#       a stricter split (e.g. per-verb arg allowlists) is tracked for a follow-up PR.
 _ALLOWED_DSTACK_CLI_VERBS = frozenset({"logs", "ps", "attach"})
+
+# Argv flag-smuggling defence: reject any target/run-name that could be
+# interpreted as a CLI flag (leading "-") or contains characters outside a
+# conservative safe set. Applied at call sites for `safe_docker(["logs", ...])`
+# and `_safe_dstack_cli(["attach", ...])`.
+_SAFE_TARGET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _assert_safe_target(value: str) -> str:
+    """Validate an argv value used as a docker container or dstack run name.
+
+    SECURITY: on rejection, only log a generic message — NEVER log the
+    rejected value itself, since it could be an attacker-controlled payload.
+    """
+    if not isinstance(value, str) or not _SAFE_TARGET_RE.match(value):
+        log.warning("rejected unsafe target (failed _SAFE_TARGET_RE)")
+        raise ValueError("unsafe target rejected")
+    return value
 
 
 def _safe_dstack_cli(argv: list[str]) -> subprocess.Popen:
     """Spawn dstack CLI with argv[0] in a whitelist of read-only verbs."""
     if not argv or argv[0] not in _ALLOWED_DSTACK_CLI_VERBS:
         raise ValueError(f"dstack CLI verb {argv[:1]!r} not in whitelist")
+    # Argv flag-smuggling defence: any positional argv element that is NOT a
+    # known-safe CLI flag (e.g. "--logs") must pass the safe-target regex.
+    # This blocks payloads like `--config=/etc/passwd` from slipping in as a
+    # run name. We allow-list specific flags rather than regex-accept them.
+    _ALLOWED_FLAGS = frozenset({"--logs"})
+    for arg in argv[1:]:
+        if arg in _ALLOWED_FLAGS:
+            continue
+        _assert_safe_target(arg)
     env = {
         **os.environ,
         "DSTACK_SERVER": os.environ.get("DSTACK_SERVER", "http://host.docker.internal:3000"),
@@ -172,20 +211,45 @@ class LogTailer:
                     return
                 target = self.target
 
+            # Validate the container name before any argv reaches docker. A
+            # ValueError here is a programming/config bug, not a transient
+            # failure — raise so the caller sees it rather than silently
+            # entering an idle-retry loop on an unsafe value.
+            _assert_safe_target(target)
+
             # Precheck: is the container present at all? Avoid thrashing
             # "Error response from daemon: No such container" lines.
             inspect_rc = None
+            ins = None
             try:
                 ins = safe_docker(["inspect", target])
                 _ = ins.communicate(timeout=5)
                 inspect_rc = ins.returncode
-            except Exception:
+            except subprocess.TimeoutExpired:
+                # Reap the leaked Popen: kill the child, then wait() so it
+                # doesn't become a zombie. Treat a hung inspect as "absent".
+                log.warning("docker inspect precheck timed out; killing child")
+                if ins is not None:
+                    try:
+                        ins.kill()
+                    except OSError as exc:
+                        log.debug("kill on inspect timeout failed: %s", exc)
+                    try:
+                        ins.wait(timeout=2)
+                    except (OSError, subprocess.SubprocessError) as exc:
+                        log.debug("wait after kill failed: %s", exc)
+                inspect_rc = 1
+            except (OSError, subprocess.SubprocessError) as exc:
+                log.debug("docker inspect precheck failed: %s", exc)
                 inspect_rc = 1
             if inspect_rc != 0:
                 # Local container absent. If a REMOTE_RUN_NAME is configured,
                 # stream the remote Verda run's logs via the mounted dstack CLI.
                 remote_run = os.environ.get("REMOTE_RUN_NAME", "").strip()
                 if remote_run and os.path.exists(_DSTACK_CLI):
+                    # Validate the run name before argv construction — reject
+                    # flag-like tokens (e.g. "--foo") up-front.
+                    _assert_safe_target(remote_run)
                     _, cur = self.ring.snapshot()
                     if cur != last_missing_notice_seq:
                         self.ring.append(
@@ -202,7 +266,7 @@ class LogTailer:
                                     break
                             self.ring.append(redact(line.rstrip("\n")))
                         rproc.wait()
-                    except Exception as exc:
+                    except (OSError, subprocess.SubprocessError, httpx.HTTPError) as exc:
                         log.warning("dstack CLI log tailer error: %s", exc)
                     finally:
                         with self._lock:
@@ -234,7 +298,7 @@ class LogTailer:
                     self.ring.append(redact(line.rstrip("\n")))
                 proc.wait()
                 log.debug("docker logs -f exited (rc=%d) for %s", proc.returncode, target)
-            except Exception as exc:
+            except (OSError, subprocess.SubprocessError, httpx.HTTPError) as exc:
                 log.warning("docker log tailer error for %s: %s", target, exc)
             finally:
                 with self._lock:
@@ -268,7 +332,7 @@ class LogTailer:
                         if line:
                             self.ring.append(redact(line))
                 log.debug("dstack log stream ended for %s", target)
-            except Exception as exc:
+            except (OSError, subprocess.SubprocessError, httpx.HTTPError) as exc:
                 log.warning("dstack log tailer error for %s: %s", target, exc)
             finally:
                 with self._lock:

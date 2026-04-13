@@ -133,3 +133,43 @@ def test_collect_artifacts_no_mount(monkeypatch):
     items, status = collect_artifacts()
     assert items == []
     assert status == SourceStatus.STALE
+
+
+# ── F6 Test 5: collector timestamps must be timezone-aware UTC ────────────────
+
+
+def test_collector_uses_timezone_aware_datetime(monkeypatch):
+    """Proves the training collector stamps `last_refreshed_at` with a
+    tz-aware datetime (datetime.now(timezone.utc)), not the deprecated naive
+    datetime.utcnow() which loses zone information and emits DeprecationWarning
+    on Python 3.12+.
+    """
+    from src import collector_workers
+    from src.state import reset_state
+
+    state = reset_state()
+
+    # Stub the underlying collect_fn so we exercise only the state-write path.
+    fake_snap = MagicMock()
+    monkeypatch.setattr(
+        collector_workers,
+        "collect_training_snapshot",
+        lambda target: (fake_snap, SourceStatus.OK),
+    )
+
+    # Build the collector list but don't start threads — just invoke the 2s
+    # training closure directly.
+    workers = collector_workers.start_all_collectors(state)
+    for w in workers:
+        # Stop the daemon threads so they can't race with our assertions.
+        state.shutdown_event.set()
+    # Let the threads observe the shutdown and exit.
+    for w in workers:
+        w.join(timeout=1.0)
+
+    stamp = state.last_refreshed_at.get("training")
+    assert stamp is not None, "expected 'training' key to be populated"
+    assert stamp.tzinfo is not None, (
+        "collector must record a tz-aware datetime (datetime.now(timezone.utc)), "
+        f"got naive: {stamp!r}"
+    )

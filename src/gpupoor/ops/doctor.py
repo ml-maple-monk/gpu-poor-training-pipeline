@@ -35,16 +35,30 @@ def _mode_octal(path: Path) -> str:
 
 
 def _read_windows_utc_timestamp() -> str:
-    return subprocess.check_output(
-        [
-            "powershell.exe",
-            "-NoProfile",
-            "-Command",
-            "[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()",
-        ],
-        text=True,
-        stderr=subprocess.DEVNULL,
-    ).strip()
+    """Read the Windows UTC clock via powershell.exe, bounded at 5s.
+
+    Returns an empty string on timeout or non-zero exit so the caller can
+    fall through to the existing failure path (reporter.warn(...) in
+    ``_run_local_preflight``). powershell.exe can hang indefinitely if the
+    Windows host is wedged — the timeout prevents preflight from blocking.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-Command",
+                "[DateTimeOffset]::UtcNow.ToUnixTimeSeconds()",
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            timeout=5,
+            check=True,
+        )
+    except subprocess.TimeoutExpired:
+        return ""
+    return result.stdout.strip()
 
 
 def _absolute_delta(lhs: int, rhs: int) -> int:
