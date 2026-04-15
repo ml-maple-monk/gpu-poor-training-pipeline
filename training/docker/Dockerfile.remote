@@ -1,12 +1,13 @@
 # Dockerfile.remote — remote training image for Verda/dstack H100 runs
 #
-# Base: pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime  (~5 GB, no DEVEL headers)
-# Target: <7 GB compressed push to VCR
+# Base: slim shared training runtime image from Dockerfile.base
+# Target: thin repo layer on top of the shared training base
 #
 # DO NOT MODIFY training/docker/Dockerfile.train — that file is local-only.
 # This file is the source of truth for the remote image.
 
-FROM pytorch/pytorch:2.4.1-cuda12.4-cudnn9-runtime
+ARG BASE_IMAGE=verda-training-base:py312-cu128-slim
+FROM ${BASE_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -16,10 +17,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TRANSFORMERS_OFFLINE=0 \
     TOKENIZERS_PARALLELISM=false
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        git curl coreutils rsync openssh-server \
-    && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /var/run/sshd /root/.ssh \
+RUN mkdir -p /var/run/sshd /root/.ssh \
     && chmod 700 /root/.ssh
 
 # doc-anchor: remote-dockerfile-ssh-bake
@@ -29,12 +27,6 @@ RUN if [ -n "$SSH_PUBKEY" ]; then \
         echo "$SSH_PUBKEY" > /root/.ssh/authorized_keys && \
         chmod 600 /root/.ssh/authorized_keys; \
     fi
-EXPOSE 22
-
-# Install Python dependencies
-COPY training/config/requirements.train.txt /tmp/requirements.train.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.train.txt
-
 # Bake repo-owned training source (no runtime git clone)
 COPY training/src/minimind/ /opt/training/minimind/
 

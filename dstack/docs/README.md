@@ -37,6 +37,7 @@ uv pip install --python ~/.dstack-cli-venv/bin/python 'dstack[verda]==0.20.*'
 ## Runtime Contract
 
 - The task image comes from VCR: `${VCR_IMAGE_BASE}:${IMAGE_SHA}`
+- The published remote image is a thin repo layer on top of the shared slim base image `${TRAINING_BASE_IMAGE_BASE}:${IMAGE_SHA}`
 - Registry auth comes from `VCR_USERNAME` and `VCR_PASSWORD`
 - The task starts `bash /opt/training/scripts/remote-entrypoint.sh`
 - The remote image is expected to contain the repo-owned training source at `/opt/training/minimind`
