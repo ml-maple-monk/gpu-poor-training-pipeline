@@ -37,6 +37,14 @@ __all__ = [
 ]
 
 
+def cached_remote_image_metadata_path() -> Path:
+    return repo_path(".tmp", "remote-image-tag.json")
+
+
+def expected_training_base_image_base(settings: dict[str, str]) -> str:
+    return settings.get("TRAINING_BASE_IMAGE_BASE", f"{settings['VCR_IMAGE_BASE']}-base")
+
+
 def ensure_dstack_server(
     dstack_bin: str,
     *,
@@ -107,16 +115,56 @@ def git_short_sha() -> str:
     ).strip()
 
 
+def git_has_tracked_changes() -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(repo_path()), "status", "--porcelain", "--untracked-files=no"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return bool(result.stdout.strip())
+
+
+def read_cached_remote_image_tag(settings: dict[str, str]) -> str | None:
+    metadata_path = cached_remote_image_metadata_path()
+    if not metadata_path.is_file():
+        return None
+
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("vcr_image_base") != settings.get("VCR_IMAGE_BASE"):
+        return None
+    if payload.get("training_base_image_base") != expected_training_base_image_base(settings):
+        return None
+
+    image_tag = payload.get("image_tag")
+    if not isinstance(image_tag, str) or not image_tag:
+        return None
+    return image_tag
+
+
 def verify_mlflow(health_url: str, *, timeout_seconds: int) -> None:
     if not http_ok(health_url, timeout_seconds=timeout_seconds):
         raise RuntimeError(f"MLflow is not responding at {health_url}")
 
 
-def remote_image_tag(backend: BackendConfig, *, skip_build: bool, dry_run: bool, settings: dict[str, str]) -> str:
+def remote_image_tag(
+    backend: BackendConfig,
+    *,
+    skip_build: bool,
+    dry_run: bool,
+    settings: dict[str, str],
+    cached_tag: str | None = None,
+) -> str:
     if dry_run and not skip_build:
         return "dryrun0"
     if skip_build:
-        return backend.remote_image_tag or settings.get("REMOTE_IMAGE_TAG", "latest")
+        return backend.remote_image_tag or cached_tag or settings.get("REMOTE_IMAGE_TAG", "latest")
     return git_short_sha()
 
 
@@ -328,11 +376,18 @@ def launch_remote(
     )
 
     use_skip_build = config.backend.skip_build if skip_build is None else skip_build
+    cached_image_tag = None
 
     if not use_skip_build:
+        head_image_tag = git_short_sha()
+        if not dry_run and not git_has_tracked_changes():
+            cached_image_tag = read_cached_remote_image_tag(settings)
+            if cached_image_tag == head_image_tag:
+                use_skip_build = True
+                log.info("Reusing previously published remote image tag '%s'", cached_image_tag)
         if dry_run:
             print("[DRY-RUN] Would build and push the remote image")
-        else:
+        elif not use_skip_build:
             bash_script(repo_path("training", "scripts", "build-and-push.sh"))
     else:
         log.info("Skipping remote image build")
@@ -342,7 +397,13 @@ def launch_remote(
     else:
         bash_script(repo_path("infrastructure", "mlflow", "scripts", "run-tunnel.sh"))
 
-    image_sha = remote_image_tag(config.backend, skip_build=use_skip_build, dry_run=dry_run, settings=settings)
+    image_sha = remote_image_tag(
+        config.backend,
+        skip_build=use_skip_build,
+        dry_run=dry_run,
+        settings=settings,
+        cached_tag=cached_image_tag,
+    )
     mlflow_url = (
         "https://dry-run-example.trycloudflare.com"
         if dry_run

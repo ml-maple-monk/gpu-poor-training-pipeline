@@ -35,6 +35,7 @@ BASE_IMAGE_LATEST="${BASE_IMAGE_BASE}:latest"
 LOCAL_BASE_IMAGE="${TRAINING_BASE_IMAGE:-verda-training-base:py312-cu128-slim}"
 BASE_BUILDER_IMAGE="${TRAINING_BASE_BUILDER_IMAGE:-nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04}"
 BASE_RUNTIME_IMAGE="${TRAINING_BASE_RUNTIME_IMAGE:-nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04}"
+REMOTE_IMAGE_METADATA="$REPO_ROOT/.tmp/remote-image-tag.json"
 
 echo "[build] VCR_IMAGE_BASE=$IMAGE_BASE  SHA=$SHA"
 echo "[build] TRAINING_BASE_IMAGE_BASE=$BASE_IMAGE_BASE"
@@ -146,6 +147,17 @@ fi
 
 docker logout "$VCR_LOGIN_REGISTRY"
 echo "[build] Logged out of $VCR_LOGIN_REGISTRY"
+
+mkdir -p "$(dirname "$REMOTE_IMAGE_METADATA")"
+cat > "$REMOTE_IMAGE_METADATA" <<EOF
+{
+  "image_tag": "$SHA",
+  "image_ref": "$IMAGE_SHA",
+  "vcr_image_base": "$VCR_IMAGE_BASE",
+  "training_base_image_base": "$BASE_IMAGE_BASE"
+}
+EOF
+echo "[build] Cached remote image metadata: $REMOTE_IMAGE_METADATA"
 
 echo "[STEP 2] Image pushed: $IMAGE_SHA"
 echo "[build] Export for run.sh: IMAGE_SHA=$SHA VCR_IMAGE_BASE=$VCR_IMAGE_BASE TRAINING_BASE_IMAGE_BASE=$BASE_IMAGE_BASE"
