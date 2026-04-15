@@ -24,8 +24,8 @@ def test_remote_entrypoint_prefers_pretokenized_hf_artifact() -> None:
 def test_render_task_exposes_pretokenized_dataset_envs() -> None:
     render_script = _repo_text("dstack", "scripts", "render-pretrain-task.sh")
 
-    assert "HF_PRETOKENIZED_DATASET_REPO" in render_script
-    assert "HF_PRETOKENIZED_DATASET_FILENAME" in render_script
+    assert "GPUPOOR_RUN_CONFIG_B64" in render_script
+    assert "HF_PRETOKENIZED_DATASET_REPO" not in render_script
 
 
 def test_prepare_data_can_trigger_pretokenized_dataset_upload() -> None:

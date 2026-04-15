@@ -1,15 +1,61 @@
 #!/bin/bash
-set -uo pipefail
+set -euo pipefail
 
 SOURCE_ROOT=/workspace/minimind
 DATASET=${DATASET_PATH:-/data/datasets/pretrain_t2t_mini}
 OUT=${OUTPUT_DIR:-/data/minimind-out}
 TIME_CAP_SECONDS=${TIME_CAP_SECONDS:-600}
 TRAIN_ARGS_FILE=/workspace/train-pretrain-args.sh
+RUN_CONFIG_FILE="${1:-${GPUPOOR_RUN_CONFIG:-}}"
+RUN_CONFIG_LOADER=/workspace/load-run-config-env.py
+
+require_loaded_runtime_env() {
+    local missing=()
+    local required_vars=(
+        DATASET_PATH
+        OUTPUT_DIR
+        TIME_CAP_SECONDS
+        MAX_SEQ_LEN
+        TRAIN_BATCH_SIZE
+        TRAIN_HIDDEN_SIZE
+        TRAIN_NUM_HIDDEN_LAYERS
+        TRAIN_DTYPE
+        TRAIN_LR_SCHEDULE
+    )
+    local var_name
+    for var_name in "${required_vars[@]}"; do
+        if [ -z "${!var_name:-}" ]; then
+            missing+=("$var_name")
+        fi
+    done
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        echo "FATAL: runtime config did not populate required env vars: ${missing[*]}" >&2
+        echo "FATAL: refusing to continue with fallback defaults; check GPUPOOR_RUN_CONFIG and loader output" >&2
+        exit 1
+    fi
+}
 
 if [ ! -f "$TRAIN_ARGS_FILE" ]; then
     echo "FATAL: $TRAIN_ARGS_FILE not found — local training wrapper is incomplete" >&2
     exit 1
+fi
+
+if [ -n "$RUN_CONFIG_FILE" ]; then
+    if [ ! -f "$RUN_CONFIG_FILE" ]; then
+        echo "FATAL: run config file not found at $RUN_CONFIG_FILE" >&2
+        exit 1
+    fi
+    if [ ! -f "$RUN_CONFIG_LOADER" ]; then
+        echo "FATAL: $RUN_CONFIG_LOADER not found — local training wrapper is incomplete" >&2
+        exit 1
+    fi
+    # shellcheck disable=SC2046
+    eval "$(python3 "$RUN_CONFIG_LOADER" "$RUN_CONFIG_FILE")"
+    require_loaded_runtime_env
+    DATASET=${DATASET_PATH:-$DATASET}
+    OUT=${OUTPUT_DIR:-$OUT}
+    TIME_CAP_SECONDS=${TIME_CAP_SECONDS:-600}
 fi
 
 # shellcheck source=/dev/null

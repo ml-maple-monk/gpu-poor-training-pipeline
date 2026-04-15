@@ -11,6 +11,7 @@
 
 set -euo pipefail
 
+RUN_CONFIG_FILE="${1:-${GPUPOOR_RUN_CONFIG:-/tmp/gpupoor-run-config.json}}"
 DATA_DIR="/workspace/data/datasets"
 RAW_DATASET_FILE="$DATA_DIR/pretrain_t2t_mini.jsonl"
 DATASET_FILE="$RAW_DATASET_FILE"
@@ -25,8 +26,36 @@ HF_PRETOKENIZED_DATASET_FILENAME="${HF_PRETOKENIZED_DATASET_FILENAME:-pretokeniz
 HF_PRETOKENIZED_DATASET_MIN_BYTES="${HF_PRETOKENIZED_DATASET_MIN_BYTES:-1048576}"
 TIME_CAP_SECONDS="${TIME_CAP_SECONDS:-600}"
 TRAIN_ARGS_FILE="/opt/training/scripts/lib/train-pretrain-args.sh"
+RUN_CONFIG_LOADER="/opt/training/scripts/lib/load-run-config-env.py"
 HF_BOOTSTRAP_HELPER="/opt/training/scripts/lib/hf-dataset-bootstrap.sh"
 PRETOKENIZE_SCRIPT="/opt/training/scripts/pretokenize-data.sh"
+
+require_loaded_runtime_env() {
+    local missing=()
+    local required_vars=(
+        DATASET_PATH
+        OUTPUT_DIR
+        TIME_CAP_SECONDS
+        MAX_SEQ_LEN
+        TRAIN_BATCH_SIZE
+        TRAIN_HIDDEN_SIZE
+        TRAIN_NUM_HIDDEN_LAYERS
+        TRAIN_DTYPE
+        TRAIN_LR_SCHEDULE
+    )
+    local var_name
+    for var_name in "${required_vars[@]}"; do
+        if [ -z "${!var_name:-}" ]; then
+            missing+=("$var_name")
+        fi
+    done
+
+    if [ "${#missing[@]}" -gt 0 ]; then
+        echo "[remote-entrypoint] ERROR: runtime config did not populate required env vars: ${missing[*]}" >&2
+        echo "[remote-entrypoint] ERROR: refusing to continue with fallback defaults; check GPUPOOR_RUN_CONFIG payload and loader output" >&2
+        exit 1
+    fi
+}
 
 if [ ! -f "$TRAIN_ARGS_FILE" ]; then
     echo "[remote-entrypoint] ERROR: $TRAIN_ARGS_FILE not found — image is missing shared training args helper" >&2
@@ -41,6 +70,20 @@ fi
 if [ ! -f "$PRETOKENIZE_SCRIPT" ]; then
     echo "[remote-entrypoint] ERROR: $PRETOKENIZE_SCRIPT not found — image is missing the pretokenization helper" >&2
     exit 1
+fi
+
+if [ -n "${GPUPOOR_RUN_CONFIG_B64:-}" ]; then
+    printf '%s' "$GPUPOOR_RUN_CONFIG_B64" | base64 -d > "$RUN_CONFIG_FILE"
+fi
+
+if [ -f "$RUN_CONFIG_FILE" ]; then
+    if [ ! -f "$RUN_CONFIG_LOADER" ]; then
+        echo "[remote-entrypoint] ERROR: $RUN_CONFIG_LOADER not found — image is missing runtime config loader" >&2
+        exit 1
+    fi
+    # shellcheck disable=SC2046
+    eval "$(python3 "$RUN_CONFIG_LOADER" "$RUN_CONFIG_FILE")"
+    require_loaded_runtime_env
 fi
 
 # shellcheck source=/dev/null

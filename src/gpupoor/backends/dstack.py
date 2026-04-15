@@ -22,6 +22,7 @@ from gpupoor.config import (
     load_remote_settings,
     require_remote_settings,
 )
+from gpupoor.runtime_config import build_training_runtime_env, runtime_config_b64
 from gpupoor.subprocess_utils import CommandError, bash_script, run_command
 from gpupoor.utils import repo_path
 from gpupoor.utils.http import http_ok
@@ -435,16 +436,14 @@ def launch_remote(
 
         started_tunnel = True
         rendered_task = render_task(settings, config, image_sha)
-        apply_env = config.mlflow.to_env()
-        apply_env.update(config.training.to_env())
-        apply_env["MLFLOW_TRACKING_URI"] = mlflow_url
-        apply_env.update(
-            {
-                "HF_TOKEN": read_required_secret("hf_token"),
+        runtime_env = build_training_runtime_env(
+            config,
+            dataset_path="/workspace/data/datasets/pretrain_t2t_mini",
+            output_dir=settings.get("OUT_DIR", "/workspace/out"),
+            mlflow_tracking_uri=mlflow_url,
+            extra_env={
                 "VERDA_PROFILE": "remote",
                 "DSTACK_RUN_NAME": config.name,
-                "RECIPE_KIND": config.recipe.kind,
-                "RECIPE_PREPARE_DATA": "1" if config.recipe.prepare_data else "0",
                 "OUT_DIR": settings.get("OUT_DIR", "/workspace/out"),
                 "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", "jingyaogong/minimind_dataset"),
                 "HF_DATASET_FILENAME": settings.get("HF_DATASET_FILENAME", Path(config.recipe.dataset_path).name),
@@ -456,12 +455,12 @@ def launch_remote(
                     "HF_PRETOKENIZED_DATASET_FILENAME",
                     "pretokenized/pretrain_t2t_mini.tar.gz",
                 ),
-                "TIME_CAP_SECONDS": str(config.recipe.time_cap_seconds),
-                "MAX_SEQ_LEN": str(config.recipe.max_seq_len),
-                "VALIDATION_SPLIT_RATIO": str(config.recipe.validation_split_ratio),
-                "VALIDATION_INTERVAL_STEPS": str(config.recipe.validation_interval_steps),
-            }
+            },
         )
+        apply_env = {
+            "HF_TOKEN": read_required_secret("hf_token"),
+            "GPUPOOR_RUN_CONFIG_B64": runtime_config_b64(runtime_env),
+        }
         # `dstack apply` can hang indefinitely on registry auth or
         # network stalls; without a timeout the CLI freezes with no
         # liveness signal. Budget: the existing run-start window plus a

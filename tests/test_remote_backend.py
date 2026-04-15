@@ -11,6 +11,7 @@ import pytest
 
 from gpupoor.backends import dstack
 from gpupoor.config import load_run_config, parse_env_file
+from gpupoor.runtime_config import build_training_runtime_env, runtime_config_b64
 from gpupoor.subprocess_utils import CommandError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -226,21 +227,23 @@ def test_launch_remote_keeps_tunnel_alive_after_success(tmp_path: Path, monkeypa
         (config.remote.health_timeout_seconds, config.remote.dstack_server_start_timeout_seconds)
     ]
     assert wait_limits == [config.remote.run_start_timeout_seconds]
-    assert apply_envs[0]["DSTACK_RUN_NAME"] == config.name
-    assert apply_envs[0]["OUT_DIR"] == "/workspace/custom-out"
-    assert apply_envs[0]["HF_DATASET_REPO"] == "example/dataset"
-    assert apply_envs[0]["HF_DATASET_FILENAME"] == "custom.jsonl"
-    assert apply_envs[0]["HF_PRETOKENIZED_DATASET_REPO"] == "example/dataset"
-    assert apply_envs[0]["HF_PRETOKENIZED_DATASET_FILENAME"] == "pretokenized/custom.tar.gz"
-    assert apply_envs[0]["TRAIN_BATCH_SIZE"] == str(config.training.batch_size)
-    assert apply_envs[0]["TRAIN_LEARNING_RATE"] == str(config.training.learning_rate)
-    assert apply_envs[0]["TRAIN_NUM_ATTENTION_HEADS"] == str(config.training.num_attention_heads)
-    assert apply_envs[0]["TRAIN_NUM_KEY_VALUE_HEADS"] == str(config.training.num_key_value_heads)
-    assert apply_envs[0]["TRAIN_INTERMEDIATE_SIZE"] == str(config.training.intermediate_size)
-    assert apply_envs[0]["TRAIN_LR_SCHEDULE"] == config.training.lr_schedule
-    assert apply_envs[0]["MAX_SEQ_LEN"] == str(config.recipe.max_seq_len)
-    assert apply_envs[0]["TIME_CAP_SECONDS"] == str(config.recipe.time_cap_seconds)
-    assert apply_envs[0]["MLFLOW_EXPERIMENT_NAME"] == config.mlflow.experiment_name
+    expected_runtime_env = build_training_runtime_env(
+        config,
+        dataset_path="/workspace/data/datasets/pretrain_t2t_mini",
+        output_dir="/workspace/custom-out",
+        mlflow_tracking_uri="https://mlflow.example",
+        extra_env={
+            "VERDA_PROFILE": "remote",
+            "DSTACK_RUN_NAME": config.name,
+            "OUT_DIR": "/workspace/custom-out",
+            "HF_DATASET_REPO": "example/dataset",
+            "HF_DATASET_FILENAME": "custom.jsonl",
+            "HF_PRETOKENIZED_DATASET_REPO": "example/dataset",
+            "HF_PRETOKENIZED_DATASET_FILENAME": "pretokenized/custom.tar.gz",
+        },
+    )
+    assert apply_envs[0]["HF_TOKEN"] == "hf-token"
+    assert apply_envs[0]["GPUPOOR_RUN_CONFIG_B64"] == runtime_config_b64(expected_runtime_env)
 
 
 def test_launch_remote_reuses_cached_image_without_rebuild(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

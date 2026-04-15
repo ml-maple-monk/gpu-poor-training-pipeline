@@ -11,7 +11,7 @@ JUNIT_XML := $(ARTIFACT_DIR)/junit.xml
 COVERAGE_XML := $(ARTIFACT_DIR)/coverage.xml
 REQUIRED_TEST_COMMAND = PYTHONHASHSEED=0 TZ=UTC $(PYTEST) $(REQUIRED_TEST_DIRS) -m "$(FAST_MARKERS)" --strict-config --strict-markers --junitxml=$(JUNIT_XML) --cov=src/gpupoor --cov=training/src/minimind --cov=infrastructure/dashboard/src --cov-report=xml:$(COVERAGE_XML) --cov-report=term-missing:skip-covered
 
-.PHONY: install-dev format-check lint lint-fix style-check test-fast test-live ci-local train-local
+.PHONY: install-dev format-check lint lint-fix style-check test-fast test-live ci-local train-local train-remote stop-local-train
 
 install-dev:
 	$(PYTHON) -m pip install --upgrade pip
@@ -49,3 +49,14 @@ ci-local:
 
 train-local:
 	./run.sh local examples/tiny_local.toml
+
+train-remote:
+	./run.sh remote examples/verda_remote.toml
+
+stop-local-train:
+	@ids="$$(docker ps --filter name=minimind --format '{{.ID}}')"; \
+	if [ -n "$$ids" ]; then \
+		docker stop $$ids; \
+	else \
+		echo "No running local MiniMind training containers found."; \
+	fi

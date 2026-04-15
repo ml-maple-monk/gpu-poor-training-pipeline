@@ -5,17 +5,17 @@ kind = "minimind_pretrain"
 prepare_data = false
 dataset_path = "data/datasets/pretrain_t2t_mini"
 output_dir = "data/minimind-out"
-time_cap_seconds = 120
-max_seq_len = 2048
+time_cap_seconds = 3600
+max_seq_len = 4096
 validation_split_ratio = 0.0
 validation_interval_steps = 0
 
 [training]
 epochs = 1
-batch_size = 16
+batch_size = 8
 learning_rate = 0.0005
 accumulation_steps = 8
-num_workers = 4
+num_workers = 8
 grad_clip = 1.0
 hidden_size = 2048
 num_hidden_layers = 8
