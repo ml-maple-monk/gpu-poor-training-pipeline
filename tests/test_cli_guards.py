@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from gpupoor import __version__ as gpupoor_version
 from gpupoor import cli
 from gpupoor.config import load_run_config
 from gpupoor.subprocess_utils import CommandError
@@ -112,6 +116,24 @@ def test_main_catches_command_errors(monkeypatch: pytest.MonkeyPatch, capsys: py
 
     assert cli.main(["doctor"]) == 1
     assert "Command failed (7): boom" in capsys.readouterr().err
+
+
+def test_python_m_gpupoor_cli_executes_main() -> None:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(REPO_ROOT / "src") + (f":{env['PYTHONPATH']}" if env.get("PYTHONPATH") else "")
+
+    result = subprocess.run(
+        [sys.executable, "-m", "gpupoor.cli", "--version"],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == f"gpupoor {gpupoor_version}"
+    assert result.stderr == ""
 
 
 def test_dstack_setup_runs_repo_script(monkeypatch: pytest.MonkeyPatch) -> None:

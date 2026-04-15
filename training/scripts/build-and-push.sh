@@ -18,7 +18,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=training/scripts/lib/remote-env.sh
 source "$REPO_ROOT/training/scripts/lib/remote-env.sh"
 
-echo "[STEP 2] Building and pushing remote training image..."
+echo "[STEP 1/2] Building and pushing slim training base image..."
 
 load_remote_env
 require_vcr_auth
@@ -29,8 +29,20 @@ SHA=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo "local")
 IMAGE_BASE="${VCR_IMAGE_BASE}"
 IMAGE_SHA="${IMAGE_BASE}:${SHA}"
 IMAGE_LATEST="${IMAGE_BASE}:latest"
+BASE_IMAGE_BASE="${TRAINING_BASE_IMAGE_BASE:-${VCR_IMAGE_BASE}-base}"
+BASE_IMAGE_SHA="${BASE_IMAGE_BASE}:${SHA}"
+BASE_IMAGE_LATEST="${BASE_IMAGE_BASE}:latest"
+LOCAL_BASE_IMAGE="${TRAINING_BASE_IMAGE:-verda-training-base:py312-cu128-slim}"
+BASE_BUILDER_IMAGE="${TRAINING_BASE_BUILDER_IMAGE:-nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04}"
+BASE_RUNTIME_IMAGE="${TRAINING_BASE_RUNTIME_IMAGE:-nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04}"
+REMOTE_IMAGE_METADATA="$REPO_ROOT/.tmp/remote-image-tag.json"
 
 echo "[build] VCR_IMAGE_BASE=$IMAGE_BASE  SHA=$SHA"
+echo "[build] TRAINING_BASE_IMAGE_BASE=$BASE_IMAGE_BASE"
+echo "[build] TRAINING_BASE_IMAGE=$LOCAL_BASE_IMAGE"
+echo "[build] TRAINING_BASE_BUILDER_IMAGE=$BASE_BUILDER_IMAGE"
+echo "[build] TRAINING_BASE_RUNTIME_IMAGE=$BASE_RUNTIME_IMAGE"
+echo "[build] Base image: $BASE_IMAGE_SHA"
 echo "[build] Image: $IMAGE_SHA"
 
 # ── Docker login (VCR) ───────────────────────────────────────────────────────
@@ -38,10 +50,25 @@ echo "[build] Logging in to $VCR_LOGIN_REGISTRY as \$VCR_USERNAME ..."
 printf '%s\n' "$VCR_PASSWORD" | docker login "$VCR_LOGIN_REGISTRY" -u "$VCR_USERNAME" --password-stdin
 echo "[build] Docker login OK"
 
-# ── Build ────────────────────────────────────────────────────────────────────
-echo "[build] Building image (context: $REPO_ROOT) ..."
+# ── Build base image ─────────────────────────────────────────────────────────
+echo "[build] Building slim base image (context: $REPO_ROOT) ..."
+DOCKER_BUILDKIT=1 docker build \
+    -f "$REPO_ROOT/training/docker/Dockerfile.base" \
+    --build-arg BUILDER_IMAGE="$BASE_BUILDER_IMAGE" \
+    --build-arg RUNTIME_IMAGE="$BASE_RUNTIME_IMAGE" \
+    --tag "$LOCAL_BASE_IMAGE" \
+    --tag "$BASE_IMAGE_SHA" \
+    --tag "$BASE_IMAGE_LATEST" \
+    "$REPO_ROOT"
+
+echo "[build] Base build complete: $BASE_IMAGE_SHA"
+
+# ── Build remote image ───────────────────────────────────────────────────────
+echo "[STEP 2/2] Building and pushing slim remote training image..."
+echo "[build] Building remote image (context: $REPO_ROOT) ..."
 DOCKER_BUILDKIT=1 docker build \
     -f "$REPO_ROOT/training/docker/Dockerfile.remote" \
+    --build-arg BASE_IMAGE="$BASE_IMAGE_SHA" \
     --tag "$IMAGE_SHA" \
     --tag "$IMAGE_LATEST" \
     "$REPO_ROOT"
@@ -49,6 +76,10 @@ DOCKER_BUILDKIT=1 docker build \
 echo "[build] Build complete: $IMAGE_SHA"
 
 # ── Push ─────────────────────────────────────────────────────────────────────
+echo "[build] Pushing $BASE_IMAGE_SHA ..."
+docker push "$BASE_IMAGE_SHA"
+echo "[build] Pushing $BASE_IMAGE_LATEST ..."
+docker push "$BASE_IMAGE_LATEST"
 echo "[build] Pushing $IMAGE_SHA ..."
 docker push "$IMAGE_SHA"
 echo "[build] Pushing $IMAGE_LATEST ..."
@@ -117,5 +148,16 @@ fi
 docker logout "$VCR_LOGIN_REGISTRY"
 echo "[build] Logged out of $VCR_LOGIN_REGISTRY"
 
+mkdir -p "$(dirname "$REMOTE_IMAGE_METADATA")"
+cat > "$REMOTE_IMAGE_METADATA" <<EOF
+{
+  "image_tag": "$SHA",
+  "image_ref": "$IMAGE_SHA",
+  "vcr_image_base": "$VCR_IMAGE_BASE",
+  "training_base_image_base": "$BASE_IMAGE_BASE"
+}
+EOF
+echo "[build] Cached remote image metadata: $REMOTE_IMAGE_METADATA"
+
 echo "[STEP 2] Image pushed: $IMAGE_SHA"
-echo "[build] Export for run.sh:  IMAGE_SHA=$SHA  VCR_IMAGE_BASE=$VCR_IMAGE_BASE"
+echo "[build] Export for run.sh: IMAGE_SHA=$SHA VCR_IMAGE_BASE=$VCR_IMAGE_BASE TRAINING_BASE_IMAGE_BASE=$BASE_IMAGE_BASE"

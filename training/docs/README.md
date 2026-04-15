@@ -23,6 +23,7 @@ Key anchored implementation points:
 ```bash
 ./training/start.sh prepare-data
 ./training/start.sh local
+./training/start.sh build-base
 ./training/start.sh build-remote
 ```
 
@@ -53,31 +54,53 @@ The local container mounts `training/src/minimind` into `/workspace/minimind`, s
 ```
 
 Remote flow:
-1. `training/scripts/build-and-push.sh` builds `training/docker/Dockerfile.remote`
-2. The image bakes `training/src/minimind` into `/opt/training/minimind`
+1. `training/scripts/build-and-push.sh` builds and pushes the slim shared base from `training/docker/Dockerfile.base`
+2. The remote image in `training/docker/Dockerfile.remote` layers the repo source on top of that slim base
 3. `dstack/config/pretrain.dstack.yml` starts `training/scripts/remote-entrypoint.sh`
 4. The entrypoint downloads the dataset, then executes the vendored trainer
 
 The remote image uses VCR by default. GHCR remains optional fallback/distribution only.
+
+## Slim Training Base Image
+
+```bash
+./training/start.sh build-base
+```
+
+The slim base image is separate from `requirements.train.txt` so the lean local image can stay small while remote training carries the full Python 3.12 / CUDA 12.8 stack:
+- PyTorch, TorchVision, TorchAudio, TorchData
+- Transformers, MLflow, NumPy 2
+- FlashAttention 2, bitsandbytes, torchao, torchtune
+- vLLM, LLaMA-Factory, DeepSpeed
+
+`training/docker/Dockerfile.base` uses a multi-stage build:
+- The builder stage uses a CUDA 12.8 devel image so `nvcc --version` can be checked and used to select the matching prebuilt FlashAttention 2 wheel.
+- The final runtime stage uses a smaller CUDA runtime image and copies only the finished Python environment, which avoids shipping discarded builder layers in the final artifact.
 
 ## Training File Map
 
 ```text
 training/
 ├── start.sh
+├── docker/
+│   ├── Dockerfile.base
+│   ├── Dockerfile.remote
+│   └── Dockerfile.train
+├── config/
+│   ├── requirements.train.base.txt
+│   └── requirements.train.txt
 ├── src/minimind/
 │   ├── dataset/
 │   ├── model/
 │   └── trainer/
 ├── scripts/
+│   ├── build-base-image.sh
 │   ├── build-and-push.sh
 │   ├── prepare-data.sh
 │   ├── remote-entrypoint.sh
 │   ├── run-train.sh
 │   └── lib/
-├── docker/
 ├── compose/
-├── config/
 └── tests/
 ```
 
@@ -86,6 +109,7 @@ training/
 - `training/scripts/lib/train-pretrain-args.sh` is the canonical flag source for both local and remote training.
 - `training/src/minimind/trainer/train_pretrain.py` now contains the atomic save plus SIGTERM path directly instead of relying on a build-time patch.
 - `training/src/minimind/trainer/_mlflow_helper.py` is tracked in-repo and called directly by the vendored trainer.
+- Benchmark metrics remain best-effort: validation is opt-in via `validation_split_ratio` + `validation_interval_steps`, and MFU/TFLOPs are auto-enabled only when the runtime GPU maps to a known peak or `[mlflow].peak_tflops_per_gpu` is set as an override.
 - `training/scripts/prepare-data.sh` only downloads the dataset; it no longer clones external training code.
 
 ## Validation

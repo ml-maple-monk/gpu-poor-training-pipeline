@@ -41,6 +41,27 @@ def test_old_clone_based_training_entrypoints_are_gone():
     assert not (REPO_ROOT / "training" / "run-train.sh").exists()
 
 
+def test_training_base_image_artifacts_exist():
+    assert (REPO_ROOT / "training" / "docker" / "Dockerfile.base").is_file()
+    assert (REPO_ROOT / "training" / "config" / "requirements.train.base.txt").is_file()
+    assert (REPO_ROOT / "training" / "scripts" / "build-base-image.sh").is_file()
+
+
+def test_training_start_script_exposes_base_build():
+    start_script = (REPO_ROOT / "training" / "start.sh").read_text()
+    assert "training/start.sh build-base" in start_script
+    assert "build-base)" in start_script
+
+
+def test_remote_training_image_uses_the_shared_base():
+    dockerfile = (REPO_ROOT / "training" / "docker" / "Dockerfile.remote").read_text()
+    build_script = (REPO_ROOT / "training" / "scripts" / "build-and-push.sh").read_text()
+    assert "ARG BASE_IMAGE=" in dockerfile
+    assert "FROM ${BASE_IMAGE}" in dockerfile
+    assert "training/docker/Dockerfile.base" in build_script
+    assert "--build-arg BASE_IMAGE=" in build_script
+
+
 def test_top_level_artifacts_match_current_guardrail_contract():
     assert (REPO_ROOT / "Makefile").exists()
     assert not (REPO_ROOT / "PARITY.md").exists()

@@ -9,6 +9,7 @@ usage() {
 Usage:
   training/start.sh local [config.toml]
   training/start.sh prepare-data
+  training/start.sh build-base
   training/start.sh build-remote
 EOF
 }
@@ -29,6 +30,10 @@ case "$subcommand" in
   prepare-data)
     shift
     exec bash "$REPO_ROOT/training/scripts/prepare-data.sh" "$@"
+    ;;
+  build-base)
+    shift
+    exec bash "$REPO_ROOT/training/scripts/build-base-image.sh" "$@"
     ;;
   build-remote)
     shift

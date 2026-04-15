@@ -35,6 +35,42 @@ def test_remote_image_tag_prefers_skip_build_tag() -> None:
     assert tag == "existing-tag"
 
 
+def test_read_cached_remote_image_tag_requires_matching_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_repo_path(*parts: str) -> Path:
+        return tmp_path.joinpath(*parts)
+
+    metadata_path = fake_repo_path(".tmp", "remote-image-tag.json")
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        """
+{"image_tag":"abc123","image_ref":"vccr.io/example/verda-minimind:abc123","vcr_image_base":"vccr.io/example/verda-minimind","training_base_image_base":"vccr.io/example/verda-minimind-base"}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(dstack, "repo_path", fake_repo_path)
+
+    assert (
+        dstack.read_cached_remote_image_tag(
+            {
+                "VCR_IMAGE_BASE": "vccr.io/example/verda-minimind",
+                "TRAINING_BASE_IMAGE_BASE": "vccr.io/example/verda-minimind-base",
+            }
+        )
+        == "abc123"
+    )
+    assert dstack.read_cached_remote_image_tag({"VCR_IMAGE_BASE": "vccr.io/other/verda-minimind"}) is None
+    assert (
+        dstack.read_cached_remote_image_tag(
+            {
+                "VCR_IMAGE_BASE": "vccr.io/example/verda-minimind",
+                "TRAINING_BASE_IMAGE_BASE": "vccr.io/other/verda-minimind-base",
+            }
+        )
+        is None
+    )
+
+
 def test_task_max_duration_rounds_up_to_minutes() -> None:
     # 2-minute buffer keeps dstack's max_duration strictly greater than the
     # in-container `timeout --signal=SIGTERM --kill-after=30` so the training
@@ -194,6 +230,65 @@ def test_launch_remote_keeps_tunnel_alive_after_success(tmp_path: Path, monkeypa
     assert apply_envs[0]["HF_DATASET_FILENAME"] == "custom.jsonl"
     assert apply_envs[0]["TIME_CAP_SECONDS"] == str(config.recipe.time_cap_seconds)
     assert apply_envs[0]["MLFLOW_EXPERIMENT_NAME"] == config.mlflow.experiment_name
+
+
+def test_launch_remote_reuses_cached_image_without_rebuild(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
+    (tmp_path / ".cf-tunnel.url").write_text("https://mlflow.example", encoding="utf-8")
+    recorded_image_tags: list[str] = []
+    bash_calls: list[Path] = []
+
+    def fake_repo_path(*parts: str) -> Path:
+        return tmp_path.joinpath(*parts)
+
+    metadata_path = fake_repo_path(".tmp", "remote-image-tag.json")
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        """
+{"image_tag":"abc123","image_ref":"vccr.io/example:abc123","vcr_image_base":"vccr.io/example","training_base_image_base":"vccr.io/example-base"}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    def fake_bash_script(script: Path, *args: str, env: dict[str, str] | None = None, **kwargs: object) -> None:
+        bash_calls.append(script)
+
+    monkeypatch.setattr(dstack, "repo_path", fake_repo_path)
+    monkeypatch.setattr(
+        dstack,
+        "load_remote_settings",
+        lambda config=None: {
+            "VCR_IMAGE_BASE": "vccr.io/example",
+            "VCR_USERNAME": "user",
+            "VCR_PASSWORD": "pass",
+            "TRAINING_BASE_IMAGE_BASE": "vccr.io/example-base",
+        },
+    )
+    monkeypatch.setattr(dstack, "require_remote_settings", lambda settings: None)
+    monkeypatch.setattr(dstack, "find_dstack_bin", lambda: "dstack")
+    monkeypatch.setattr(dstack.ops, "run_preflight", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack, "verify_mlflow", lambda url, **kwargs: None)
+    monkeypatch.setattr(dstack, "ensure_dstack_server", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack, "bash_script", fake_bash_script)
+    monkeypatch.setattr(dstack, "git_short_sha", lambda: "abc123")
+    monkeypatch.setattr(dstack, "git_has_tracked_changes", lambda: False)
+    monkeypatch.setattr(
+        dstack,
+        "render_task",
+        lambda settings, config, image_sha: recorded_image_tags.append(image_sha)
+        or fake_repo_path(".tmp", "task.yml"),
+    )
+    monkeypatch.setattr(dstack, "read_required_secret", lambda filename: "hf-token")
+    monkeypatch.setattr(dstack, "dstack_has_run", lambda dstack_bin, run_name: True)
+    monkeypatch.setattr(dstack, "wait_for_run_start", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack, "track_run", lambda run_name: None)
+    monkeypatch.setattr(dstack, "run_command", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack, "kill_tunnel", lambda: None)
+
+    dstack.launch_remote(config)
+
+    assert recorded_image_tags == ["abc123"]
+    assert REPO_ROOT / "training" / "scripts" / "build-and-push.sh" not in bash_calls
 
 
 def test_launch_remote_cleans_up_tunnel_when_startup_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
