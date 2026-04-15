@@ -135,6 +135,32 @@ def test_mlflow_finish_flushes_async_metrics(monkeypatch):
     assert run_status == ["FINISHED"]
 
 
+def test_mlflow_finish_tolerates_metric_drain_failures(monkeypatch, capsys):
+    helper = _load_helper()
+    helper._reset_runtime_state()
+
+    run_status = []
+    mlflow_module = types.SimpleNamespace(
+        end_run=lambda status="FINISHED": run_status.append(status),
+    )
+
+    helper._active = True
+    helper._mlflow_module = mlflow_module
+    monkeypatch.setattr(
+        helper,
+        "_drain_metrics",
+        lambda: (_ for _ in ()).throw(RuntimeError("DataLoader worker (pid 105) is killed by signal: Terminated")),
+    )
+
+    helper.finish(status="KILLED")
+
+    captured = capsys.readouterr()
+    assert "metric drain failed during finish" in captured.out
+    assert run_status == ["KILLED"]
+    assert helper._active is False
+    assert helper._mlflow_module is None
+
+
 def test_mlflow_log_metrics_drops_when_queue_is_full():
     helper = _load_helper()
     helper._reset_runtime_state()

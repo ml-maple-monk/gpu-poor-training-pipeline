@@ -206,71 +206,65 @@ def build_app() -> gr.Blocks:
                 system_md = gr.Markdown(value=format_system_md(state))
 
         # ── Row 2: Live Metrics ──────────────────────────────────────────────
-        with gr.Row():
-            with gr.Column():
-                gr.Markdown("### Live Metrics")
-                metrics_md = gr.Markdown(value=format_metrics_md(state))
+        with gr.Row(), gr.Column():
+            gr.Markdown("### Live Metrics")
+            metrics_md = gr.Markdown(value=format_metrics_md(state))
 
         # ── Row 3: MLflow Summary ────────────────────────────────────────────
-        with gr.Row():
-            with gr.Column():
-                gr.Markdown("### MLflow Recent Runs")
-                mlflow_summary_md = gr.Markdown(value=format_mlflow_md(state))
-                mlflow_table = gr.DataFrame(
-                    value=format_mlflow_table(state),
-                    headers=["Name", "Status", "Started", "Experiment", "Metrics"],
-                    label="MLflow Runs",
-                )
+        with gr.Row(), gr.Column():
+            gr.Markdown("### MLflow Recent Runs")
+            mlflow_summary_md = gr.Markdown(value=format_mlflow_md(state))
+            mlflow_table = gr.DataFrame(
+                value=format_mlflow_table(state),
+                headers=["Name", "Status", "Started", "Experiment", "Metrics"],
+                label="MLflow Runs",
+            )
 
         # ── Row 4: dstack Runs ───────────────────────────────────────────────
-        with gr.Row():
-            with gr.Column():
-                gr.Markdown("### dstack Runs")
-                dstack_active_md = gr.Markdown(value=f"**Active run:** {get_active_run_name(state)}")
-                dstack_table = gr.DataFrame(
-                    value=format_dstack_table(state),
-                    headers=["Run Name", "Status", "Backend", "Instance", "Region", "Cost"],
-                    label="dstack Runs",
-                )
+        with gr.Row(), gr.Column():
+            gr.Markdown("### dstack Runs")
+            dstack_active_md = gr.Markdown(value=f"**Active run:** {get_active_run_name(state)}")
+            dstack_table = gr.DataFrame(
+                value=format_dstack_table(state),
+                headers=["Run Name", "Status", "Backend", "Instance", "Region", "Cost"],
+                label="dstack Runs",
+            )
 
         # ── Row 5: Verda GPU Inventory ───────────────────────────────────────
-        with gr.Row():
-            with gr.Column():
-                gr.Markdown("### Verda GPU Inventory")
-                verda_table = gr.DataFrame(
-                    value=format_verda_table(state),
-                    headers=["GPU", "Price", "Backend", "Region", "Instance"],
-                    label="Verda Offers",
-                )
+        with gr.Row(), gr.Column():
+            gr.Markdown("### Verda GPU Inventory")
+            verda_table = gr.DataFrame(
+                value=format_verda_table(state),
+                headers=["GPU", "Price", "Backend", "Region", "Instance"],
+                label="Verda Offers",
+            )
 
         # ── Row 6: Local Container Logs ──────────────────────────────────────
-        with gr.Row():
-            with gr.Column():
-                gr.Markdown(f"### Container Logs: `{TRAINER_CONTAINER}`")
-                local_log_box = gr.Textbox(
-                    value=get_log_snapshot(docker_tailer),
-                    label="Container Logs (live)",
-                    lines=20,
-                    max_lines=30,
-                    autoscroll=True,
-                    interactive=False,
-                )
-                # Session state to track per-session log sequence
-                local_log_seq = gr.State(value=[0])
+        with gr.Row(), gr.Column():
+            gr.Markdown(f"### Container Logs: `{TRAINER_CONTAINER}`")
+            local_log_box = gr.Textbox(
+                value=get_log_snapshot(docker_tailer),
+                label="Container Logs (live)",
+                lines=20,
+                max_lines=30,
+                autoscroll=True,
+                interactive=False,
+            )
+            # Session state to track per-session log sequence
+            local_log_seq = gr.State(value=[0])
 
         # ── Row 7: dstack Run Logs ───────────────────────────────────────────
-        with gr.Row():
-            with gr.Column():
-                gr.Markdown("### dstack Run Logs (active run)")
-                dstack_log_box = gr.Textbox(
-                    value="",
-                    label="dstack Logs (live)",
-                    lines=20,
-                    max_lines=30,
-                    autoscroll=True,
-                    interactive=False,
-                )
-                dstack_log_seq = gr.State(value=[0])
+        with gr.Row(), gr.Column():
+            gr.Markdown("### dstack Run Logs (active run)")
+            dstack_log_box = gr.Textbox(
+                value="",
+                label="dstack Logs (live)",
+                lines=20,
+                max_lines=30,
+                autoscroll=True,
+                interactive=False,
+            )
+            dstack_log_seq = gr.State(value=[0])
 
         # ── Footer ───────────────────────────────────────────────────────────
         with gr.Row():

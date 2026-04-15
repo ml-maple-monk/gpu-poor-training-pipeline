@@ -57,7 +57,7 @@ def _start_trainer(tmp_path, trainer_stub_script, save_delay=0.0, run_seconds=30
 class TestAtomicSave:
     def test_checkpoint_loadable_after_normal_run(self, tmp_path, trainer_stub_script):
         """Normal exit: checkpoint file must be loadable by torch.load."""
-        proc, save_dir, ready_file, status_file = _start_trainer(
+        proc, save_dir, _ready_file, _status_file = _start_trainer(
             tmp_path, trainer_stub_script, save_delay=0.0, run_seconds=2
         )
         try:
@@ -75,7 +75,7 @@ class TestAtomicSave:
 
     def test_no_tmp_residue_after_normal_run(self, tmp_path, trainer_stub_script):
         """Normal exit: no .tmp files must remain in save_dir."""
-        proc, save_dir, ready_file, status_file = _start_trainer(
+        proc, save_dir, _ready_file, _status_file = _start_trainer(
             tmp_path, trainer_stub_script, save_delay=0.0, run_seconds=2
         )
         try:
@@ -89,7 +89,7 @@ class TestAtomicSave:
 
     def test_sigterm_checkpoint_loadable(self, tmp_path, trainer_stub_script):
         """SIGTERM mid-run: checkpoint must still be loadable."""
-        proc, save_dir, ready_file, status_file = _start_trainer(
+        proc, save_dir, ready_file, _status_file = _start_trainer(
             tmp_path, trainer_stub_script, save_delay=0.0, run_seconds=30
         )
 
@@ -116,7 +116,7 @@ class TestAtomicSave:
 
     def test_sigterm_no_tmp_residue(self, tmp_path, trainer_stub_script):
         """SIGTERM mid-run: no .tmp files must remain."""
-        proc, save_dir, ready_file, status_file = _start_trainer(
+        proc, save_dir, ready_file, _status_file = _start_trainer(
             tmp_path, trainer_stub_script, save_delay=0.0, run_seconds=30
         )
 
@@ -133,7 +133,7 @@ class TestAtomicSave:
 
     def test_sigterm_mlflow_status_killed(self, tmp_path, trainer_stub_script):
         """SIGTERM mid-run: MLflow run status must be KILLED."""
-        proc, save_dir, ready_file, status_file = _start_trainer(
+        proc, _save_dir, ready_file, status_file = _start_trainer(
             tmp_path, trainer_stub_script, save_delay=0.0, run_seconds=30
         )
 
@@ -146,5 +146,6 @@ class TestAtomicSave:
             proc.kill()
 
         assert _wait_for_file(status_file, timeout=5), "MLflow status file not written"
-        status = open(status_file).read().strip()
+        with open(status_file, encoding="utf-8") as handle:
+            status = handle.read().strip()
         assert status == "KILLED", f"Expected MLflow status KILLED, got: {status!r}"

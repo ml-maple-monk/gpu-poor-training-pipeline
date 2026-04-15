@@ -4,12 +4,15 @@
 
 ```bash
 make install-dev
-python -m pre_commit install
 ```
+
+`make install-dev` now installs the local `pre-commit` hooks, so the same
+style checks run before commit and in CI.
 
 ## Local Commands
 
 ```bash
+make style-check
 make format
 make format-check
 make lint
@@ -38,6 +41,10 @@ make ci-local
 Required check names:
 1. `quality`
 2. `tests`
+
+`quality` treats `make style-check` as the authoritative style gate. That runs
+the pinned `pre-commit` hooks across the repo, including Ruff plus whitespace,
+YAML, and TOML guardrails.
 
 If workflow/job names change, update branch protection settings and this document
 in the same pull request.

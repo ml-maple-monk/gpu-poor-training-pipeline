@@ -232,7 +232,10 @@ def finish(status="FINISHED"):
         return
 
     try:
-        _drain_metrics()
+        try:
+            _drain_metrics()
+        except Exception as exc:
+            print(f"[mlflow] metric drain failed during finish: {exc}", flush=True)
     finally:
         _active = False
         try:

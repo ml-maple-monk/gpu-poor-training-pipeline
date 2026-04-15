@@ -62,10 +62,9 @@ def test_safe_dstack_stream_closes_client_on_exception(fake_httpx_client: MagicM
     class Boom(RuntimeError):
         pass
 
-    with pytest.raises(Boom):
-        with safe_exec.safe_dstack_stream("runs/get_logs", json={"foo": "bar"}) as resp:
-            assert resp is not None
-            raise Boom("caller body failed mid-stream")
+    with pytest.raises(Boom), safe_exec.safe_dstack_stream("runs/get_logs", json={"foo": "bar"}) as resp:
+        assert resp is not None
+        raise Boom("caller body failed mid-stream")
 
     assert fake_httpx_client.close.called, (
         "httpx.Client.close() must be called even when the caller's body raises; "

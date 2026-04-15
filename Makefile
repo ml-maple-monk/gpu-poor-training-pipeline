@@ -15,12 +15,13 @@ MUTANT_PATHS ?=
 MUTANT_BASELINE_DIR := .mutmut-baseline
 MUTANT_BASELINE_FILE := $(MUTANT_BASELINE_DIR)/main.txt
 
-.PHONY: install-dev format format-check lint lint-fix test test-fast test-integration test-live ci-local mutants mutants-report mutants-baseline
+.PHONY: install-dev format format-check lint lint-fix style-check test test-fast test-integration test-live ci-local mutants mutants-report mutants-baseline
 
 install-dev:
 	$(PYTHON) -m pip install --upgrade pip
 	$(PYTHON) -m pip install -e ".[dev]"
 	$(PYTHON) -m pip install --index-url https://download.pytorch.org/whl/cpu torch==2.10.0+cpu
+	$(PYTHON) -m pre_commit install --install-hooks
 
 format:
 	$(PYTHON) -m ruff format $(PY_DIRS)
@@ -33,6 +34,9 @@ lint:
 
 lint-fix:
 	$(PYTHON) -m ruff check --fix $(PY_DIRS)
+
+style-check:
+	$(PYTHON) -m pre_commit run --all-files --show-diff-on-failure
 
 test:
 	$(PYTEST) tests training/tests infrastructure/dashboard/tests
@@ -53,8 +57,7 @@ test-live:
 		-ra
 
 ci-local:
-	$(MAKE) format-check
-	$(MAKE) lint
+	$(MAKE) style-check
 	$(MAKE) test-fast
 	$(PYTHON) -m gpupoor --help
 

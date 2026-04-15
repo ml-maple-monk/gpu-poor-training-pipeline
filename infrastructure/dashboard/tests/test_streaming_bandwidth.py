@@ -76,13 +76,13 @@ def test_bandwidth_bounded_by_delta():
     rb = RingBuffer(maxlen=500)
 
     # Fill the ring with 500 lines (worst case: full ring)
-    for i in range(500):
+    for _i in range(500):
         rb.append("x" * 80)  # 80 bytes per line
 
     _, seq = rb.snapshot()  # session starts here
 
     # Only 10 new lines added
-    for i in range(10):
+    for _i in range(10):
         rb.append("new-" + "y" * 76)
 
     new_lines, _ = rb.snapshot_since(seq)
