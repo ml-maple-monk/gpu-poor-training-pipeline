@@ -1,12 +1,23 @@
 import json
 import os
 import random
+import shutil
+import tempfile
+from pathlib import Path
 
+import numpy as np
 import torch
-from datasets import Features, Value, load_dataset
 from torch.utils.data import Dataset
 
+from datasets import Features, Value, load_dataset
+
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+PRETOKENIZED_DATASET_VERSION = 1
+PRETOKENIZED_TOKENS_FILE = "tokens.bin"
+PRETOKENIZED_INDEX_FILE = "index.bin"
+PRETOKENIZED_METADATA_FILE = "metadata.json"
 
 
 def pre_processing_chat(conversations, add_system_ratio=0.2):
@@ -40,33 +51,159 @@ def post_processing_chat(prompt_content, empty_think_ratio=0.2):
 
 
 class PretrainDataset(Dataset):
-    def __init__(self, data_path=None, tokenizer=None, max_length=512, samples=None):
+    def __init__(self, data_path=None, tokenizer=None, max_length=512, samples=None, sample_indices=None):
         super().__init__()
-        if tokenizer is None:
-            raise ValueError("tokenizer is required")
-        self.tokenizer = tokenizer
+        if data_path is None:
+            raise ValueError("data_path is required")
+        if tokenizer is not None:
+            raise ValueError("PretrainDataset now reads pretokenized mmap data; tokenizer is no longer accepted")
+        if samples is not None:
+            raise ValueError("PretrainDataset now reads pretokenized mmap data; samples is no longer accepted")
         self.max_length = max_length
-        self.samples = samples if samples is not None else load_dataset("json", data_files=data_path, split="train")
+        self.data_path = Path(data_path)
+        self.metadata = load_pretokenized_metadata(self.data_path)
+        artifact_max_length = int(self.metadata["max_length"])
+        if artifact_max_length != self.max_length:
+            raise ValueError(
+                f"PretrainDataset max_length={self.max_length} does not match pretokenized artifact max_length={artifact_max_length}"
+            )
+        self.pad_token_id = int(self.metadata["pad_token_id"])
+        self.sample_count = int(self.metadata["sample_count"])
+        self.sample_indices = None if sample_indices is None else np.asarray(sample_indices, dtype=np.int64)
+        self._tokens = None
+        self._index = None
 
     def __len__(self):
-        return len(self.samples)
+        return int(self.sample_count if self.sample_indices is None else len(self.sample_indices))
 
     def __getitem__(self, index):
-        sample = self.samples[index]
-        tokens = self.tokenizer(
-            str(sample["text"]), add_special_tokens=False, max_length=self.max_length - 2, truncation=True
-        ).input_ids
-        tokens = [self.tokenizer.bos_token_id] + tokens + [self.tokenizer.eos_token_id]
-        input_ids = tokens + [self.tokenizer.pad_token_id] * (self.max_length - len(tokens))
+        self._ensure_memmaps()
+        sample_index = int(index if self.sample_indices is None else self.sample_indices[index])
+        token_start, token_length = self._index[sample_index]
+        tokens = self._tokens[int(token_start) : int(token_start + token_length)]
+        input_ids = np.full(self.max_length, self.pad_token_id, dtype=np.int64)
+        input_ids[: int(token_length)] = tokens
         input_ids = torch.tensor(input_ids, dtype=torch.long)
         labels = input_ids.clone()
-        labels[input_ids == self.tokenizer.pad_token_id] = -100
+        labels[input_ids == self.pad_token_id] = -100
         return input_ids, labels
+
+    def _ensure_memmaps(self):
+        if self._tokens is None:
+            self._tokens = np.memmap(
+                self.data_path / PRETOKENIZED_TOKENS_FILE,
+                dtype=np.int32,
+                mode="r",
+                shape=(int(self.metadata["token_count"]),),
+            )
+        if self._index is None:
+            self._index = np.memmap(
+                self.data_path / PRETOKENIZED_INDEX_FILE,
+                dtype=np.int64,
+                mode="r",
+                shape=(self.sample_count, 2),
+            )
+
+
+def pretokenized_dataset_exists(path):
+    return (Path(path) / PRETOKENIZED_METADATA_FILE).is_file()
+
+
+def load_pretokenized_metadata(path):
+    metadata_path = Path(path) / PRETOKENIZED_METADATA_FILE
+    if not metadata_path.is_file():
+        raise FileNotFoundError(
+            f"{metadata_path} not found. Run the pretokenization pipeline before starting pretraining."
+        )
+    with metadata_path.open(encoding="utf-8") as handle:
+        metadata = json.load(handle)
+    if metadata.get("version") != PRETOKENIZED_DATASET_VERSION:
+        raise ValueError(
+            f"Unsupported pretokenized dataset version {metadata.get('version')}; expected {PRETOKENIZED_DATASET_VERSION}"
+        )
+    return metadata
+
+
+def pretokenized_sample_count(path):
+    return int(load_pretokenized_metadata(path)["sample_count"])
+
+
+def build_pretokenized_corpus(
+    input_path,
+    output_dir,
+    tokenizer,
+    max_length,
+    *,
+    overwrite=False,
+    progress_interval=50000,
+):
+    if tokenizer is None:
+        raise ValueError("tokenizer is required")
+
+    source_path = Path(input_path)
+    if not source_path.is_file():
+        raise FileNotFoundError(f"{source_path} not found")
+
+    output_dir = Path(output_dir)
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    if output_dir.exists() and not overwrite:
+        raise FileExistsError(f"{output_dir} already exists; pass overwrite=True to rebuild it")
+
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"{output_dir.name}.tmp.", dir=output_dir.parent))
+    tokens_tmp = temp_dir / PRETOKENIZED_TOKENS_FILE
+    index_tmp = temp_dir / PRETOKENIZED_INDEX_FILE
+
+    token_count = 0
+    sample_count = 0
+    with source_path.open(encoding="utf-8") as source, tokens_tmp.open("wb") as tokens_fp, index_tmp.open(
+        "wb"
+    ) as index_fp:
+        for line_number, line in enumerate(source, start=1):
+            if not line.strip():
+                continue
+            payload = json.loads(line)
+            if "text" not in payload:
+                raise ValueError(f"{source_path}:{line_number} is missing the 'text' field")
+            token_ids = tokenizer(
+                str(payload["text"]), add_special_tokens=False, max_length=max_length - 2, truncation=True
+            ).input_ids
+            token_ids = [tokenizer.bos_token_id] + token_ids + [tokenizer.eos_token_id]
+            np.asarray(token_ids, dtype=np.int32).tofile(tokens_fp)
+            np.asarray((token_count, len(token_ids)), dtype=np.int64).tofile(index_fp)
+            token_count += len(token_ids)
+            sample_count += 1
+            if progress_interval > 0 and sample_count % progress_interval == 0:
+                print(
+                    f"[pretokenize] processed {sample_count} samples / {token_count} tokens",
+                    flush=True,
+                )
+
+    metadata = {
+        "version": PRETOKENIZED_DATASET_VERSION,
+        "max_length": int(max_length),
+        "sample_count": int(sample_count),
+        "token_count": int(token_count),
+        "tokens_dtype": "int32",
+        "index_dtype": "int64",
+        "bos_token_id": int(tokenizer.bos_token_id),
+        "eos_token_id": int(tokenizer.eos_token_id),
+        "pad_token_id": int(tokenizer.pad_token_id),
+        "source_path": str(source_path),
+    }
+    with (temp_dir / PRETOKENIZED_METADATA_FILE).open("w", encoding="utf-8") as handle:
+        json.dump(metadata, handle, ensure_ascii=True, indent=2)
+        handle.write("\n")
+
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    os.replace(temp_dir, output_dir)
+    return metadata
 
 
 class SFTDataset(Dataset):
     def __init__(self, jsonl_path, tokenizer, max_length=1024):
         super().__init__()
+        _require_hf_datasets()
         self.tokenizer = tokenizer
         self.max_length = max_length
         features = Features(
@@ -138,6 +275,7 @@ class SFTDataset(Dataset):
 class DPODataset(Dataset):
     def __init__(self, file_path, tokenizer, max_length=4096):
         super().__init__()
+        _require_hf_datasets()
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.padding = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
@@ -207,6 +345,7 @@ class DPODataset(Dataset):
 class RLAIFDataset(Dataset):
     def __init__(self, jsonl_path, tokenizer, max_length=1024, thinking_ratio=0.5):
         super().__init__()
+        _require_hf_datasets()
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.thinking_ratio = thinking_ratio  # 按概率开启 thinking
@@ -258,6 +397,11 @@ class AgentRLDataset(Dataset):
         sample = self.samples[index]
         messages, tools = self.parse_conversations(sample["conversations"])
         return {"messages": messages, "tools": tools, "gt": sample["gt"]}
+
+
+def _require_hf_datasets():
+    if load_dataset is None or Features is None or Value is None:
+        raise ImportError("The 'datasets' package is required for supervised/chat dataset loading")
 
 
 if __name__ == "__main__":

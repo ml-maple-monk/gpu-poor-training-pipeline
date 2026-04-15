@@ -8,7 +8,7 @@ services:
     image: minimind-trainer:local
     init: true
     environment:
-      DATASET_PATH: "${DATASET_PATH:-/data/datasets/pretrain_t2t_mini.jsonl}"
+      DATASET_PATH: "${DATASET_PATH:-/data/datasets/pretrain_t2t_mini}"
       OUTPUT_DIR: "${OUTPUT_DIR:-/data/minimind-out}"
       TIME_CAP_SECONDS: "${TIME_CAP_SECONDS:-600}"
       VALIDATION_SPLIT_RATIO: "${VALIDATION_SPLIT_RATIO:-0.0}"

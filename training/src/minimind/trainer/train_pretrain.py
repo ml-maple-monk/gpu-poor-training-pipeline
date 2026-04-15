@@ -1,4 +1,3 @@
-import argparse
 import glob
 import math
 import os
@@ -7,18 +6,19 @@ import sys
 import time
 import warnings
 from contextlib import nullcontext
+from types import SimpleNamespace
 
 __package__ = "trainer"
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import click
 import torch
 import torch.distributed as dist
-from datasets import load_dataset
 from torch import optim
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 
-from dataset.lm_dataset import PretrainDataset
+from dataset.lm_dataset import PretrainDataset, pretokenized_sample_count
 from model.model_minimind import MiniMindConfig
 from trainer._benchmark_metrics import (
     NvmlEnergyMeter,
@@ -42,29 +42,11 @@ from trainer.trainer_utils import (
     lm_checkpoint,
     setup_seed,
 )
-
-try:
-    from trainer._mlflow_helper import finish as _mlflow_finish
-    from trainer._mlflow_helper import log_checkpoint as _mlflow_log_ckpt
-    from trainer._mlflow_helper import log_metrics as _mlflow_log_metrics
-    from trainer._mlflow_helper import log_step as _mlflow_log_step
-    from trainer._mlflow_helper import start as _mlflow_start
-except Exception:
-
-    def _mlflow_start(*a, **kw):
-        pass
-
-    def _mlflow_log_step(*a, **kw):
-        pass
-
-    def _mlflow_log_metrics(*a, **kw):
-        pass
-
-    def _mlflow_log_ckpt(*a, **kw):
-        pass
-
-    def _mlflow_finish(status="FINISHED"):
-        pass
+from trainer._mlflow_helper import finish as _mlflow_finish
+from trainer._mlflow_helper import log_checkpoint as _mlflow_log_ckpt
+from trainer._mlflow_helper import log_metrics as _mlflow_log_metrics
+from trainer._mlflow_helper import log_step as _mlflow_log_step
+from trainer._mlflow_helper import start as _mlflow_start
 
 
 warnings.filterwarnings("ignore")
@@ -135,15 +117,15 @@ def _build_metric_state(
 
 
 def _build_pretrain_datasets(tokenizer):
-    raw_samples = load_dataset("json", data_files=args.data_path, split="train")
-    train_samples = raw_samples
+    del tokenizer
+    sample_count = pretokenized_sample_count(args.data_path)
+    train_indices = None
     val_ds = None
 
     validation_requested = args.validation_split_ratio > 0.0 or args.validation_interval_steps > 0
     validation_enabled = args.validation_split_ratio > 0.0 and args.validation_interval_steps > 0
 
     if validation_enabled:
-        sample_count = len(raw_samples)
         if sample_count < 2:
             if is_main_process():
                 Logger("Validation disabled: dataset has fewer than 2 samples after loading")
@@ -151,11 +133,9 @@ def _build_pretrain_datasets(tokenizer):
             train_indices, val_indices = split_validation_indices(
                 sample_count, args.validation_split_ratio, seed=VALIDATION_SPLIT_SEED
             )
-            train_samples = raw_samples.select(train_indices)
-            val_samples = raw_samples.select(val_indices)
             if dist_ready():
-                val_samples = val_samples.shard(num_shards=world_size(), index=dist.get_rank(), contiguous=False)
-            val_ds = PretrainDataset(tokenizer=tokenizer, max_length=args.max_seq_len, samples=val_samples)
+                val_indices = val_indices[dist.get_rank() :: world_size()]
+            val_ds = PretrainDataset(data_path=args.data_path, max_length=args.max_seq_len, sample_indices=val_indices)
             if is_main_process():
                 Logger(
                     f"Validation enabled: {len(val_indices)} held-out samples, "
@@ -167,7 +147,7 @@ def _build_pretrain_datasets(tokenizer):
     if val_ds is None and args.time_to_target_metric != "none" and is_main_process():
         Logger("Time-to-target disabled because validation is not active")
 
-    train_ds = PretrainDataset(tokenizer=tokenizer, max_length=args.max_seq_len, samples=train_samples)
+    train_ds = PretrainDataset(data_path=args.data_path, max_length=args.max_seq_len, sample_indices=train_indices)
     return train_ds, val_ds
 
 
@@ -423,51 +403,19 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None, val_loader=None)
     return last_step
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="MiniMind Pretraining")
-    parser.add_argument("--save_dir", type=str, default="../out", help="模型保存目录")
-    parser.add_argument("--save_weight", default="pretrain", type=str, help="保存权重的前缀名")
-    parser.add_argument("--epochs", type=int, default=2, help="训练轮数")
-    parser.add_argument("--batch_size", type=int, default=32, help="batch size")
-    parser.add_argument("--learning_rate", type=float, default=5e-4, help="初始学习率")
-    parser.add_argument(
-        "--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu", help="训练设备"
-    )
-    parser.add_argument("--dtype", type=str, default="bfloat16", help="混合精度类型")
-    parser.add_argument("--num_workers", type=int, default=8, help="数据加载线程数")
-    parser.add_argument("--accumulation_steps", type=int, default=8, help="梯度累积步数")
-    parser.add_argument("--grad_clip", type=float, default=1.0, help="梯度裁剪阈值")
-    parser.add_argument("--log_interval", type=int, default=100, help="日志打印间隔")
-    parser.add_argument("--save_interval", type=int, default=1000, help="模型保存间隔")
-    parser.add_argument("--hidden_size", default=768, type=int, help="隐藏层维度")
-    parser.add_argument("--num_hidden_layers", default=8, type=int, help="隐藏层数量")
-    parser.add_argument("--max_seq_len", default=340, type=int, help="训练的最大截断长度（中文1token≈1.5~1.7字符）")
-    parser.add_argument("--use_moe", default=0, type=int, choices=[0, 1], help="是否使用MoE架构（0=否，1=是）")
-    parser.add_argument("--data_path", type=str, default="../dataset/pretrain_t2t_mini.jsonl", help="预训练数据路径")
-    parser.add_argument("--from_weight", default="none", type=str, help="基于哪个权重训练，为none则从头开始")
-    parser.add_argument("--from_resume", default=0, type=int, choices=[0, 1], help="是否自动检测&续训（0=否，1=是）")
-    parser.add_argument("--use_wandb", action="store_true", help="是否使用wandb")
-    parser.add_argument("--wandb_project", type=str, default="MiniMind-Pretrain", help="wandb项目名")
-    parser.add_argument(
-        "--use_compile", default=0, type=int, choices=[0, 1], help="是否使用torch.compile加速（0=否，1=是）"
-    )
-    parser.add_argument("--validation_split_ratio", type=float, default=0.0, help="验证集切分比例")
-    parser.add_argument("--validation_interval_steps", type=int, default=0, help="验证间隔（优化器步数）")
-    parser.add_argument("--peak_tflops_per_gpu", type=float, default=0.0, help="每卡峰值TFLOPs，用于MFU")
-    parser.add_argument(
-        "--time_to_target_metric",
-        type=str,
-        default="none",
-        choices=["none", "val_loss", "val_ppl"],
-        help="time-to-target 使用的验证指标",
-    )
-    parser.add_argument("--time_to_target_value", type=float, default=0.0, help="time-to-target 阈值")
-    args = parser.parse_args()
-    signal.signal(signal.SIGTERM, _sigterm_handler)
+def _coerce_args(options):
+    runtime_args = SimpleNamespace(**options)
+    runtime_args.peak_tflops_per_gpu = runtime_args.peak_tflops_per_gpu if runtime_args.peak_tflops_per_gpu > 0 else None
+    runtime_args.time_to_target_value = runtime_args.time_to_target_value if runtime_args.time_to_target_value > 0 else None
+    runtime_args.peak_fp8_tflops_per_gpu = None
+    return runtime_args
 
-    args.peak_tflops_per_gpu = args.peak_tflops_per_gpu if args.peak_tflops_per_gpu > 0 else None
-    args.time_to_target_value = args.time_to_target_value if args.time_to_target_value > 0 else None
-    args.peak_fp8_tflops_per_gpu = None
+
+def run_training(runtime_args):
+    global args, autocast_ctx, collective_device, device_type, energy_meter, lm_config, metric_state, model, optimizer, scaler
+
+    args = runtime_args
+    signal.signal(signal.SIGTERM, _sigterm_handler)
 
     # ========== 1. 初始化环境和随机种子 ==========
     local_rank = init_distributed_mode()
@@ -582,3 +530,53 @@ if __name__ == "__main__":
         _mlflow_finish()
     if dist.is_initialized():
         dist.destroy_process_group()
+
+
+@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.option("--save_dir", default="../out", show_default=True, type=str, help="模型保存目录")
+@click.option("--save_weight", default="pretrain", show_default=True, type=str, help="保存权重的前缀名")
+@click.option("--epochs", default=2, show_default=True, type=int, help="训练轮数")
+@click.option("--batch_size", default=32, show_default=True, type=int, help="batch size")
+@click.option("--learning_rate", default=5e-4, show_default=True, type=float, help="初始学习率")
+@click.option(
+    "--device",
+    default="cuda:0" if torch.cuda.is_available() else "cpu",
+    show_default=True,
+    type=str,
+    help="训练设备",
+)
+@click.option("--dtype", default="bfloat16", show_default=True, type=str, help="混合精度类型")
+@click.option("--num_workers", default=8, show_default=True, type=int, help="数据加载线程数")
+@click.option("--accumulation_steps", default=8, show_default=True, type=int, help="梯度累积步数")
+@click.option("--grad_clip", default=1.0, show_default=True, type=float, help="梯度裁剪阈值")
+@click.option("--log_interval", default=100, show_default=True, type=int, help="日志打印间隔")
+@click.option("--save_interval", default=1000, show_default=True, type=int, help="模型保存间隔")
+@click.option("--hidden_size", default=768, show_default=True, type=int, help="隐藏层维度")
+@click.option("--num_hidden_layers", default=8, show_default=True, type=int, help="隐藏层数量")
+@click.option("--max_seq_len", default=340, show_default=True, type=int, help="训练的最大截断长度（中文1token≈1.5~1.7字符）")
+@click.option("--use_moe", default=0, show_default=True, type=click.IntRange(0, 1), help="是否使用MoE架构（0=否，1=是）")
+@click.option("--data_path", default="../dataset/pretrain_t2t_mini", show_default=True, type=str, help="预训练数据路径")
+@click.option("--from_weight", default="none", show_default=True, type=str, help="基于哪个权重训练，为none则从头开始")
+@click.option("--from_resume", default=0, show_default=True, type=click.IntRange(0, 1), help="是否自动检测&续训（0=否，1=是）")
+@click.option("--use_wandb", is_flag=True, help="是否使用wandb")
+@click.option("--wandb_project", default="MiniMind-Pretrain", show_default=True, type=str, help="wandb项目名")
+@click.option("--use_compile", default=0, show_default=True, type=click.IntRange(0, 1), help="是否使用torch.compile加速（0=否，1=是）")
+@click.option("--validation_split_ratio", default=0.0, show_default=True, type=float, help="验证集切分比例")
+@click.option("--validation_interval_steps", default=0, show_default=True, type=int, help="验证间隔（优化器步数）")
+@click.option("--peak_tflops_per_gpu", default=0.0, show_default=True, type=float, help="每卡峰值TFLOPs，用于MFU")
+@click.option(
+    "--time_to_target_metric",
+    default="none",
+    show_default=True,
+    type=click.Choice(["none", "val_loss", "val_ppl"]),
+    help="time-to-target 使用的验证指标",
+)
+@click.option("--time_to_target_value", default=0.0, show_default=True, type=float, help="time-to-target 阈值")
+def main(**options):
+    """MiniMind pretraining entrypoint."""
+
+    run_training(_coerce_args(options))
+
+
+if __name__ == "__main__":
+    main()

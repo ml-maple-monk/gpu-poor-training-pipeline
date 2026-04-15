@@ -3,7 +3,7 @@ name = "tiny_cpu"
 [recipe]
 kind = "minimind_pretrain"
 prepare_data = true
-dataset_path = "data/datasets/pretrain_t2t_mini.jsonl"
+dataset_path = "data/datasets/pretrain_t2t_mini"
 output_dir = "data/minimind-out"
 time_cap_seconds = 120
 

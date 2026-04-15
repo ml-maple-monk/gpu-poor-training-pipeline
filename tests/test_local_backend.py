@@ -29,7 +29,7 @@ def test_run_training_passes_configured_mlflow_env(monkeypatch) -> None:
     monkeypatch.setattr(
         local,
         "ensure_local_dataset",
-        lambda config: REPO_ROOT / "data" / "datasets" / "pretrain_t2t_mini.jsonl",
+        lambda config: REPO_ROOT / "data" / "datasets" / "pretrain_t2t_mini",
     )
     monkeypatch.setattr(local, "run_command", lambda command, env=None: called.append(env or {}))
 
@@ -37,7 +37,7 @@ def test_run_training_passes_configured_mlflow_env(monkeypatch) -> None:
 
     assert called == [
         {
-            "DATASET_PATH": "/data/datasets/pretrain_t2t_mini.jsonl",
+            "DATASET_PATH": "/data/datasets/pretrain_t2t_mini",
             "OUTPUT_DIR": "/data/minimind-out",
             "TIME_CAP_SECONDS": "120",
             "VALIDATION_SPLIT_RATIO": "0.0",
@@ -66,7 +66,7 @@ def test_local_training_rejects_paths_outside_data_mount(monkeypatch) -> None:
     monkeypatch.setattr(
         local,
         "ensure_local_dataset",
-        lambda config: REPO_ROOT / "data" / "datasets" / "pretrain_t2t_mini.jsonl",
+        lambda config: REPO_ROOT / "data" / "datasets" / "pretrain_t2t_mini",
     )
 
     with pytest.raises(ValueError, match="Local training paths must live under"):

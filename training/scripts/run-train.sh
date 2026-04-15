@@ -2,7 +2,7 @@
 set -uo pipefail
 
 SOURCE_ROOT=/workspace/minimind
-DATASET=${DATASET_PATH:-/data/datasets/pretrain_t2t_mini.jsonl}
+DATASET=${DATASET_PATH:-/data/datasets/pretrain_t2t_mini}
 OUT=${OUTPUT_DIR:-/data/minimind-out}
 TIME_CAP_SECONDS=${TIME_CAP_SECONDS:-600}
 TRAIN_ARGS_FILE=/workspace/train-pretrain-args.sh
@@ -15,7 +15,7 @@ fi
 # shellcheck source=/dev/null
 source "$TRAIN_ARGS_FILE"
 
-if [ ! -f "$DATASET" ]; then
+if [ ! -e "$DATASET" ]; then
     echo "FATAL: $DATASET not found — run training/start.sh prepare-data first" >&2
     exit 1
 fi

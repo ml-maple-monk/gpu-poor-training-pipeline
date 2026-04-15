@@ -8,7 +8,9 @@ usage() {
   cat <<'EOF'
 Usage:
   training/start.sh local [config.toml]
+  training/start.sh venv
   training/start.sh prepare-data
+  training/start.sh pretokenize-data [raw_jsonl] [output_dir]
   training/start.sh build-base
   training/start.sh build-remote
 EOF
@@ -27,9 +29,17 @@ case "$subcommand" in
     fi
     exec python3 -m gpupoor.cli train "$config" "$@"
     ;;
+  venv)
+    shift
+    exec bash "$REPO_ROOT/training/scripts/ensure-local-env.sh" "$@"
+    ;;
   prepare-data)
     shift
     exec bash "$REPO_ROOT/training/scripts/prepare-data.sh" "$@"
+    ;;
+  pretokenize-data)
+    shift
+    exec bash "$REPO_ROOT/training/scripts/pretokenize-data.sh" "$@"
     ;;
   build-base)
     shift

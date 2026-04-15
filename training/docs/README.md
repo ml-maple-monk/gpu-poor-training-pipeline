@@ -21,7 +21,9 @@ Key anchored implementation points:
 ## Startup Surface
 
 ```bash
+./training/start.sh venv
 ./training/start.sh prepare-data
+./training/start.sh pretokenize-data
 ./training/start.sh local
 ./training/start.sh build-base
 ./training/start.sh build-remote
@@ -33,6 +35,12 @@ Root `run.sh` delegates to these for the common flows:
 
 ## Local Training
 
+Bootstrap the local training toolchain with `uv` into `training/.venv`:
+
+```bash
+./training/start.sh venv
+```
+
 ```bash
 ./infrastructure/mlflow/start.sh up
 ./training/start.sh prepare-data
@@ -40,7 +48,8 @@ Root `run.sh` delegates to these for the common flows:
 ```
 
 Local data layout:
-- Dataset: `data/datasets/pretrain_t2t_mini.jsonl`
+- Raw dataset: `data/datasets/pretrain_t2t_mini.jsonl`
+- Pretokenized mmap dataset: `data/datasets/pretrain_t2t_mini/`
 - Checkpoints: `data/minimind-out/`
 
 The local container mounts `training/src/minimind` into `/workspace/minimind`, so the code you edit in this repo is the code the container runs.
@@ -57,7 +66,7 @@ Remote flow:
 1. `training/scripts/build-and-push.sh` builds and pushes the slim shared base from `training/docker/Dockerfile.base`
 2. The remote image in `training/docker/Dockerfile.remote` layers the repo source on top of that slim base
 3. `dstack/config/pretrain.dstack.yml` starts `training/scripts/remote-entrypoint.sh`
-4. The entrypoint downloads the dataset, then executes the vendored trainer
+4. The entrypoint downloads the dataset, pretokenizes it into mmap artifacts, then executes the vendored trainer
 
 The remote image uses VCR by default. GHCR remains optional fallback/distribution only.
 
@@ -107,10 +116,13 @@ training/
 ## Contract Notes
 
 - `training/scripts/lib/train-pretrain-args.sh` is the canonical flag source for both local and remote training.
+- `training/src/minimind/trainer/train_pretrain.py` and `training/src/minimind/dataset/pretokenize_pretrain.py` now use `click` CLIs instead of `argparse`.
 - `training/src/minimind/trainer/train_pretrain.py` now contains the atomic save plus SIGTERM path directly instead of relying on a build-time patch.
 - `training/src/minimind/trainer/_mlflow_helper.py` is tracked in-repo and called directly by the vendored trainer.
 - Benchmark metrics remain best-effort: validation is opt-in via `validation_split_ratio` + `validation_interval_steps`, and MFU/TFLOPs are auto-enabled only when the runtime GPU maps to a known peak or `[mlflow].peak_tflops_per_gpu` is set as an override.
-- `training/scripts/prepare-data.sh` only downloads the dataset; it no longer clones external training code.
+- `training/scripts/ensure-local-env.sh` manages the local training environment with `uv` + `venv` in `training/.venv`.
+- `training/scripts/pretokenize-data.sh` is the standalone pretokenization pipeline for turning the raw JSONL into mmap-backed token artifacts.
+- `training/scripts/prepare-data.sh` downloads the dataset and refreshes the pretokenized artifact; it no longer clones external training code.
 
 ## Validation
 

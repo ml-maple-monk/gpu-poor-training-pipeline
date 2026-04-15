@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import queue
 import threading
 import time
 import traceback
+
+import torch
 
 _active = False
 _start_time = None
@@ -77,6 +80,15 @@ def _enqueue_metrics(metrics, step) -> None:
         _dropped_metric_events += 1
 
 
+def _load_mlflow_module():
+    if importlib.util.find_spec("mlflow") is None:
+        return None
+
+    import mlflow
+
+    return mlflow
+
+
 def _drain_metrics() -> None:
     global _dropped_metric_events
 
@@ -116,9 +128,8 @@ def start(args, model_config, script_name="train_pretrain"):
     if not uri:
         print("[mlflow] MLFLOW_TRACKING_URI not set — skipping integration", flush=True)
         return
-    try:
-        import mlflow
-    except ImportError:
+    mlflow = _load_mlflow_module()
+    if mlflow is None:
         print("[mlflow] mlflow python package not installed — skipping", flush=True)
         return
 
@@ -129,8 +140,6 @@ def start(args, model_config, script_name="train_pretrain"):
     while True:
         attempt += 1
         try:
-            import torch
-
             mlflow.set_tracking_uri(uri)
             exp_name = os.environ.get("MLFLOW_EXPERIMENT_NAME", "minimind-pretrain")
             mlflow.set_experiment(exp_name)
