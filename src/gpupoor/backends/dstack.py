@@ -436,12 +436,15 @@ def launch_remote(
         started_tunnel = True
         rendered_task = render_task(settings, config, image_sha)
         apply_env = config.mlflow.to_env()
+        apply_env.update(config.training.to_env())
         apply_env["MLFLOW_TRACKING_URI"] = mlflow_url
         apply_env.update(
             {
                 "HF_TOKEN": read_required_secret("hf_token"),
                 "VERDA_PROFILE": "remote",
                 "DSTACK_RUN_NAME": config.name,
+                "RECIPE_KIND": config.recipe.kind,
+                "RECIPE_PREPARE_DATA": "1" if config.recipe.prepare_data else "0",
                 "OUT_DIR": settings.get("OUT_DIR", "/workspace/out"),
                 "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", "jingyaogong/minimind_dataset"),
                 "HF_DATASET_FILENAME": settings.get("HF_DATASET_FILENAME", Path(config.recipe.dataset_path).name),
@@ -454,6 +457,7 @@ def launch_remote(
                     "pretokenized/pretrain_t2t_mini.tar.gz",
                 ),
                 "TIME_CAP_SECONDS": str(config.recipe.time_cap_seconds),
+                "MAX_SEQ_LEN": str(config.recipe.max_seq_len),
                 "VALIDATION_SPLIT_RATIO": str(config.recipe.validation_split_ratio),
                 "VALIDATION_INTERVAL_STEPS": str(config.recipe.validation_interval_steps),
             }

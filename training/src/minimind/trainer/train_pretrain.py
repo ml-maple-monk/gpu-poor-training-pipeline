@@ -416,7 +416,14 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None, val_loader=None)
         update_due = step % args.accumulation_steps == 0 or step == iters
         if update_due:
             next_update_step = int(metric_state["optimizer_step"]) + 1
-            lr = get_lr(next_update_step, total_update_steps, args.learning_rate)
+            lr = get_lr(
+                next_update_step,
+                total_update_steps,
+                args.learning_rate,
+                schedule=args.lr_schedule,
+                warmup_steps=args.lr_warmup_steps,
+                min_lr_ratio=args.lr_min_ratio,
+            )
             for param_group in optimizer.param_groups:
                 param_group["lr"] = lr
             scaler.unscale_(optimizer)
@@ -443,6 +450,39 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None, val_loader=None)
 
 def _coerce_args(options):
     runtime_args = SimpleNamespace(**options)
+    positive_int_fields = (
+        "hidden_size",
+        "num_hidden_layers",
+        "vocab_size",
+        "num_attention_heads",
+        "num_key_value_heads",
+        "intermediate_size",
+        "max_position_embeddings",
+        "num_experts",
+        "num_experts_per_tok",
+        "moe_intermediate_size",
+    )
+    for field_name in positive_int_fields:
+        if getattr(runtime_args, field_name) <= 0:
+            raise ValueError(f"{field_name} must be > 0")
+    if runtime_args.rms_norm_eps <= 0:
+        raise ValueError("rms_norm_eps must be > 0")
+    if runtime_args.rope_theta <= 0:
+        raise ValueError("rope_theta must be > 0")
+    if runtime_args.router_aux_loss_coef < 0.0:
+        raise ValueError("router_aux_loss_coef must be >= 0.0")
+    if runtime_args.dropout < 0.0 or runtime_args.dropout >= 1.0:
+        raise ValueError("dropout must be >= 0.0 and < 1.0")
+    if runtime_args.hidden_size % runtime_args.num_attention_heads != 0:
+        raise ValueError("hidden_size must be divisible by num_attention_heads")
+    if runtime_args.num_attention_heads % runtime_args.num_key_value_heads != 0:
+        raise ValueError("num_attention_heads must be divisible by num_key_value_heads")
+    if runtime_args.num_experts_per_tok > runtime_args.num_experts:
+        raise ValueError("num_experts_per_tok must be <= num_experts")
+    if runtime_args.lr_warmup_steps < 0:
+        raise ValueError("lr_warmup_steps must be >= 0")
+    if not 0.0 <= runtime_args.lr_min_ratio <= 1.0:
+        raise ValueError("lr_min_ratio must be >= 0.0 and <= 1.0")
     runtime_args.peak_tflops_per_gpu = (
         runtime_args.peak_tflops_per_gpu if runtime_args.peak_tflops_per_gpu > 0 else None
     )
@@ -478,7 +518,25 @@ def run_training(runtime_args):
     # ========== 2. 配置目录、模型参数、检查ckp ==========
     os.makedirs(args.save_dir, exist_ok=True)
     lm_config = MiniMindConfig(
-        hidden_size=args.hidden_size, num_hidden_layers=args.num_hidden_layers, use_moe=bool(args.use_moe)
+        hidden_size=args.hidden_size,
+        num_hidden_layers=args.num_hidden_layers,
+        use_moe=bool(args.use_moe),
+        dropout=args.dropout,
+        vocab_size=args.vocab_size,
+        flash_attn=bool(args.flash_attn),
+        num_attention_heads=args.num_attention_heads,
+        num_key_value_heads=args.num_key_value_heads,
+        hidden_act=args.hidden_act,
+        intermediate_size=args.intermediate_size,
+        max_position_embeddings=args.max_position_embeddings,
+        rms_norm_eps=args.rms_norm_eps,
+        rope_theta=args.rope_theta,
+        inference_rope_scaling=bool(args.inference_rope_scaling),
+        num_experts=args.num_experts,
+        num_experts_per_tok=args.num_experts_per_tok,
+        moe_intermediate_size=args.moe_intermediate_size,
+        norm_topk_prob=bool(args.norm_topk_prob),
+        router_aux_loss_coef=args.router_aux_loss_coef,
     )
     ckp_data = (
         lm_checkpoint(lm_config, weight=args.save_weight, save_dir=args.save_dir) if args.from_resume == 1 else None
@@ -625,13 +683,86 @@ def run_training(runtime_args):
 @click.option("--grad_clip", default=1.0, show_default=True, type=float, help="梯度裁剪阈值")
 @click.option("--log_interval", default=100, show_default=True, type=int, help="日志打印间隔")
 @click.option("--save_interval", default=1000, show_default=True, type=int, help="模型保存间隔")
+@click.option(
+    "--lr_schedule",
+    default="cosine",
+    show_default=True,
+    type=click.Choice(["cosine", "constant"]),
+    help="学习率调度器",
+)
+@click.option("--lr_warmup_steps", default=0, show_default=True, type=int, help="学习率 warmup 更新步数")
+@click.option("--lr_min_ratio", default=0.1, show_default=True, type=float, help="余弦调度最小学习率比例")
 @click.option("--hidden_size", default=768, show_default=True, type=int, help="隐藏层维度")
 @click.option("--num_hidden_layers", default=8, show_default=True, type=int, help="隐藏层数量")
+@click.option("--dropout", default=0.0, show_default=True, type=float, help="dropout 概率")
+@click.option("--vocab_size", default=6400, show_default=True, type=int, help="词表大小")
+@click.option(
+    "--flash_attn",
+    default=1,
+    show_default=True,
+    type=click.IntRange(0, 1),
+    help="是否启用 scaled_dot_product_attention 快路径（0=否，1=是）",
+)
+@click.option("--num_attention_heads", default=8, show_default=True, type=int, help="注意力头数量")
+@click.option("--num_key_value_heads", default=4, show_default=True, type=int, help="KV 头数量")
+@click.option(
+    "--hidden_act",
+    default="silu",
+    show_default=True,
+    type=click.Choice(["silu", "gelu", "relu", "swish"]),
+    help="MLP 激活函数",
+)
+@click.option("--intermediate_size", default=2432, show_default=True, type=int, help="MLP 中间层维度")
+@click.option(
+    "--max_position_embeddings",
+    default=32768,
+    show_default=True,
+    type=int,
+    help="模型最大位置编码长度",
+)
+@click.option("--rms_norm_eps", default=1e-6, show_default=True, type=float, help="RMSNorm epsilon")
+@click.option("--rope_theta", default=1e6, show_default=True, type=float, help="RoPE base theta")
+@click.option(
+    "--inference_rope_scaling",
+    default=0,
+    show_default=True,
+    type=click.IntRange(0, 1),
+    help="是否启用 YaRN rope scaling 配置（0=否，1=是）",
+)
 @click.option(
     "--max_seq_len", default=340, show_default=True, type=int, help="训练的最大截断长度（中文1token≈1.5~1.7字符）"
 )
 @click.option(
     "--use_moe", default=0, show_default=True, type=click.IntRange(0, 1), help="是否使用MoE架构（0=否，1=是）"
+)
+@click.option("--num_experts", default=4, show_default=True, type=int, help="MoE expert 数量")
+@click.option(
+    "--num_experts_per_tok",
+    default=1,
+    show_default=True,
+    type=int,
+    help="每个 token 路由到多少个 expert",
+)
+@click.option(
+    "--moe_intermediate_size",
+    default=2432,
+    show_default=True,
+    type=int,
+    help="MoE expert 的中间层维度",
+)
+@click.option(
+    "--norm_topk_prob",
+    default=1,
+    show_default=True,
+    type=click.IntRange(0, 1),
+    help="是否对 top-k 路由概率归一化（0=否，1=是）",
+)
+@click.option(
+    "--router_aux_loss_coef",
+    default=5e-4,
+    show_default=True,
+    type=float,
+    help="MoE router auxiliary loss 系数",
 )
 @click.option(
     "--data_path", default="../dataset/pretrain_t2t_mini", show_default=True, type=str, help="预训练数据路径"

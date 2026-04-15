@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_run_training_passes_configured_mlflow_env(monkeypatch) -> None:
-    config = load_run_config(REPO_ROOT / "examples" / "tiny_cpu.toml")
+    config = load_run_config(REPO_ROOT / "examples" / "tiny_local.toml")
     config.mlflow.experiment_name = "custom-exp"
     config.mlflow.tracking_uri = "http://127.0.0.1:5001"
     config.mlflow.artifact_upload = True
@@ -35,32 +35,26 @@ def test_run_training_passes_configured_mlflow_env(monkeypatch) -> None:
 
     local.run_training(config)
 
-    assert called == [
+    expected_env = config.mlflow.to_env()
+    expected_env.update(config.training.to_env())
+    expected_env.update(
         {
+            "RECIPE_KIND": config.recipe.kind,
+            "RECIPE_PREPARE_DATA": "1" if config.recipe.prepare_data else "0",
             "DATASET_PATH": "/data/datasets/pretrain_t2t_mini",
             "OUTPUT_DIR": "/data/minimind-out",
-            "TIME_CAP_SECONDS": "120",
-            "VALIDATION_SPLIT_RATIO": "0.0",
-            "VALIDATION_INTERVAL_STEPS": "0",
-            "MLFLOW_TRACKING_URI": "http://127.0.0.1:5001",
-            "MLFLOW_EXPERIMENT_NAME": "custom-exp",
-            "MLFLOW_ARTIFACT_UPLOAD": "1",
-            "MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING": "false",
-            "MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL": "9",
-            "MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING": "3",
-            "MLFLOW_HTTP_REQUEST_MAX_RETRIES": "11",
-            "MLFLOW_HTTP_REQUEST_TIMEOUT": "150",
-            "MLFLOW_START_TIMEOUT_SECONDS": "42",
-            "MLFLOW_START_RETRY_SECONDS": "7",
-            "MLFLOW_PEAK_TFLOPS_PER_GPU": "0.0",
-            "MLFLOW_TIME_TO_TARGET_METRIC": "none",
-            "MLFLOW_TIME_TO_TARGET_VALUE": "0.0",
+            "TIME_CAP_SECONDS": str(config.recipe.time_cap_seconds),
+            "MAX_SEQ_LEN": str(config.recipe.max_seq_len),
+            "VALIDATION_SPLIT_RATIO": str(config.recipe.validation_split_ratio),
+            "VALIDATION_INTERVAL_STEPS": str(config.recipe.validation_interval_steps),
         }
-    ]
+    )
+
+    assert called == [expected_env]
 
 
 def test_local_training_rejects_paths_outside_data_mount(monkeypatch) -> None:
-    config = load_run_config(REPO_ROOT / "examples" / "tiny_cpu.toml")
+    config = load_run_config(REPO_ROOT / "examples" / "tiny_local.toml")
     config.recipe.output_dir = "artifacts/out"
 
     monkeypatch.setattr(

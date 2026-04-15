@@ -87,6 +87,60 @@ def test_mlflow_finish_flushes_async_metrics(
     assert run_status == ["FINISHED"]
 
 
+def test_mlflow_start_logs_recipe_and_runtime_config(
+    mlflow_helper,
+    build_mlflow_module,
+    fake_torch_module,
+    fake_train_args,
+    fake_model_config,
+    monkeypatch,
+):
+    logged_params = []
+    logged_dicts = []
+    started = []
+
+    mlflow_module = build_mlflow_module(
+        start_run=lambda **kwargs: started.append(kwargs),
+        log_params=lambda params: logged_params.append(params),
+        log_dict=lambda payload, path: logged_dicts.append((path, payload)),
+    )
+
+    monkeypatch.setitem(sys.modules, "mlflow", mlflow_module)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch_module())
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example")
+    monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "minimind-pretrain")
+    monkeypatch.setenv("RECIPE_KIND", "minimind_pretrain")
+    monkeypatch.setenv("RECIPE_PREPARE_DATA", "0")
+    monkeypatch.setenv("TIME_CAP_SECONDS", "120")
+    monkeypatch.setenv("MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING", "true")
+
+    fake_train_args.data_path = "/data/datasets/pretrain_t2t_mini"
+    fake_train_args.save_dir = "/data/minimind-out"
+    fake_train_args.max_seq_len = 2048
+    fake_train_args.validation_split_ratio = 0.0
+    fake_train_args.validation_interval_steps = 0
+
+    mlflow_helper.start(fake_train_args, fake_model_config)
+    mlflow_helper.finish()
+
+    merged_params = {}
+    for payload in logged_params:
+        merged_params.update(payload)
+
+    logged_paths = {path for path, _ in logged_dicts}
+    assert started[0]["tags"]["recipe.kind"] == "minimind_pretrain"
+    assert merged_params["recipe.kind"] == "minimind_pretrain"
+    assert merged_params["recipe.prepare_data"] == "False"
+    assert merged_params["recipe.max_seq_len"] == "2048"
+    assert merged_params["num_attention_heads"] == "8"
+    assert merged_params["num_key_value_heads"] == "4"
+    assert merged_params["intermediate_size"] == "2432"
+    assert merged_params["mlflow.experiment_name"] == "minimind-pretrain"
+    assert "config/training_args.json" in logged_paths
+    assert "config/recipe_config.json" in logged_paths
+    assert "config/mlflow_config.json" in logged_paths
+
+
 def test_mlflow_finish_tolerates_metric_drain_failures(mlflow_helper, monkeypatch, capsys):
     run_status = []
 

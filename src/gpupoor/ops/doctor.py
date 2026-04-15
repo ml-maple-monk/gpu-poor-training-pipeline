@@ -263,7 +263,7 @@ def _run_local_preflight(reporter: PreflightReporter, repo: Path, *, doctor: Doc
             if skew >= max_skew_seconds:
                 reporter.fail(
                     f"clock skew {skew}s between WSL2 and Windows (must be < {max_skew_seconds}s) "
-                    "— run: ./run.sh fix-clock"
+                    "— run: python3 -m gpupoor.cli fix-clock examples/verda_remote.toml"
                 )
         else:
             reporter.warn("could not read Windows clock for skew check")

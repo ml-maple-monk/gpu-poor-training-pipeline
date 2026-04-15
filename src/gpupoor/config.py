@@ -35,8 +35,91 @@ class RecipeConfig:
     dataset_path: str = "data/datasets/pretrain_t2t_mini"
     output_dir: str = "data/minimind-out"
     time_cap_seconds: int = 600
+    max_seq_len: int = 340
     validation_split_ratio: float = 0.0
     validation_interval_steps: int = 0
+
+
+@dataclass(slots=True)
+class TrainingConfig:
+    epochs: int = 1
+    batch_size: int = 16
+    learning_rate: float = 5e-4
+    accumulation_steps: int = 8
+    num_workers: int = 4
+    grad_clip: float = 1.0
+    hidden_size: int = 768
+    num_hidden_layers: int = 8
+    dropout: float = 0.0
+    vocab_size: int = 6400
+    flash_attn: bool = True
+    num_attention_heads: int = 8
+    num_key_value_heads: int = 4
+    hidden_act: str = "silu"
+    intermediate_size: int = 2432
+    max_position_embeddings: int = 32768
+    rms_norm_eps: float = 1e-6
+    rope_theta: float = 1e6
+    inference_rope_scaling: bool = False
+    dtype: str = "bfloat16"
+    log_interval: int = 10
+    save_interval: int = 100
+    use_compile: bool = False
+    use_moe: bool = False
+    num_experts: int = 4
+    num_experts_per_tok: int = 1
+    moe_intermediate_size: int = 2432
+    norm_topk_prob: bool = True
+    router_aux_loss_coef: float = 5e-4
+    save_weight: str = "pretrain"
+    from_weight: str = "none"
+    from_resume: bool = False
+    use_wandb: bool = False
+    wandb_project: str = "MiniMind-Pretrain"
+    lr_schedule: str = "cosine"
+    lr_warmup_steps: int = 0
+    lr_min_ratio: float = 0.1
+
+    def to_env(self) -> dict[str, str]:
+        return {
+            "TRAIN_EPOCHS": str(self.epochs),
+            "TRAIN_BATCH_SIZE": str(self.batch_size),
+            "TRAIN_LEARNING_RATE": str(self.learning_rate),
+            "TRAIN_ACCUMULATION_STEPS": str(self.accumulation_steps),
+            "TRAIN_NUM_WORKERS": str(self.num_workers),
+            "TRAIN_GRAD_CLIP": str(self.grad_clip),
+            "TRAIN_HIDDEN_SIZE": str(self.hidden_size),
+            "TRAIN_NUM_HIDDEN_LAYERS": str(self.num_hidden_layers),
+            "TRAIN_DROPOUT": str(self.dropout),
+            "TRAIN_VOCAB_SIZE": str(self.vocab_size),
+            "TRAIN_FLASH_ATTN": "1" if self.flash_attn else "0",
+            "TRAIN_NUM_ATTENTION_HEADS": str(self.num_attention_heads),
+            "TRAIN_NUM_KEY_VALUE_HEADS": str(self.num_key_value_heads),
+            "TRAIN_HIDDEN_ACT": self.hidden_act,
+            "TRAIN_INTERMEDIATE_SIZE": str(self.intermediate_size),
+            "TRAIN_MAX_POSITION_EMBEDDINGS": str(self.max_position_embeddings),
+            "TRAIN_RMS_NORM_EPS": str(self.rms_norm_eps),
+            "TRAIN_ROPE_THETA": str(self.rope_theta),
+            "TRAIN_INFERENCE_ROPE_SCALING": "1" if self.inference_rope_scaling else "0",
+            "TRAIN_DTYPE": self.dtype,
+            "TRAIN_LOG_INTERVAL": str(self.log_interval),
+            "TRAIN_SAVE_INTERVAL": str(self.save_interval),
+            "TRAIN_USE_COMPILE": "1" if self.use_compile else "0",
+            "TRAIN_USE_MOE": "1" if self.use_moe else "0",
+            "TRAIN_NUM_EXPERTS": str(self.num_experts),
+            "TRAIN_NUM_EXPERTS_PER_TOK": str(self.num_experts_per_tok),
+            "TRAIN_MOE_INTERMEDIATE_SIZE": str(self.moe_intermediate_size),
+            "TRAIN_NORM_TOPK_PROB": "1" if self.norm_topk_prob else "0",
+            "TRAIN_ROUTER_AUX_LOSS_COEF": str(self.router_aux_loss_coef),
+            "TRAIN_SAVE_WEIGHT": self.save_weight,
+            "TRAIN_FROM_WEIGHT": self.from_weight,
+            "TRAIN_FROM_RESUME": "1" if self.from_resume else "0",
+            "TRAIN_USE_WANDB": "1" if self.use_wandb else "0",
+            "TRAIN_WANDB_PROJECT": self.wandb_project,
+            "TRAIN_LR_SCHEDULE": self.lr_schedule,
+            "TRAIN_LR_WARMUP_STEPS": str(self.lr_warmup_steps),
+            "TRAIN_LR_MIN_RATIO": str(self.lr_min_ratio),
+        }
 
 
 @dataclass(slots=True)
@@ -147,6 +230,7 @@ class RemoteConfig:
 class RunConfig:
     name: str
     recipe: RecipeConfig
+    training: TrainingConfig
     backend: BackendConfig
     mlflow: MlflowConfig
     doctor: DoctorConfig
@@ -299,15 +383,55 @@ def find_dstack_bin() -> str:
     raise RuntimeError("No working dstack CLI found")
 
 
-_KNOWN_TOP_LEVEL = {"name", "recipe", "backend", "mlflow", "doctor", "smoke", "remote"}
+_KNOWN_TOP_LEVEL = {"name", "recipe", "training", "backend", "mlflow", "doctor", "smoke", "remote"}
 _KNOWN_RECIPE = {
     "kind",
     "prepare_data",
     "dataset_path",
     "output_dir",
     "time_cap_seconds",
+    "max_seq_len",
     "validation_split_ratio",
     "validation_interval_steps",
+}
+_KNOWN_TRAINING = {
+    "epochs",
+    "batch_size",
+    "learning_rate",
+    "accumulation_steps",
+    "num_workers",
+    "grad_clip",
+    "hidden_size",
+    "num_hidden_layers",
+    "dropout",
+    "vocab_size",
+    "flash_attn",
+    "num_attention_heads",
+    "num_key_value_heads",
+    "hidden_act",
+    "intermediate_size",
+    "max_position_embeddings",
+    "rms_norm_eps",
+    "rope_theta",
+    "inference_rope_scaling",
+    "dtype",
+    "log_interval",
+    "save_interval",
+    "use_compile",
+    "use_moe",
+    "num_experts",
+    "num_experts_per_tok",
+    "moe_intermediate_size",
+    "norm_topk_prob",
+    "router_aux_loss_coef",
+    "save_weight",
+    "from_weight",
+    "from_resume",
+    "use_wandb",
+    "wandb_project",
+    "lr_schedule",
+    "lr_warmup_steps",
+    "lr_min_ratio",
 }
 _KNOWN_BACKEND = {"kind", "skip_build", "remote_image_tag"}
 _KNOWN_MLFLOW = {
@@ -378,6 +502,8 @@ def load_run_config(path: str | Path) -> RunConfig:
     name = _require_str(data, "name")
     recipe_data = _require_table(data, "recipe")
     _reject_unknown(recipe_data, _KNOWN_RECIPE, "recipe")
+    training_data = _require_table(data, "training")
+    _reject_unknown(training_data, _KNOWN_TRAINING, "training")
     backend_data = _require_table(data, "backend")
     _reject_unknown(backend_data, _KNOWN_BACKEND, "backend")
     # dstack rejects resource names that don't match its regex; local backend
@@ -402,13 +528,120 @@ def load_run_config(path: str | Path) -> RunConfig:
         dataset_path=_require_str(recipe_data, "dataset_path", default="data/datasets/pretrain_t2t_mini"),
         output_dir=_require_str(recipe_data, "output_dir", default="data/minimind-out"),
         time_cap_seconds=_require_int(recipe_data, "time_cap_seconds", default=600),
+        max_seq_len=_require_int(recipe_data, "max_seq_len", default=340),
         validation_split_ratio=_require_float(recipe_data, "validation_split_ratio", default=0.0),
         validation_interval_steps=_require_int(recipe_data, "validation_interval_steps", default=0),
     )
+    if recipe.max_seq_len <= 0:
+        raise ConfigError("max_seq_len must be > 0")
     if not 0.0 <= recipe.validation_split_ratio < 1.0:
         raise ConfigError("validation_split_ratio must be >= 0.0 and < 1.0")
     if recipe.validation_interval_steps < 0:
         raise ConfigError("validation_interval_steps must be >= 0")
+    hidden_size = _require_int(training_data, "hidden_size", default=768)
+    intermediate_size_default = ((hidden_size * 314159 + 6399999) // 6400000) * 64
+    intermediate_size = _optional_int(training_data, "intermediate_size") or intermediate_size_default
+    moe_intermediate_size = _optional_int(training_data, "moe_intermediate_size") or intermediate_size
+
+    training = TrainingConfig(
+        epochs=_require_int(training_data, "epochs", default=1),
+        batch_size=_require_int(training_data, "batch_size", default=16),
+        learning_rate=_require_float(training_data, "learning_rate", default=5e-4),
+        accumulation_steps=_require_int(training_data, "accumulation_steps", default=8),
+        num_workers=_require_int(training_data, "num_workers", default=4),
+        grad_clip=_require_float(training_data, "grad_clip", default=1.0),
+        hidden_size=hidden_size,
+        num_hidden_layers=_require_int(training_data, "num_hidden_layers", default=8),
+        dropout=_require_float(training_data, "dropout", default=0.0),
+        vocab_size=_require_int(training_data, "vocab_size", default=6400),
+        flash_attn=_require_bool(training_data, "flash_attn", default=True),
+        num_attention_heads=_require_int(training_data, "num_attention_heads", default=8),
+        num_key_value_heads=_require_int(training_data, "num_key_value_heads", default=4),
+        hidden_act=_require_str(training_data, "hidden_act", default="silu"),
+        intermediate_size=intermediate_size,
+        max_position_embeddings=_require_int(training_data, "max_position_embeddings", default=32768),
+        rms_norm_eps=_require_float(training_data, "rms_norm_eps", default=1e-6),
+        rope_theta=_require_float(training_data, "rope_theta", default=1e6),
+        inference_rope_scaling=_require_bool(training_data, "inference_rope_scaling", default=False),
+        dtype=_require_str(training_data, "dtype", default="bfloat16"),
+        log_interval=_require_int(training_data, "log_interval", default=10),
+        save_interval=_require_int(training_data, "save_interval", default=100),
+        use_compile=_require_bool(training_data, "use_compile", default=False),
+        use_moe=_require_bool(training_data, "use_moe", default=False),
+        num_experts=_require_int(training_data, "num_experts", default=4),
+        num_experts_per_tok=_require_int(training_data, "num_experts_per_tok", default=1),
+        moe_intermediate_size=moe_intermediate_size,
+        norm_topk_prob=_require_bool(training_data, "norm_topk_prob", default=True),
+        router_aux_loss_coef=_require_float(training_data, "router_aux_loss_coef", default=5e-4),
+        save_weight=_require_str(training_data, "save_weight", default="pretrain"),
+        from_weight=_require_str(training_data, "from_weight", default="none"),
+        from_resume=_require_bool(training_data, "from_resume", default=False),
+        use_wandb=_require_bool(training_data, "use_wandb", default=False),
+        wandb_project=_require_str(training_data, "wandb_project", default="MiniMind-Pretrain"),
+        lr_schedule=_require_str(training_data, "lr_schedule", default="cosine"),
+        lr_warmup_steps=_require_int(training_data, "lr_warmup_steps", default=0),
+        lr_min_ratio=_require_float(training_data, "lr_min_ratio", default=0.1),
+    )
+    if training.epochs <= 0:
+        raise ConfigError("training.epochs must be > 0")
+    if training.batch_size <= 0:
+        raise ConfigError("training.batch_size must be > 0")
+    if training.learning_rate <= 0:
+        raise ConfigError("training.learning_rate must be > 0")
+    if training.accumulation_steps <= 0:
+        raise ConfigError("training.accumulation_steps must be > 0")
+    if training.num_workers < 0:
+        raise ConfigError("training.num_workers must be >= 0")
+    if training.grad_clip <= 0:
+        raise ConfigError("training.grad_clip must be > 0")
+    if training.hidden_size <= 0:
+        raise ConfigError("training.hidden_size must be > 0")
+    if training.num_hidden_layers <= 0:
+        raise ConfigError("training.num_hidden_layers must be > 0")
+    if training.dropout < 0.0 or training.dropout >= 1.0:
+        raise ConfigError("training.dropout must be >= 0.0 and < 1.0")
+    if training.vocab_size <= 0:
+        raise ConfigError("training.vocab_size must be > 0")
+    if training.num_attention_heads <= 0:
+        raise ConfigError("training.num_attention_heads must be > 0")
+    if training.num_key_value_heads <= 0:
+        raise ConfigError("training.num_key_value_heads must be > 0")
+    if training.hidden_size % training.num_attention_heads != 0:
+        raise ConfigError("training.hidden_size must be divisible by training.num_attention_heads")
+    if training.num_attention_heads % training.num_key_value_heads != 0:
+        raise ConfigError("training.num_attention_heads must be divisible by training.num_key_value_heads")
+    if training.hidden_act not in {"silu", "gelu", "relu", "swish"}:
+        raise ConfigError("training.hidden_act must be one of: silu, gelu, relu, swish")
+    if training.intermediate_size <= 0:
+        raise ConfigError("training.intermediate_size must be > 0")
+    if training.max_position_embeddings <= 0:
+        raise ConfigError("training.max_position_embeddings must be > 0")
+    if training.rms_norm_eps <= 0:
+        raise ConfigError("training.rms_norm_eps must be > 0")
+    if training.rope_theta <= 0:
+        raise ConfigError("training.rope_theta must be > 0")
+    if training.dtype not in {"float16", "bfloat16", "float32"}:
+        raise ConfigError("training.dtype must be one of: float16, bfloat16, float32")
+    if training.log_interval <= 0:
+        raise ConfigError("training.log_interval must be > 0")
+    if training.save_interval <= 0:
+        raise ConfigError("training.save_interval must be > 0")
+    if training.num_experts <= 0:
+        raise ConfigError("training.num_experts must be > 0")
+    if training.num_experts_per_tok <= 0:
+        raise ConfigError("training.num_experts_per_tok must be > 0")
+    if training.num_experts_per_tok > training.num_experts:
+        raise ConfigError("training.num_experts_per_tok must be <= training.num_experts")
+    if training.moe_intermediate_size <= 0:
+        raise ConfigError("training.moe_intermediate_size must be > 0")
+    if training.router_aux_loss_coef < 0.0:
+        raise ConfigError("training.router_aux_loss_coef must be >= 0.0")
+    if training.lr_schedule not in {"cosine", "constant"}:
+        raise ConfigError("training.lr_schedule must be one of: cosine, constant")
+    if training.lr_warmup_steps < 0:
+        raise ConfigError("training.lr_warmup_steps must be >= 0")
+    if not 0.0 <= training.lr_min_ratio <= 1.0:
+        raise ConfigError("training.lr_min_ratio must be >= 0.0 and <= 1.0")
     backend = BackendConfig(
         kind=_require_str(backend_data, "kind"),
         skip_build=_require_bool(backend_data, "skip_build", default=False),
@@ -482,6 +715,7 @@ def load_run_config(path: str | Path) -> RunConfig:
     return RunConfig(
         name=name,
         recipe=recipe,
+        training=training,
         backend=backend,
         mlflow=mlflow,
         doctor=doctor,

@@ -46,11 +46,15 @@ def run_training(config: RunConfig) -> None:
     dataset_path = ensure_local_dataset(config)
     output_dir = repo_path(*Path(config.recipe.output_dir).parts)
     env = config.mlflow.to_env()
+    env.update(config.training.to_env())
     env.update(
         {
+            "RECIPE_KIND": config.recipe.kind,
+            "RECIPE_PREPARE_DATA": "1" if config.recipe.prepare_data else "0",
             "DATASET_PATH": _container_data_path(dataset_path),
             "OUTPUT_DIR": _container_data_path(output_dir),
             "TIME_CAP_SECONDS": str(config.recipe.time_cap_seconds),
+            "MAX_SEQ_LEN": str(config.recipe.max_seq_len),
             "VALIDATION_SPLIT_RATIO": str(config.recipe.validation_split_ratio),
             "VALIDATION_INTERVAL_STEPS": str(config.recipe.validation_interval_steps),
         }
