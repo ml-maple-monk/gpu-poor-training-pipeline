@@ -9,7 +9,10 @@ artifacts-pull/
 .cf-tunnel.url
 .cf-tunnel.pid
 .run-ids
-minimind/
+/minimind/
+# Repo-owned MiniMind sources live under training/src/minimind; keep only generated
+# checkpoint artifacts ignored there.
+/training/src/minimind/checkpoints/
 training/.venv/
 .claude/
 **/.omc/state/
