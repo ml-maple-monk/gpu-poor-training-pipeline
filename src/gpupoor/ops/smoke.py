@@ -201,7 +201,7 @@ def _probe_env_leak(compose: list[str], reporter: SmokeReporter) -> None:
     leaks = [
         line.strip()
         for line in completed.stdout.splitlines()
-        if line.startswith("VERDA_CLIENT_ID=") or line.startswith("VERDA_CLIENT_SECRET=")
+        if line.startswith(("VERDA_CLIENT_ID=", "VERDA_CLIENT_SECRET="))
     ]
     if not leaks:
         reporter.pass_probe("D", "no VERDA_CLIENT_* in container env")

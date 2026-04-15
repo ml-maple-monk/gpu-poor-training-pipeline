@@ -4,10 +4,12 @@ repos:
     hooks:
       - id: check-added-large-files
       - id: end-of-file-fixer
+        exclude: ^training/src/minimind/model/tokenizer(?:_config)?\.json$
       - id: trailing-whitespace
       - id: check-merge-conflict
       - id: check-yaml
         args: [--unsafe]
+        exclude: ^tests/fixtures/golden/verda_remote_dry_run\.yaml$
       - id: check-toml
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.14.10

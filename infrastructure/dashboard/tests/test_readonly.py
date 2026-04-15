@@ -27,13 +27,19 @@ class WriteCallVisitor(ast.NodeVisitor):
         # open(..., 'w') or open(..., 'a') or open(..., 'wb') etc.
         if isinstance(node.func, ast.Name) and node.func.id == "open":
             for arg in node.args:
-                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                    if any(m in arg.value for m in ("w", "a", "x")):
-                        self.violations.append((node.lineno, ast.unparse(node)))
+                if (
+                    isinstance(arg, ast.Constant)
+                    and isinstance(arg.value, str)
+                    and any(m in arg.value for m in ("w", "a", "x"))
+                ):
+                    self.violations.append((node.lineno, ast.unparse(node)))
             for kw in node.keywords:
-                if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
-                    if any(m in kw.value.value for m in ("w", "a", "x")):
-                        self.violations.append((node.lineno, ast.unparse(node)))
+                if (
+                    kw.arg == "mode"
+                    and isinstance(kw.value, ast.Constant)
+                    and any(m in kw.value.value for m in ("w", "a", "x"))
+                ):
+                    self.violations.append((node.lineno, ast.unparse(node)))
         self.generic_visit(node)
 
 

@@ -80,6 +80,16 @@ src = [
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "W"]
+extend-select = [
+    "B007",
+    "B905",
+    "PIE810",
+    "RUF046",
+    "RUF059",
+    "SIM102",
+    "SIM115",
+    "SIM117",
+]
 ignore = ["E501"]
 
 # mutmut baseline lives at .mutmut-baseline/main.txt (committed, see .gitignore).

@@ -24,13 +24,27 @@ def test_pyproject_registers_guardrail_extras_and_markers() -> None:
     for marker in ("slow", "docker", "live_dashboard", "remote"):
         assert any(entry.startswith(f"{marker}:") for entry in markers)
 
+    extend_select = set(data["tool"]["ruff"]["lint"]["extend-select"])
+    assert {"B007", "B905", "PIE810", "RUF046", "RUF059", "SIM102", "SIM115", "SIM117"} <= extend_select
+
 
 def test_makefile_exposes_required_guardrail_commands() -> None:
     text = _read("Makefile")
 
-    for target in ("install-dev", "format-check", "lint", "lint-fix", "test-fast", "test-live", "ci-local"):
+    for target in (
+        "install-dev",
+        "format-check",
+        "lint",
+        "lint-fix",
+        "style-check",
+        "test-fast",
+        "test-live",
+        "ci-local",
+    ):
         assert f"{target}:" in text
 
+    assert "pre_commit install --install-hooks" in text
+    assert "pre_commit run --all-files --show-diff-on-failure" in text
     assert "--cov=src/gpupoor" in text
     assert "--cov=training/src/minimind" in text
     assert "--cov=infrastructure/dashboard/src" in text
@@ -42,6 +56,8 @@ def test_precommit_and_workflows_pin_required_guardrails() -> None:
     assert "ruff-pre-commit" in precommit
     assert "training/src/minimind" in precommit
     assert "infrastructure/dashboard/src" in precommit
+    assert "verda_remote_dry_run\\.yaml" in precommit
+    assert "tokenizer(?:_config)?\\.json" in precommit
 
     quality = _read(".github/workflows/quality.yml")
     tests = _read(".github/workflows/tests.yml")
@@ -53,6 +69,7 @@ def test_precommit_and_workflows_pin_required_guardrails() -> None:
     assert "branches:" in tests and "- master" in tests
     assert "workflow_dispatch:" in quality
     assert "workflow_dispatch:" in tests
+    assert "make style-check" in quality
     assert "torch==2.10.0+cpu" in tests
     assert 'cron: "0 14 * * 1"' in live
 
@@ -62,5 +79,7 @@ def test_contributing_documents_required_checks() -> None:
 
     assert "quality" in text
     assert "tests" in text
+    assert "make style-check" in text
+    assert "pre-commit" in text
     assert "make test-fast" in text
     assert "make test-live" in text

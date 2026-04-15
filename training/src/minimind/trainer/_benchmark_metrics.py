@@ -181,7 +181,7 @@ def split_validation_indices(
     if sample_count < 2 or validation_split_ratio <= 0.0:
         return list(range(sample_count)), []
 
-    val_count = min(max(1, int(round(sample_count * validation_split_ratio))), sample_count - 1)
+    val_count = min(max(1, round(sample_count * validation_split_ratio)), sample_count - 1)
     indices = list(range(sample_count))
     rng = random.Random(seed)
     rng.shuffle(indices)

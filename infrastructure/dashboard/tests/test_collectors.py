@@ -161,7 +161,7 @@ def test_collector_uses_timezone_aware_datetime(monkeypatch):
     # Build the collector list but don't start threads — just invoke the 2s
     # training closure directly.
     workers = collector_workers.start_all_collectors(state)
-    for w in workers:
+    for _worker in workers:
         # Stop the daemon threads so they can't race with our assertions.
         state.shutdown_event.set()
     # Let the threads observe the shutdown and exit.

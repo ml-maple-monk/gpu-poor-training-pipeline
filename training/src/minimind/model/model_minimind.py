@@ -69,7 +69,7 @@ class RMSNorm(torch.nn.Module):
         return (self.weight * self.norm(x.float())).type_as(x)
 
 
-def precompute_freqs_cis(dim: int, end: int = int(32 * 1024), rope_base: float = 1e6, rope_scaling: dict = None):
+def precompute_freqs_cis(dim: int, end: int = 32 * 1024, rope_base: float = 1e6, rope_scaling: dict = None):
     freqs, attn_factor = 1.0 / (rope_base ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim)), 1.0
     if rope_scaling is not None:  # YaRN: f'(i) = f(i)((1-γ) + γ/s), where γ∈[0,1] is linear ramp
         orig_max, factor, beta_fast, beta_slow, attn_factor = (
@@ -265,7 +265,7 @@ class MiniMindModel(nn.Module):
         self.register_buffer("freqs_sin", freqs_sin, persistent=False)
 
     def forward(self, input_ids, attention_mask=None, past_key_values=None, use_cache=False, **kwargs):
-        batch_size, seq_length = input_ids.shape
+        _, seq_length = input_ids.shape
         if hasattr(past_key_values, "layers"):
             past_key_values = None
         past_key_values = past_key_values or [None] * len(self.layers)
@@ -276,7 +276,7 @@ class MiniMindModel(nn.Module):
             self.freqs_sin[start_pos : start_pos + seq_length],
         )
         presents = []
-        for layer, past_key_value in zip(self.layers, past_key_values):
+        for layer, past_key_value in zip(self.layers, past_key_values, strict=True):
             hidden_states, present = layer(
                 hidden_states,
                 position_embeddings,
