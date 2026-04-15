@@ -4,7 +4,6 @@ import os
 import signal
 import sys
 import time
-import warnings
 from contextlib import nullcontext
 from types import SimpleNamespace
 
@@ -47,8 +46,6 @@ from trainer.trainer_utils import (
     lm_checkpoint,
     setup_seed,
 )
-
-warnings.filterwarnings("ignore")
 
 VALIDATION_SPLIT_SEED = 42
 
@@ -113,6 +110,42 @@ def _build_metric_state(
     }
     _reset_metric_window(state)
     return state
+
+
+def _validation_ppl_from_loss(val_loss: float) -> float:
+    if math.isnan(val_loss):
+        return float("nan")
+    if math.isinf(val_loss):
+        return float("inf")
+    max_log = math.log(sys.float_info.max)
+    if val_loss > max_log:
+        return float("inf")
+    return math.exp(val_loss)
+
+
+def _resolve_autocast_dtype(dtype_name: str):
+    if dtype_name == "bfloat16":
+        return torch.bfloat16
+    if dtype_name == "float16":
+        return torch.float16
+    if dtype_name == "float32":
+        return None
+    raise ValueError(f"Unsupported dtype: {dtype_name}")
+
+
+def _build_autocast_context(device_type_name: str, dtype_name: str):
+    if device_type_name != "cuda":
+        return nullcontext()
+    autocast_dtype = _resolve_autocast_dtype(dtype_name)
+    if autocast_dtype is None:
+        return nullcontext()
+    return torch.amp.autocast("cuda", dtype=autocast_dtype)
+
+
+def _build_grad_scaler(device_type_name: str, dtype_name: str):
+    scaler_device = "cuda" if device_type_name == "cuda" else "cpu"
+    scaler_enabled = device_type_name == "cuda" and dtype_name == "float16"
+    return torch.amp.GradScaler(scaler_device, enabled=scaler_enabled)
 
 
 def _build_pretrain_datasets(tokenizer):
@@ -301,7 +334,7 @@ def _run_validation(epoch: int, step: int, iters: int, val_loader) -> None:
 
     global_loss_sum = ddp_sum(val_loss_sum_local, collective_device)
     val_loss = global_loss_sum / global_tokens
-    val_ppl = math.exp(min(20.0, val_loss))
+    val_ppl = _validation_ppl_from_loss(val_loss)
     mlflow_step = _current_mlflow_step(epoch, step, iters)
     Logger(f"Validation(update={int(metric_state['optimizer_step'])}): loss={val_loss:.4f}, ppl={val_ppl:.4f}")
 
@@ -353,15 +386,13 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None, val_loader=None)
 
     epoch_start_time = time.time()
     last_step = start_step
+    total_update_steps = args.epochs * math.ceil(iters / max(args.accumulation_steps, 1))
     for step, batch in enumerate(loader, start=start_step + 1):
         input_ids = batch["input_ids"].to(args.device)
         labels = batch["labels"].to(args.device)
         position_ids = batch["position_ids"].to(args.device)
         attention_mask = batch["attention_mask"].to(args.device)
         last_step = step
-        lr = get_lr(epoch * iters + step, args.epochs * iters, args.learning_rate)
-        for param_group in optimizer.param_groups:
-            param_group["lr"] = lr
 
         with autocast_ctx:
             res = model(input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=labels)
@@ -384,6 +415,10 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None, val_loader=None)
 
         update_due = step % args.accumulation_steps == 0 or step == iters
         if update_due:
+            next_update_step = int(metric_state["optimizer_step"]) + 1
+            lr = get_lr(next_update_step, total_update_steps, args.learning_rate)
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = lr
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             scaler.step(optimizer)
@@ -452,8 +487,7 @@ def run_training(runtime_args):
     # ========== 3. 设置混合精度 ==========
     device_type = "cuda" if "cuda" in args.device else "cpu"
     collective_device = torch.device(args.device if device_type == "cuda" else "cpu")
-    dtype = torch.bfloat16 if args.dtype == "bfloat16" else torch.float16
-    autocast_ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast(dtype=dtype)
+    autocast_ctx = _build_autocast_context(device_type, args.dtype)
     energy_meter = NvmlEnergyMeter(torch.cuda.current_device() if device_type == "cuda" else 0)
 
     resolved_peak_profile = None
@@ -511,7 +545,7 @@ def run_training(runtime_args):
             pin_memory=True,
             collate_fn=pretrain_collator,
         )
-    scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == "float16"))
+    scaler = _build_grad_scaler(device_type, args.dtype)
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
 
     # ========== 6. 从ckp恢复状态 ==========
@@ -579,7 +613,13 @@ def run_training(runtime_args):
     type=str,
     help="训练设备",
 )
-@click.option("--dtype", default="bfloat16", show_default=True, type=str, help="混合精度类型")
+@click.option(
+    "--dtype",
+    default="bfloat16",
+    show_default=True,
+    type=click.Choice(["float16", "bfloat16", "float32"]),
+    help="混合精度类型",
+)
 @click.option("--num_workers", default=8, show_default=True, type=int, help="数据加载线程数")
 @click.option("--accumulation_steps", default=8, show_default=True, type=int, help="梯度累积步数")
 @click.option("--grad_clip", default=1.0, show_default=True, type=float, help="梯度裁剪阈值")

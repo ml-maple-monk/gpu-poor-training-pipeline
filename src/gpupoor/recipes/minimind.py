@@ -18,6 +18,8 @@ def ensure_local_dataset(config: RunConfig) -> Path:
     """Prepare or verify the local dataset for MiniMind training."""
     _assert_recipe(config)
     dataset_path = repo_path(*Path(config.recipe.dataset_path).parts)
+    if (dataset_path / "metadata.json").is_file():
+        return dataset_path
     if config.recipe.prepare_data:
         bash_script(repo_path("training", "scripts", "prepare-data.sh"))
     elif not dataset_path.exists():

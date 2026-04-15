@@ -37,6 +37,8 @@ env:
   - OUT_DIR=/workspace/out
   - HF_DATASET_REPO=jingyaogong/minimind_dataset
   - HF_DATASET_FILENAME=pretrain_t2t_mini.jsonl
+  - HF_PRETOKENIZED_DATASET_REPO=jingyaogong/minimind_dataset
+  - HF_PRETOKENIZED_DATASET_FILENAME=pretokenized/pretrain_t2t_mini.tar.gz
   - VALIDATION_SPLIT_RATIO=0.0
   - VALIDATION_INTERVAL_STEPS=0
 

@@ -169,7 +169,14 @@ class PretrainDataCollator:
                     f"[pretrain-collator] truncating sample from length {sample_length} to {self.max_seq_len}",
                     flush=True,
                 )
-                input_ids = input_ids[: self.max_seq_len]
+                # Force a terminal EOS token so packed rows do not merge a truncated
+                # sample with the next document boundary.
+                input_ids = torch.cat(
+                    [
+                        input_ids[: self.max_seq_len - 1],
+                        input_ids.new_tensor([self.eos_token_id]),
+                    ]
+                )
                 sample_length = self.max_seq_len
             if current_row and current_length + sample_length > self.max_seq_len:
                 packed_rows.append(self._finalize_row(current_row))

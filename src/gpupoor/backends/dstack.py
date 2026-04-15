@@ -378,6 +378,14 @@ def launch_remote(
     use_skip_build = config.backend.skip_build if skip_build is None else skip_build
     cached_image_tag = None
 
+    if dry_run:
+        print("[DRY-RUN] Would prepare and upload the pretokenized dataset artifact")
+    else:
+        bash_script(
+            repo_path("training", "scripts", "prepare-data.sh"),
+            env={**settings, **os.environ, "UPLOAD_PRETOKENIZED_DATASET": "1"},
+        )
+
     if not use_skip_build:
         head_image_tag = git_short_sha()
         if not dry_run and not git_has_tracked_changes():
@@ -437,6 +445,14 @@ def launch_remote(
                 "OUT_DIR": settings.get("OUT_DIR", "/workspace/out"),
                 "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", "jingyaogong/minimind_dataset"),
                 "HF_DATASET_FILENAME": settings.get("HF_DATASET_FILENAME", Path(config.recipe.dataset_path).name),
+                "HF_PRETOKENIZED_DATASET_REPO": settings.get(
+                    "HF_PRETOKENIZED_DATASET_REPO",
+                    settings.get("HF_DATASET_REPO", "jingyaogong/minimind_dataset"),
+                ),
+                "HF_PRETOKENIZED_DATASET_FILENAME": settings.get(
+                    "HF_PRETOKENIZED_DATASET_FILENAME",
+                    "pretokenized/pretrain_t2t_mini.tar.gz",
+                ),
                 "TIME_CAP_SECONDS": str(config.recipe.time_cap_seconds),
                 "VALIDATION_SPLIT_RATIO": str(config.recipe.validation_split_ratio),
                 "VALIDATION_INTERVAL_STEPS": str(config.recipe.validation_interval_steps),
