@@ -6,6 +6,8 @@ prepare_data = false
 dataset_path = "data/datasets/pretrain_t2t_mini.jsonl"
 output_dir = "data/minimind-out"
 time_cap_seconds = 600
+validation_split_ratio = 0.01
+validation_interval_steps = 100
 
 [backend]
 kind = "dstack"

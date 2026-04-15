@@ -51,6 +51,8 @@ def run_training(config: RunConfig) -> None:
             "DATASET_PATH": _container_data_path(dataset_path),
             "OUTPUT_DIR": _container_data_path(output_dir),
             "TIME_CAP_SECONDS": str(config.recipe.time_cap_seconds),
+            "VALIDATION_SPLIT_RATIO": str(config.recipe.validation_split_ratio),
+            "VALIDATION_INTERVAL_STEPS": str(config.recipe.validation_interval_steps),
         }
     )
     run_command(local_training_command(), env=env)

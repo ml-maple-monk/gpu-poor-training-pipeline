@@ -11,6 +11,8 @@ services:
       DATASET_PATH: "${DATASET_PATH:-/data/datasets/pretrain_t2t_mini.jsonl}"
       OUTPUT_DIR: "${OUTPUT_DIR:-/data/minimind-out}"
       TIME_CAP_SECONDS: "${TIME_CAP_SECONDS:-600}"
+      VALIDATION_SPLIT_RATIO: "${VALIDATION_SPLIT_RATIO:-0.0}"
+      VALIDATION_INTERVAL_STEPS: "${VALIDATION_INTERVAL_STEPS:-0}"
       HF_HOME: /data/hf_cache
       TOKENIZERS_PARALLELISM: "false"
       PYTHONUNBUFFERED: "1"

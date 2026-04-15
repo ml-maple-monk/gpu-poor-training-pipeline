@@ -40,6 +40,8 @@ def test_run_training_passes_configured_mlflow_env(monkeypatch) -> None:
             "DATASET_PATH": "/data/datasets/pretrain_t2t_mini.jsonl",
             "OUTPUT_DIR": "/data/minimind-out",
             "TIME_CAP_SECONDS": "120",
+            "VALIDATION_SPLIT_RATIO": "0.0",
+            "VALIDATION_INTERVAL_STEPS": "0",
             "MLFLOW_TRACKING_URI": "http://127.0.0.1:5001",
             "MLFLOW_EXPERIMENT_NAME": "custom-exp",
             "MLFLOW_ARTIFACT_UPLOAD": "1",
@@ -50,6 +52,9 @@ def test_run_training_passes_configured_mlflow_env(monkeypatch) -> None:
             "MLFLOW_HTTP_REQUEST_TIMEOUT": "150",
             "MLFLOW_START_TIMEOUT_SECONDS": "42",
             "MLFLOW_START_RETRY_SECONDS": "7",
+            "MLFLOW_PEAK_TFLOPS_PER_GPU": "0.0",
+            "MLFLOW_TIME_TO_TARGET_METRIC": "none",
+            "MLFLOW_TIME_TO_TARGET_VALUE": "0.0",
         }
     ]
 

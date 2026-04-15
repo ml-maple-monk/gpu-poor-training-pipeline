@@ -377,6 +377,8 @@ def launch_remote(
                 "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", "jingyaogong/minimind_dataset"),
                 "HF_DATASET_FILENAME": settings.get("HF_DATASET_FILENAME", Path(config.recipe.dataset_path).name),
                 "TIME_CAP_SECONDS": str(config.recipe.time_cap_seconds),
+                "VALIDATION_SPLIT_RATIO": str(config.recipe.validation_split_ratio),
+                "VALIDATION_INTERVAL_STEPS": str(config.recipe.validation_interval_steps),
             }
         )
         # `dstack apply` can hang indefinitely on registry auth or

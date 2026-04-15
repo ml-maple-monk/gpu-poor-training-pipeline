@@ -182,9 +182,9 @@ Every run is one TOML file. Unknown keys are rejected at load time.
 | Section      | Dataclass         | Key fields                                                                                                        |
 | ------------ | ----------------- | ----------------------------------------------------------------------------------------------------------------- |
 | top-level    | `RunConfig.name`  | `name: str` — required; dstack runs must match `^[a-z][a-z0-9-]{1,40}$`                                           |
-| `[recipe]`   | `RecipeConfig`    | `kind`, `prepare_data: bool`, `dataset_path`, `output_dir`, `time_cap_seconds`                                    |
+| `[recipe]`   | `RecipeConfig`    | `kind`, `prepare_data: bool`, `dataset_path`, `output_dir`, `time_cap_seconds`, `validation_split_ratio`, `validation_interval_steps` |
 | `[backend]`  | `BackendConfig`   | `kind: "local" \| "dstack"`, `skip_build: bool`, `remote_image_tag`                                               |
-| `[mlflow]`   | `MlflowConfig`    | `experiment_name`, `tracking_uri`, `artifact_upload`, `enable_system_metrics_logging`, `http_request_timeout_seconds` |
+| `[mlflow]`   | `MlflowConfig`    | `experiment_name`, `tracking_uri`, `artifact_upload`, `enable_system_metrics_logging`, `http_request_timeout_seconds`, `peak_tflops_per_gpu` (optional override), `time_to_target_metric`, `time_to_target_value` |
 | `[doctor]`   | `DoctorConfig`    | `skip_preflight`, `max_clock_skew_seconds`                                                                        |
 | `[smoke]`    | `SmokeConfig`     | `cpu`, `health_port`, `strict_port`, `degraded_port`, `sigterm_timeout_seconds`, `prune_volumes`                   |
 | `[remote]`   | `RemoteConfig`    | `env_file`, `vcr_image_base`, `dstack_server_health_url`, `mlflow_health_url`, `run_start_timeout_seconds`, `gpu_names`, `gpu_count`, `spot_policy`, `max_price` |
@@ -201,6 +201,8 @@ Full schema + validators live in [`src/gpupoor/config.py`](./src/gpupoor/config.
 | `examples/verda_a100x2_10m.toml`         | `dstack` | 2× A100, 10-minute cap         |
 | `examples/verda_b300_10m.toml`           | `dstack` | Single B300, 10-minute cap     |
 | `examples/verda_b300x2_10m.toml`         | `dstack` | 2× B300, 10-minute cap         |
+
+`examples/verda_a100_10m.toml` and `examples/verda_a100x2_10m.toml` now opt into a 1% held-out validation split and 100-update validation cadence. Peak TFLOPs are auto-detected at runtime for supported Verda GPUs, while `[mlflow].peak_tflops_per_gpu` remains available as a manual override.
 
 ---
 
