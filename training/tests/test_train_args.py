@@ -1,31 +1,40 @@
-"""test_train_args.py — validates the shared train_pretrain arg contract."""
+"""Validate the shared train_pretrain argument contract."""
 
 from __future__ import annotations
 
+import shlex
 import subprocess
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-ARGS_HELPER = REPO_ROOT / "training" / "scripts" / "lib" / "train-pretrain-args.sh"
+import pytest
 
 
-def _render_args(data_path: str, save_dir: str) -> list[str]:
-    script = f'''
-source "{ARGS_HELPER}"
-minimind_train_pretrain_args "{data_path}" "{save_dir}"
+@pytest.fixture
+def render_train_args(repo_path):
+    args_helper = repo_path("training", "scripts", "lib", "train-pretrain-args.sh")
+
+    def _render_train_args(data_path: str, save_dir: str) -> list[str]:
+        script = f"""
+source {shlex.quote(str(args_helper))}
+minimind_train_pretrain_args {shlex.quote(data_path)} {shlex.quote(save_dir)}
 printf '%s\n' "${{MINIMIND_TRAIN_PRETRAIN_ARGS[@]}}"
-'''
-    result = subprocess.run(
-        ["bash", "-lc", script],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return result.stdout.splitlines()
+"""
+        result = subprocess.run(
+            ["bash", "-lc", script],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return result.stdout.splitlines()
+
+    return _render_train_args
 
 
-def test_shared_train_args_match_expected_contract():
-    args = _render_args("/tmp/dataset.jsonl", "/tmp/out")
+def test_shared_train_args_match_expected_contract(tmp_path, render_train_args):
+    data_path = tmp_path / "dataset.jsonl"
+    save_dir = tmp_path / "out"
+
+    args = render_train_args(str(data_path), str(save_dir))
+
     assert args == [
         "--epochs",
         "1",
@@ -60,7 +69,7 @@ def test_shared_train_args_match_expected_contract():
         "--time_to_target_value",
         "0.0",
         "--data_path",
-        "/tmp/dataset.jsonl",
+        str(data_path),
         "--save_dir",
-        "/tmp/out",
+        str(save_dir),
     ]
