@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -13,8 +14,12 @@ TESTS_ROOT = Path(__file__).parent
 TRAINING_ROOT = TESTS_ROOT.parent
 MINIMIND_ROOT = TRAINING_ROOT / "src" / "minimind"
 MINIMIND_AVAILABLE = MINIMIND_ROOT.is_dir()
+PRETOKENIZED_DATASET_DEPS_AVAILABLE = all(
+    importlib.util.find_spec(module_name) is not None for module_name in ("datasets", "numpy", "torch")
+)
+PRETOKENIZED_DATASET_IMPORTS_AVAILABLE = MINIMIND_AVAILABLE and PRETOKENIZED_DATASET_DEPS_AVAILABLE
 
-if MINIMIND_AVAILABLE:
+if PRETOKENIZED_DATASET_IMPORTS_AVAILABLE:
     sys.path.insert(0, str(MINIMIND_ROOT.parent))
     from minimind.dataset.lm_dataset import PretrainDataset, build_pretokenized_corpus, load_pretokenized_metadata
 
@@ -34,7 +39,10 @@ class _FakeTokenizer:
         return SimpleNamespace(input_ids=token_ids)
 
 
-@pytest.mark.skipif(not MINIMIND_AVAILABLE, reason="training/src/minimind/ not available")
+@pytest.mark.skipif(
+    not PRETOKENIZED_DATASET_IMPORTS_AVAILABLE,
+    reason="training/src/minimind/ or its dataset import deps are not available",
+)
 def test_build_pretokenized_corpus_and_read_it_back(tmp_path: Path) -> None:
     source = tmp_path / "pretrain.jsonl"
     source.write_text('{"text":"abc"}\n{"text":"defghi"}\n', encoding="utf-8")
@@ -63,7 +71,10 @@ def test_build_pretokenized_corpus_and_read_it_back(tmp_path: Path) -> None:
     assert subset_input_ids.tolist() == [101, 4, 5, 6, 7, 102]
 
 
-@pytest.mark.skipif(not MINIMIND_AVAILABLE, reason="training/src/minimind/ not available")
+@pytest.mark.skipif(
+    not PRETOKENIZED_DATASET_IMPORTS_AVAILABLE,
+    reason="training/src/minimind/ or its dataset import deps are not available",
+)
 def test_pretokenized_dataset_reads_raw_samples_across_runtime_max_lengths(tmp_path: Path) -> None:
     source = tmp_path / "pretrain.jsonl"
     source.write_text(json.dumps({"text": "hello"}) + "\n", encoding="utf-8")
