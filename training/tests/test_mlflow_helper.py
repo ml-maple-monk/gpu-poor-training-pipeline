@@ -111,6 +111,8 @@ def test_mlflow_start_logs_recipe_and_runtime_config(
     monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "minimind-pretrain")
     monkeypatch.setenv("RECIPE_KIND", "minimind_pretrain")
     monkeypatch.setenv("RECIPE_PREPARE_DATA", "0")
+    monkeypatch.setenv("RECIPE_DATASET_PATH_RAW", "data/datasets/pretrain_t2t_mini")
+    monkeypatch.setenv("RECIPE_OUTPUT_DIR_RAW", "data/minimind-out")
     monkeypatch.setenv("TIME_CAP_SECONDS", "120")
     monkeypatch.setenv("MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING", "true")
 
@@ -131,6 +133,10 @@ def test_mlflow_start_logs_recipe_and_runtime_config(
     assert started[0]["tags"]["recipe.kind"] == "minimind_pretrain"
     assert merged_params["recipe.kind"] == "minimind_pretrain"
     assert merged_params["recipe.prepare_data"] == "False"
+    assert merged_params["recipe.dataset_path"] == "data/datasets/pretrain_t2t_mini"
+    assert merged_params["recipe.output_dir"] == "data/minimind-out"
+    assert merged_params["recipe.runtime_dataset_path"] == "/data/datasets/pretrain_t2t_mini"
+    assert merged_params["recipe.runtime_output_dir"] == "/data/minimind-out"
     assert merged_params["recipe.max_seq_len"] == "2048"
     assert merged_params["num_attention_heads"] == "8"
     assert merged_params["num_key_value_heads"] == "4"

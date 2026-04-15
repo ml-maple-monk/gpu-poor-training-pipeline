@@ -1,7 +1,6 @@
 """Tests for the local training backend."""
 
 from __future__ import annotations
-
 from pathlib import Path
 
 import pytest
@@ -25,32 +24,21 @@ def test_run_training_passes_configured_mlflow_env(monkeypatch) -> None:
     config.mlflow.start_timeout_seconds = 42
     config.mlflow.start_retry_seconds = 7
 
-    called: list[dict[str, str]] = []
+    called: list[tuple[list[str], dict[str, str] | None]] = []
     monkeypatch.setattr(
         local,
         "ensure_local_dataset",
         lambda config: REPO_ROOT / "data" / "datasets" / "pretrain_t2t_mini",
     )
-    monkeypatch.setattr(local, "run_command", lambda command, env=None: called.append(env or {}))
+    monkeypatch.setattr(local, "run_command", lambda command, env=None: called.append((list(command), env)))
 
     local.run_training(config)
 
-    expected_env = config.mlflow.to_env()
-    expected_env.update(config.training.to_env())
-    expected_env.update(
-        {
-            "RECIPE_KIND": config.recipe.kind,
-            "RECIPE_PREPARE_DATA": "1" if config.recipe.prepare_data else "0",
-            "DATASET_PATH": "/data/datasets/pretrain_t2t_mini",
-            "OUTPUT_DIR": "/data/minimind-out",
-            "TIME_CAP_SECONDS": str(config.recipe.time_cap_seconds),
-            "MAX_SEQ_LEN": str(config.recipe.max_seq_len),
-            "VALIDATION_SPLIT_RATIO": str(config.recipe.validation_split_ratio),
-            "VALIDATION_INTERVAL_STEPS": str(config.recipe.validation_interval_steps),
-        }
+    expected_command = local.local_training_command(
+        config.source,
+        env={"GPUPOOR_RUN_CONFIG": "/workspace/gpupoor-run-config.toml"},
     )
-
-    assert called == [expected_env]
+    assert called == [(expected_command, None)]
 
 
 def test_local_training_rejects_paths_outside_data_mount(monkeypatch) -> None:
@@ -65,3 +53,51 @@ def test_local_training_rejects_paths_outside_data_mount(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="Local training paths must live under"):
         local.run_training(config)
+
+
+def test_run_training_can_log_effective_env_when_debug_enabled(monkeypatch) -> None:
+    config = load_run_config(REPO_ROOT / "examples" / "tiny_local.toml")
+    messages: list[str] = []
+
+    monkeypatch.setenv("GPUPOOR_DEBUG_LOCAL_ENV", "1")
+    monkeypatch.setattr(
+        local,
+        "ensure_local_dataset",
+        lambda config: REPO_ROOT / "data" / "datasets" / "pretrain_t2t_mini",
+    )
+    monkeypatch.setattr(local, "run_command", lambda command, env=None: None)
+    monkeypatch.setattr(local.log, "info", lambda message, *args: messages.append(message % args))
+
+    local.run_training(config)
+
+    assert any(
+        message == "local-train env GPUPOOR_RUN_CONFIG=/workspace/gpupoor-run-config.toml"
+        for message in messages
+    )
+
+
+def test_run_training_logs_saved_config_summary(monkeypatch) -> None:
+    config = load_run_config(REPO_ROOT / "examples" / "tiny_local.toml")
+    messages: list[str] = []
+
+    monkeypatch.setattr(
+        local,
+        "ensure_local_dataset",
+        lambda config: REPO_ROOT / "data" / "datasets" / "pretrain_t2t_mini",
+    )
+    monkeypatch.setattr(local, "run_command", lambda command, env=None: None)
+    monkeypatch.setattr(local.log, "info", lambda message, *args: messages.append(message % args))
+
+    local.run_training(config)
+
+    expected_message = (
+        f"local-train config source={config.source} "
+        f"max_seq_len={config.recipe.max_seq_len} "
+        f"batch_size={config.training.batch_size} "
+        f"hidden_size={config.training.hidden_size} "
+        f"num_hidden_layers={config.training.num_hidden_layers}"
+    )
+    assert any(
+        message == expected_message
+        for message in messages
+    )

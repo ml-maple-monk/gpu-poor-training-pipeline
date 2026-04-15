@@ -36,8 +36,10 @@ def _recipe_config_from_runtime(args) -> dict[str, object]:
     return {
         "kind": os.environ.get("RECIPE_KIND", "minimind_pretrain"),
         "prepare_data": _env_flag("RECIPE_PREPARE_DATA", default=False),
-        "dataset_path": getattr(args, "data_path", None),
-        "output_dir": getattr(args, "save_dir", None),
+        "dataset_path": os.environ.get("RECIPE_DATASET_PATH_RAW", getattr(args, "data_path", None)),
+        "output_dir": os.environ.get("RECIPE_OUTPUT_DIR_RAW", getattr(args, "save_dir", None)),
+        "runtime_dataset_path": getattr(args, "data_path", None),
+        "runtime_output_dir": getattr(args, "save_dir", None),
         "time_cap_seconds": os.environ.get("TIME_CAP_SECONDS"),
         "max_seq_len": getattr(args, "max_seq_len", None),
         "validation_split_ratio": getattr(args, "validation_split_ratio", None),
