@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
-from gpupoor import cli
 from gpupoor import __version__ as gpupoor_version
+from gpupoor import cli
 from gpupoor.config import load_run_config
 from gpupoor.subprocess_utils import CommandError
 
