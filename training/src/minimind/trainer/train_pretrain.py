@@ -18,7 +18,7 @@ from torch import optim
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 
-from dataset.lm_dataset import PretrainDataset, pretokenized_sample_count
+from dataset.lm_dataset import PretrainDataCollator, PretrainDataset, pretokenized_sample_count
 from model.model_minimind import MiniMindConfig
 from trainer._benchmark_metrics import (
     NvmlEnergyMeter,
@@ -32,6 +32,11 @@ from trainer._benchmark_metrics import (
     split_validation_indices,
     world_size,
 )
+from trainer._mlflow_helper import finish as _mlflow_finish
+from trainer._mlflow_helper import log_checkpoint as _mlflow_log_ckpt
+from trainer._mlflow_helper import log_metrics as _mlflow_log_metrics
+from trainer._mlflow_helper import log_step as _mlflow_log_step
+from trainer._mlflow_helper import start as _mlflow_start
 from trainer.trainer_utils import (
     Logger,
     SkipBatchSampler,
@@ -42,12 +47,6 @@ from trainer.trainer_utils import (
     lm_checkpoint,
     setup_seed,
 )
-from trainer._mlflow_helper import finish as _mlflow_finish
-from trainer._mlflow_helper import log_checkpoint as _mlflow_log_ckpt
-from trainer._mlflow_helper import log_metrics as _mlflow_log_metrics
-from trainer._mlflow_helper import log_step as _mlflow_log_step
-from trainer._mlflow_helper import start as _mlflow_start
-
 
 warnings.filterwarnings("ignore")
 
@@ -169,7 +168,7 @@ def _save_checkpoint(epoch: int, step: int, wandb=None) -> None:
         step=step,
         wandb=wandb,
         optimizer_step=int(metric_state["optimizer_step"]),
-        save_dir="../checkpoints",
+        save_dir=args.save_dir,
     )
     _mlflow_log_ckpt(ckp, step)
     model.train()
@@ -282,16 +281,18 @@ def _run_validation(epoch: int, step: int, iters: int, val_loader) -> None:
     val_tokens_local = 0
 
     with torch.no_grad():
-        for input_ids, labels in val_loader:
-            input_ids = input_ids.to(args.device)
-            labels = labels.to(args.device)
+        for batch in val_loader:
+            input_ids = batch["input_ids"].to(args.device)
+            labels = batch["labels"].to(args.device)
+            position_ids = batch["position_ids"].to(args.device)
+            attention_mask = batch["attention_mask"].to(args.device)
             with autocast_ctx:
-                res = model(input_ids, labels=labels)
+                res = model(input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=labels)
             valid_tokens = count_valid_tokens(labels)
             if valid_tokens > 0:
                 val_loss_sum_local += float(res.loss.detach().float().item()) * valid_tokens
                 val_tokens_local += valid_tokens
-            del input_ids, labels, res
+            del input_ids, labels, position_ids, attention_mask, res
 
     global_tokens = ddp_sum(val_tokens_local, collective_device)
     if global_tokens <= 0:
@@ -352,16 +353,18 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None, val_loader=None)
 
     epoch_start_time = time.time()
     last_step = start_step
-    for step, (input_ids, labels) in enumerate(loader, start=start_step + 1):
-        input_ids = input_ids.to(args.device)
-        labels = labels.to(args.device)
+    for step, batch in enumerate(loader, start=start_step + 1):
+        input_ids = batch["input_ids"].to(args.device)
+        labels = batch["labels"].to(args.device)
+        position_ids = batch["position_ids"].to(args.device)
+        attention_mask = batch["attention_mask"].to(args.device)
         last_step = step
         lr = get_lr(epoch * iters + step, args.epochs * iters, args.learning_rate)
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
         with autocast_ctx:
-            res = model(input_ids, labels=labels)
+            res = model(input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=labels)
             aux_loss = res.aux_loss if res.aux_loss is not None else res.loss.new_zeros(())
             loss = (res.loss + aux_loss) / args.accumulation_steps
 
@@ -398,21 +401,35 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None, val_loader=None)
         if update_due:
             _maybe_run_validation(epoch, step, iters, val_loader, force=(step == iters))
 
-        del input_ids, labels, res, loss
+        del input_ids, labels, position_ids, attention_mask, res, loss
 
     return last_step
 
 
 def _coerce_args(options):
     runtime_args = SimpleNamespace(**options)
-    runtime_args.peak_tflops_per_gpu = runtime_args.peak_tflops_per_gpu if runtime_args.peak_tflops_per_gpu > 0 else None
-    runtime_args.time_to_target_value = runtime_args.time_to_target_value if runtime_args.time_to_target_value > 0 else None
+    runtime_args.peak_tflops_per_gpu = (
+        runtime_args.peak_tflops_per_gpu if runtime_args.peak_tflops_per_gpu > 0 else None
+    )
+    runtime_args.time_to_target_value = (
+        runtime_args.time_to_target_value if runtime_args.time_to_target_value > 0 else None
+    )
     runtime_args.peak_fp8_tflops_per_gpu = None
     return runtime_args
 
 
 def run_training(runtime_args):
-    global args, autocast_ctx, collective_device, device_type, energy_meter, lm_config, metric_state, model, optimizer, scaler
+    global \
+        args, \
+        autocast_ctx, \
+        collective_device, \
+        device_type, \
+        energy_meter, \
+        lm_config, \
+        metric_state, \
+        model, \
+        optimizer, \
+        scaler
 
     args = runtime_args
     signal.signal(signal.SIGTERM, _sigterm_handler)
@@ -429,7 +446,7 @@ def run_training(runtime_args):
         hidden_size=args.hidden_size, num_hidden_layers=args.num_hidden_layers, use_moe=bool(args.use_moe)
     )
     ckp_data = (
-        lm_checkpoint(lm_config, weight=args.save_weight, save_dir="../checkpoints") if args.from_resume == 1 else None
+        lm_checkpoint(lm_config, weight=args.save_weight, save_dir=args.save_dir) if args.from_resume == 1 else None
     )
 
     # ========== 3. 设置混合精度 ==========
@@ -479,10 +496,21 @@ def run_training(runtime_args):
     # ========== 5. 定义模型、数据、优化器 ==========
     model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
     train_ds, val_ds = _build_pretrain_datasets(tokenizer)
+    pretrain_collator = PretrainDataCollator(
+        eos_token_id=int(tokenizer.eos_token_id),
+        pad_token_id=int(tokenizer.pad_token_id),
+        max_seq_len=args.max_seq_len,
+    )
     train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None
     val_loader = None
     if val_ds is not None:
-        val_loader = DataLoader(val_ds, batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=True)
+        val_loader = DataLoader(
+            val_ds,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            collate_fn=pretrain_collator,
+        )
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == "float16"))
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
 
@@ -518,7 +546,13 @@ def run_training(runtime_args):
         indices = torch.randperm(len(train_ds)).tolist()
         skip = start_step if (epoch == start_epoch and start_step > 0) else 0
         batch_sampler = SkipBatchSampler(train_sampler or indices, args.batch_size, skip)
-        loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)
+        loader = DataLoader(
+            train_ds,
+            batch_sampler=batch_sampler,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            collate_fn=pretrain_collator,
+        )
         if skip > 0:
             Logger(f"Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始")
             train_epoch(epoch, loader, len(loader) + skip, start_step, wandb, val_loader=val_loader)
@@ -553,14 +587,28 @@ def run_training(runtime_args):
 @click.option("--save_interval", default=1000, show_default=True, type=int, help="模型保存间隔")
 @click.option("--hidden_size", default=768, show_default=True, type=int, help="隐藏层维度")
 @click.option("--num_hidden_layers", default=8, show_default=True, type=int, help="隐藏层数量")
-@click.option("--max_seq_len", default=340, show_default=True, type=int, help="训练的最大截断长度（中文1token≈1.5~1.7字符）")
-@click.option("--use_moe", default=0, show_default=True, type=click.IntRange(0, 1), help="是否使用MoE架构（0=否，1=是）")
-@click.option("--data_path", default="../dataset/pretrain_t2t_mini", show_default=True, type=str, help="预训练数据路径")
+@click.option(
+    "--max_seq_len", default=340, show_default=True, type=int, help="训练的最大截断长度（中文1token≈1.5~1.7字符）"
+)
+@click.option(
+    "--use_moe", default=0, show_default=True, type=click.IntRange(0, 1), help="是否使用MoE架构（0=否，1=是）"
+)
+@click.option(
+    "--data_path", default="../dataset/pretrain_t2t_mini", show_default=True, type=str, help="预训练数据路径"
+)
 @click.option("--from_weight", default="none", show_default=True, type=str, help="基于哪个权重训练，为none则从头开始")
-@click.option("--from_resume", default=0, show_default=True, type=click.IntRange(0, 1), help="是否自动检测&续训（0=否，1=是）")
+@click.option(
+    "--from_resume", default=0, show_default=True, type=click.IntRange(0, 1), help="是否自动检测&续训（0=否，1=是）"
+)
 @click.option("--use_wandb", is_flag=True, help="是否使用wandb")
 @click.option("--wandb_project", default="MiniMind-Pretrain", show_default=True, type=str, help="wandb项目名")
-@click.option("--use_compile", default=0, show_default=True, type=click.IntRange(0, 1), help="是否使用torch.compile加速（0=否，1=是）")
+@click.option(
+    "--use_compile",
+    default=0,
+    show_default=True,
+    type=click.IntRange(0, 1),
+    help="是否使用torch.compile加速（0=否，1=是）",
+)
 @click.option("--validation_split_ratio", default=0.0, show_default=True, type=float, help="验证集切分比例")
 @click.option("--validation_interval_steps", default=0, show_default=True, type=int, help="验证间隔（优化器步数）")
 @click.option("--peak_tflops_per_gpu", default=0.0, show_default=True, type=float, help="每卡峰值TFLOPs，用于MFU")

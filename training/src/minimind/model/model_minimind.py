@@ -96,12 +96,21 @@ def precompute_freqs_cis(dim: int, end: int = 32 * 1024, rope_base: float = 1e6,
     return freqs_cos, freqs_sin
 
 
-def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
+def apply_rotary_pos_emb(q, k, cos, sin):
     def rotate_half(x):
         return torch.cat((-x[..., x.shape[-1] // 2 :], x[..., : x.shape[-1] // 2]), dim=-1)
 
-    q_embed = ((q * cos.unsqueeze(unsqueeze_dim)) + (rotate_half(q) * sin.unsqueeze(unsqueeze_dim))).to(q.dtype)
-    k_embed = ((k * cos.unsqueeze(unsqueeze_dim)) + (rotate_half(k) * sin.unsqueeze(unsqueeze_dim))).to(k.dtype)
+    if cos.dim() == 2:
+        cos = cos.unsqueeze(0).unsqueeze(2)
+        sin = sin.unsqueeze(0).unsqueeze(2)
+    elif cos.dim() == 3:
+        cos = cos.unsqueeze(2)
+        sin = sin.unsqueeze(2)
+    else:
+        raise ValueError(f"Unexpected rotary embedding shape: {tuple(cos.shape)}")
+
+    q_embed = ((q * cos) + (rotate_half(q) * sin)).to(q.dtype)
+    k_embed = ((k * cos) + (rotate_half(k) * sin)).to(k.dtype)
     return q_embed, k_embed
 
 
@@ -156,14 +165,22 @@ class Attention(nn.Module):
             repeat_kv(xk, self.n_rep).transpose(1, 2),
             repeat_kv(xv, self.n_rep).transpose(1, 2),
         )
-        if (
-            self.flash
-            and (seq_len > 1)
-            and (not self.is_causal or past_key_value is None)
-            and (attention_mask is None or torch.all(attention_mask == 1))
-        ):
+        sdpa_mask = None
+        if attention_mask is not None:
+            if attention_mask.dim() != 3:
+                raise ValueError(
+                    f"Attention expects a packed attention_mask with shape (B, T, T), got {tuple(attention_mask.shape)}"
+                )
+            sdpa_mask = attention_mask.unsqueeze(1).to(torch.bool)
+
+        if self.flash and (seq_len > 1) and (not self.is_causal or past_key_value is None):
             output = F.scaled_dot_product_attention(
-                xq, xk, xv, dropout_p=self.dropout if self.training else 0.0, is_causal=self.is_causal
+                xq,
+                xk,
+                xv,
+                attn_mask=sdpa_mask,
+                dropout_p=self.dropout if self.training else 0.0,
+                is_causal=self.is_causal,
             )
         else:
             scores = (xq @ xk.transpose(-2, -1)) / math.sqrt(self.head_dim)
@@ -171,8 +188,8 @@ class Attention(nn.Module):
                 scores[:, :, :, -seq_len:] += torch.full((seq_len, seq_len), float("-inf"), device=scores.device).triu(
                     1
                 )
-            if attention_mask is not None:
-                scores += (1.0 - attention_mask.unsqueeze(1).unsqueeze(2)) * -1e9
+            if sdpa_mask is not None:
+                scores = scores.masked_fill(~sdpa_mask, float("-inf"))
             output = self.attn_dropout(F.softmax(scores.float(), dim=-1).type_as(xq)) @ xv
         output = output.transpose(1, 2).reshape(bsz, seq_len, -1)
         output = self.resid_dropout(self.o_proj(output))
@@ -264,16 +281,18 @@ class MiniMindModel(nn.Module):
         self.register_buffer("freqs_cos", freqs_cos, persistent=False)
         self.register_buffer("freqs_sin", freqs_sin, persistent=False)
 
-    def forward(self, input_ids, attention_mask=None, past_key_values=None, use_cache=False, **kwargs):
-        _, seq_length = input_ids.shape
+    def forward(
+        self, input_ids, attention_mask=None, position_ids=None, past_key_values=None, use_cache=False, **kwargs
+    ):
         if hasattr(past_key_values, "layers"):
             past_key_values = None
         past_key_values = past_key_values or [None] * len(self.layers)
-        start_pos = past_key_values[0][0].shape[1] if past_key_values[0] is not None else 0
+        if position_ids is None:
+            raise ValueError("MiniMindModel.forward requires explicit position_ids")
         hidden_states = self.dropout(self.embed_tokens(input_ids))
         position_embeddings = (
-            self.freqs_cos[start_pos : start_pos + seq_length],
-            self.freqs_sin[start_pos : start_pos + seq_length],
+            self.freqs_cos[position_ids],
+            self.freqs_sin[position_ids],
         )
         presents = []
         for layer, past_key_value in zip(self.layers, past_key_values, strict=True):
@@ -307,6 +326,7 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
         self,
         input_ids,
         attention_mask=None,
+        position_ids=None,
         past_key_values=None,
         use_cache=False,
         logits_to_keep=0,
@@ -314,7 +334,12 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
         **kwargs,
     ):
         hidden_states, past_key_values, aux_loss = self.model(
-            input_ids, attention_mask, past_key_values, use_cache, **kwargs
+            input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+            **kwargs,
         )
         slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
         logits = self.lm_head(hidden_states[:, slice_indices, :])
@@ -352,8 +377,22 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
             streamer.put(input_ids.cpu())
         for _ in range(max_new_tokens):
             past_len = past_key_values[0][0].shape[1] if past_key_values else 0
+            if attention_mask is None:
+                full_position_ids = (
+                    torch.arange(input_ids.shape[1], device=input_ids.device)
+                    .view(1, -1)
+                    .expand(input_ids.shape[0], -1)
+                )
+            else:
+                full_position_ids = attention_mask.long().cumsum(dim=-1) - 1
+                full_position_ids.clamp_(min=0)
             outputs = self.forward(
-                input_ids[:, past_len:], attention_mask, past_key_values, use_cache=use_cache, **kwargs
+                input_ids[:, past_len:],
+                attention_mask,
+                position_ids=full_position_ids[:, past_len:],
+                past_key_values=past_key_values,
+                use_cache=use_cache,
+                **kwargs,
             )
             attention_mask = (
                 torch.cat([attention_mask, attention_mask.new_ones(attention_mask.shape[0], 1)], -1)

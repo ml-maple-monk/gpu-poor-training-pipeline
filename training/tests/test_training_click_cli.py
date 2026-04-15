@@ -2,22 +2,33 @@
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 
-MINIMIND_ROOT = Path(__file__).resolve().parents[1] / "src" / "minimind"
+TESTS_ROOT = Path(__file__).parent
+TRAINING_ROOT = TESTS_ROOT.parent
+MINIMIND_ROOT = TRAINING_ROOT / "src" / "minimind"
 MINIMIND_AVAILABLE = MINIMIND_ROOT.is_dir()
+TRAINING_CLI_DEPS_AVAILABLE = all(
+    importlib.util.find_spec(module_name) is not None
+    for module_name in ("datasets", "numpy", "pynvml", "torch", "transformers")
+)
+TRAINING_CLI_IMPORTS_AVAILABLE = MINIMIND_AVAILABLE and TRAINING_CLI_DEPS_AVAILABLE
 
-if MINIMIND_AVAILABLE:
+if TRAINING_CLI_IMPORTS_AVAILABLE:
     sys.path.insert(0, str(MINIMIND_ROOT.parent))
     from minimind.dataset import pretokenize_pretrain
     from minimind.trainer import train_pretrain
 
 
-@pytest.mark.skipif(not MINIMIND_AVAILABLE, reason="training/src/minimind/ not available")
+@pytest.mark.skipif(
+    not TRAINING_CLI_IMPORTS_AVAILABLE,
+    reason="training/src/minimind/ or its CLI import deps are not available",
+)
 def test_train_pretrain_help_exposes_click_options() -> None:
     runner = CliRunner()
 
@@ -30,7 +41,10 @@ def test_train_pretrain_help_exposes_click_options() -> None:
     assert "Usage:" in result.output
 
 
-@pytest.mark.skipif(not MINIMIND_AVAILABLE, reason="training/src/minimind/ not available")
+@pytest.mark.skipif(
+    not TRAINING_CLI_IMPORTS_AVAILABLE,
+    reason="training/src/minimind/ or its CLI import deps are not available",
+)
 def test_pretokenize_help_exposes_click_options() -> None:
     runner = CliRunner()
 

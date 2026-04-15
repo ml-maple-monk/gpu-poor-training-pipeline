@@ -7,10 +7,8 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
-
 from datasets import Features, Value, load_dataset
-
+from torch.utils.data import Dataset
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -62,11 +60,6 @@ class PretrainDataset(Dataset):
         self.max_length = max_length
         self.data_path = Path(data_path)
         self.metadata = load_pretokenized_metadata(self.data_path)
-        artifact_max_length = int(self.metadata["max_length"])
-        if artifact_max_length != self.max_length:
-            raise ValueError(
-                f"PretrainDataset max_length={self.max_length} does not match pretokenized artifact max_length={artifact_max_length}"
-            )
         self.pad_token_id = int(self.metadata["pad_token_id"])
         self.sample_count = int(self.metadata["sample_count"])
         self.sample_indices = None if sample_indices is None else np.asarray(sample_indices, dtype=np.int64)
@@ -81,12 +74,7 @@ class PretrainDataset(Dataset):
         sample_index = int(index if self.sample_indices is None else self.sample_indices[index])
         token_start, token_length = self._index[sample_index]
         tokens = self._tokens[int(token_start) : int(token_start + token_length)]
-        input_ids = np.full(self.max_length, self.pad_token_id, dtype=np.int64)
-        input_ids[: int(token_length)] = tokens
-        input_ids = torch.tensor(input_ids, dtype=torch.long)
-        labels = input_ids.clone()
-        labels[input_ids == self.pad_token_id] = -100
-        return input_ids, labels
+        return torch.tensor(tokens, dtype=torch.long)
 
     def _ensure_memmaps(self):
         if self._tokens is None:
@@ -103,6 +91,115 @@ class PretrainDataset(Dataset):
                 mode="r",
                 shape=(self.sample_count, 2),
             )
+
+
+def get_attention_mask_for_packed_sequence(x, eos_token_id, pad_token_id):
+    """Build a packed causal mask and reset position IDs for one fixed-length row."""
+
+    T = x.size(0)
+    valid = x.ne(pad_token_id)
+    valid_count = int(valid.sum().item())
+
+    attention_mask = torch.zeros(T, T, dtype=torch.bool, device=x.device)
+    position_ids = torch.zeros(T, dtype=torch.long, device=x.device)
+    if valid_count == 0:
+        return attention_mask, position_ids
+
+    eos_indices = ((x == eos_token_id) & valid).nonzero(as_tuple=True)[0]
+    last_valid_idx = valid.nonzero(as_tuple=True)[0][-1]
+    if eos_indices.numel() == 0 or int(eos_indices[-1].item()) != int(last_valid_idx.item()):
+        eos_indices = torch.cat([eos_indices, last_valid_idx.view(1)])
+
+    reps = torch.cat([eos_indices[:1] + 1, eos_indices[1:] - eos_indices[:-1]])
+    seq_starts = torch.cat([eos_indices.new_zeros(1), eos_indices[:-1] + 1])
+    token_starts = torch.repeat_interleave(seq_starts, reps)
+    repeated_idx = torch.full((T,), int(last_valid_idx.item()), dtype=torch.long, device=x.device)
+    repeated_idx[:valid_count] = torch.repeat_interleave(eos_indices, reps)
+
+    valid_positions = torch.arange(valid_count, device=x.device, dtype=torch.long)
+    position_ids[:valid_count] = valid_positions - token_starts
+
+    row_idx = torch.arange(T, device=x.device, dtype=torch.long).view(-1, 1).expand(-1, T)
+    col_idx = torch.arange(T, device=x.device, dtype=torch.long).view(1, -1).expand(T, -1)
+    attention_mask = (row_idx >= col_idx) & (row_idx <= repeated_idx.view(1, -1))
+    attention_mask &= valid.view(-1, 1) & valid.view(1, -1)
+    pad_indices = (~valid).nonzero(as_tuple=True)[0]
+    if pad_indices.numel() > 0:
+        # Keep padded queries from becoming fully masked rows. Older SDPA kernels
+        # can turn all-masked padded queries into NaNs even though labels ignore them.
+        attention_mask[pad_indices, pad_indices] = True
+    return attention_mask, position_ids
+
+
+class PretrainDataCollator:
+    """Pack raw samples into fixed rows, then build packed masks and reset position IDs."""
+
+    def __init__(self, eos_token_id=2, pad_token_id=0, max_seq_len=512):
+        self.eos_token_id = eos_token_id
+        self.pad_token_id = pad_token_id
+        self.max_seq_len = max_seq_len
+
+    def _extract_input_ids(self, feature):
+        if torch.is_tensor(feature):
+            return feature
+        if isinstance(feature, (tuple, list)) and feature and torch.is_tensor(feature[0]):
+            return feature[0]
+        raise TypeError(f"Unsupported pretrain feature type: {type(feature)!r}")
+
+    def _finalize_row(self, samples):
+        row = torch.full((self.max_seq_len,), self.pad_token_id, dtype=samples[0].dtype)
+        offset = 0
+        for sample in samples:
+            next_offset = offset + int(sample.numel())
+            row[offset:next_offset] = sample
+            offset = next_offset
+        return row
+
+    def __call__(self, features):
+        packed_rows = []
+        current_row = []
+        current_length = 0
+
+        for feature in features:
+            input_ids = self._extract_input_ids(feature)
+            sample_length = int(input_ids.numel())
+            if sample_length > self.max_seq_len:
+                print(
+                    f"[pretrain-collator] truncating sample from length {sample_length} to {self.max_seq_len}",
+                    flush=True,
+                )
+                input_ids = input_ids[: self.max_seq_len]
+                sample_length = self.max_seq_len
+            if current_row and current_length + sample_length > self.max_seq_len:
+                packed_rows.append(self._finalize_row(current_row))
+                current_row = []
+                current_length = 0
+
+            current_row.append(input_ids)
+            current_length += sample_length
+
+        if current_row:
+            packed_rows.append(self._finalize_row(current_row))
+
+        input_ids = torch.stack(packed_rows)
+        labels = input_ids.clone()
+        labels[input_ids == self.pad_token_id] = -100
+        attention_masks = []
+        position_ids = []
+        for row in input_ids:
+            row_attention_mask, row_position_ids = get_attention_mask_for_packed_sequence(
+                row,
+                eos_token_id=self.eos_token_id,
+                pad_token_id=self.pad_token_id,
+            )
+            attention_masks.append(row_attention_mask)
+            position_ids.append(row_position_ids)
+        return {
+            "input_ids": input_ids,
+            "labels": labels,
+            "position_ids": torch.stack(position_ids),
+            "attention_mask": torch.stack(attention_masks),
+        }
 
 
 def pretokenized_dataset_exists(path):
@@ -155,9 +252,11 @@ def build_pretokenized_corpus(
 
     token_count = 0
     sample_count = 0
-    with source_path.open(encoding="utf-8") as source, tokens_tmp.open("wb") as tokens_fp, index_tmp.open(
-        "wb"
-    ) as index_fp:
+    with (
+        source_path.open(encoding="utf-8") as source,
+        tokens_tmp.open("wb") as tokens_fp,
+        index_tmp.open("wb") as index_fp,
+    ):
         for line_number, line in enumerate(source, start=1):
             if not line.strip():
                 continue

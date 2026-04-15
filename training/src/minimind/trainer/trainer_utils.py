@@ -15,7 +15,7 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import Sampler
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoTokenizer
 
 from model.model_minimind import MiniMindForCausalLM
 
@@ -173,6 +173,3 @@ class SkipBatchSampler(Sampler):
     def __len__(self):
         total_batches = (len(self.sampler) + self.batch_size - 1) // self.batch_size
         return max(0, total_batches - self.skip_batches)
-
-
-
