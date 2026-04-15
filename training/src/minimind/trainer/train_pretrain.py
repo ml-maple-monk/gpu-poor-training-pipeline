@@ -18,7 +18,7 @@ from torch import optim
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 
-from dataset.lm_dataset import PretrainDataset, pretokenized_sample_count
+from dataset.lm_dataset import PretrainDataCollator, PretrainDataset, pretokenized_sample_count
 from model.model_minimind import MiniMindConfig
 from trainer._benchmark_metrics import (
     NvmlEnergyMeter,
@@ -169,7 +169,7 @@ def _save_checkpoint(epoch: int, step: int, wandb=None) -> None:
         step=step,
         wandb=wandb,
         optimizer_step=int(metric_state["optimizer_step"]),
-        save_dir="../checkpoints",
+        save_dir=args.save_dir,
     )
     _mlflow_log_ckpt(ckp, step)
     model.train()
@@ -282,16 +282,18 @@ def _run_validation(epoch: int, step: int, iters: int, val_loader) -> None:
     val_tokens_local = 0
 
     with torch.no_grad():
-        for input_ids, labels in val_loader:
-            input_ids = input_ids.to(args.device)
-            labels = labels.to(args.device)
+        for batch in val_loader:
+            input_ids = batch["input_ids"].to(args.device)
+            labels = batch["labels"].to(args.device)
+            position_ids = batch["position_ids"].to(args.device)
+            attention_mask = batch["attention_mask"].to(args.device)
             with autocast_ctx:
-                res = model(input_ids, labels=labels)
+                res = model(input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=labels)
             valid_tokens = count_valid_tokens(labels)
             if valid_tokens > 0:
                 val_loss_sum_local += float(res.loss.detach().float().item()) * valid_tokens
                 val_tokens_local += valid_tokens
-            del input_ids, labels, res
+            del input_ids, labels, position_ids, attention_mask, res
 
     global_tokens = ddp_sum(val_tokens_local, collective_device)
     if global_tokens <= 0:
@@ -352,16 +354,18 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None, val_loader=None)
 
     epoch_start_time = time.time()
     last_step = start_step
-    for step, (input_ids, labels) in enumerate(loader, start=start_step + 1):
-        input_ids = input_ids.to(args.device)
-        labels = labels.to(args.device)
+    for step, batch in enumerate(loader, start=start_step + 1):
+        input_ids = batch["input_ids"].to(args.device)
+        labels = batch["labels"].to(args.device)
+        position_ids = batch["position_ids"].to(args.device)
+        attention_mask = batch["attention_mask"].to(args.device)
         last_step = step
         lr = get_lr(epoch * iters + step, args.epochs * iters, args.learning_rate)
         for param_group in optimizer.param_groups:
             param_group["lr"] = lr
 
         with autocast_ctx:
-            res = model(input_ids, labels=labels)
+            res = model(input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=labels)
             aux_loss = res.aux_loss if res.aux_loss is not None else res.loss.new_zeros(())
             loss = (res.loss + aux_loss) / args.accumulation_steps
 
@@ -398,7 +402,7 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None, val_loader=None)
         if update_due:
             _maybe_run_validation(epoch, step, iters, val_loader, force=(step == iters))
 
-        del input_ids, labels, res, loss
+        del input_ids, labels, position_ids, attention_mask, res, loss
 
     return last_step
 
@@ -429,7 +433,7 @@ def run_training(runtime_args):
         hidden_size=args.hidden_size, num_hidden_layers=args.num_hidden_layers, use_moe=bool(args.use_moe)
     )
     ckp_data = (
-        lm_checkpoint(lm_config, weight=args.save_weight, save_dir="../checkpoints") if args.from_resume == 1 else None
+        lm_checkpoint(lm_config, weight=args.save_weight, save_dir=args.save_dir) if args.from_resume == 1 else None
     )
 
     # ========== 3. 设置混合精度 ==========
@@ -479,10 +483,21 @@ def run_training(runtime_args):
     # ========== 5. 定义模型、数据、优化器 ==========
     model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
     train_ds, val_ds = _build_pretrain_datasets(tokenizer)
+    pretrain_collator = PretrainDataCollator(
+        eos_token_id=int(tokenizer.eos_token_id),
+        pad_token_id=int(tokenizer.pad_token_id),
+        max_seq_len=args.max_seq_len,
+    )
     train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None
     val_loader = None
     if val_ds is not None:
-        val_loader = DataLoader(val_ds, batch_size=args.batch_size, num_workers=args.num_workers, pin_memory=True)
+        val_loader = DataLoader(
+            val_ds,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            collate_fn=pretrain_collator,
+        )
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == "float16"))
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
 
@@ -518,7 +533,13 @@ def run_training(runtime_args):
         indices = torch.randperm(len(train_ds)).tolist()
         skip = start_step if (epoch == start_epoch and start_step > 0) else 0
         batch_sampler = SkipBatchSampler(train_sampler or indices, args.batch_size, skip)
-        loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)
+        loader = DataLoader(
+            train_ds,
+            batch_sampler=batch_sampler,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            collate_fn=pretrain_collator,
+        )
         if skip > 0:
             Logger(f"Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始")
             train_epoch(epoch, loader, len(loader) + skip, start_step, wandb, val_loader=val_loader)
