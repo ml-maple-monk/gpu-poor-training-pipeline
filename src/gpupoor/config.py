@@ -35,6 +35,8 @@ class RecipeConfig:
     dataset_path: str = "data/datasets/pretrain_t2t_mini.jsonl"
     output_dir: str = "data/minimind-out"
     time_cap_seconds: int = 600
+    validation_split_ratio: float = 0.0
+    validation_interval_steps: int = 0
 
 
 @dataclass(slots=True)
@@ -56,6 +58,9 @@ class MlflowConfig:
     http_request_timeout_seconds: int = 120
     start_timeout_seconds: int = 180
     start_retry_seconds: int = 5
+    peak_tflops_per_gpu: float | None = None
+    time_to_target_metric: str = "none"
+    time_to_target_value: float | None = None
 
     def to_env(self) -> dict[str, str]:
         """Return MLFLOW_* env vars shared by local and dstack training entrypoints.
@@ -74,6 +79,9 @@ class MlflowConfig:
             "MLFLOW_HTTP_REQUEST_TIMEOUT": str(self.http_request_timeout_seconds),
             "MLFLOW_START_TIMEOUT_SECONDS": str(self.start_timeout_seconds),
             "MLFLOW_START_RETRY_SECONDS": str(self.start_retry_seconds),
+            "MLFLOW_PEAK_TFLOPS_PER_GPU": str(self.peak_tflops_per_gpu or 0.0),
+            "MLFLOW_TIME_TO_TARGET_METRIC": self.time_to_target_metric,
+            "MLFLOW_TIME_TO_TARGET_VALUE": str(self.time_to_target_value or 0.0),
         }
 
 
@@ -182,6 +190,13 @@ def _require_int(data: dict[str, object], key: str, *, default: int) -> int:
     return value
 
 
+def _require_float(data: dict[str, object], key: str, *, default: float) -> float:
+    value = data.get(key, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ConfigError(f"{key} must be a number")
+    return float(value)
+
+
 def _optional_str(data: dict[str, object], key: str) -> str | None:
     value = data.get(key)
     if value is None:
@@ -285,7 +300,15 @@ def find_dstack_bin() -> str:
 
 
 _KNOWN_TOP_LEVEL = {"name", "recipe", "backend", "mlflow", "doctor", "smoke", "remote"}
-_KNOWN_RECIPE = {"kind", "prepare_data", "dataset_path", "output_dir", "time_cap_seconds"}
+_KNOWN_RECIPE = {
+    "kind",
+    "prepare_data",
+    "dataset_path",
+    "output_dir",
+    "time_cap_seconds",
+    "validation_split_ratio",
+    "validation_interval_steps",
+}
 _KNOWN_BACKEND = {"kind", "skip_build", "remote_image_tag"}
 _KNOWN_MLFLOW = {
     "experiment_name",
@@ -298,6 +321,9 @@ _KNOWN_MLFLOW = {
     "http_request_timeout_seconds",
     "start_timeout_seconds",
     "start_retry_seconds",
+    "peak_tflops_per_gpu",
+    "time_to_target_metric",
+    "time_to_target_value",
 }
 _KNOWN_DOCTOR = {"skip_preflight", "max_clock_skew_seconds"}
 _KNOWN_SMOKE = {
@@ -376,7 +402,13 @@ def load_run_config(path: str | Path) -> RunConfig:
         dataset_path=_require_str(recipe_data, "dataset_path", default="data/datasets/pretrain_t2t_mini.jsonl"),
         output_dir=_require_str(recipe_data, "output_dir", default="data/minimind-out"),
         time_cap_seconds=_require_int(recipe_data, "time_cap_seconds", default=600),
+        validation_split_ratio=_require_float(recipe_data, "validation_split_ratio", default=0.0),
+        validation_interval_steps=_require_int(recipe_data, "validation_interval_steps", default=0),
     )
+    if not 0.0 <= recipe.validation_split_ratio < 1.0:
+        raise ConfigError("validation_split_ratio must be >= 0.0 and < 1.0")
+    if recipe.validation_interval_steps < 0:
+        raise ConfigError("validation_interval_steps must be >= 0")
     backend = BackendConfig(
         kind=_require_str(backend_data, "kind"),
         skip_build=_require_bool(backend_data, "skip_build", default=False),
@@ -400,7 +432,16 @@ def load_run_config(path: str | Path) -> RunConfig:
         http_request_timeout_seconds=_require_int(mlflow_data, "http_request_timeout_seconds", default=120),
         start_timeout_seconds=_require_int(mlflow_data, "start_timeout_seconds", default=180),
         start_retry_seconds=_require_int(mlflow_data, "start_retry_seconds", default=5),
+        peak_tflops_per_gpu=_optional_number(mlflow_data, "peak_tflops_per_gpu"),
+        time_to_target_metric=_require_str(mlflow_data, "time_to_target_metric", default="none"),
+        time_to_target_value=_optional_number(mlflow_data, "time_to_target_value"),
     )
+    if mlflow.time_to_target_metric not in {"none", "val_loss", "val_ppl"}:
+        raise ConfigError("time_to_target_metric must be one of: none, val_loss, val_ppl")
+    if mlflow.peak_tflops_per_gpu is not None and mlflow.peak_tflops_per_gpu <= 0:
+        raise ConfigError("peak_tflops_per_gpu must be > 0 when provided")
+    if mlflow.time_to_target_value is not None and mlflow.time_to_target_value <= 0:
+        raise ConfigError("time_to_target_value must be > 0 when provided")
     doctor = DoctorConfig(
         skip_preflight=_require_bool(doctor_data, "skip_preflight", default=False),
         max_clock_skew_seconds=_require_int(doctor_data, "max_clock_skew_seconds", default=5),

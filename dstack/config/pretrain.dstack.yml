@@ -28,12 +28,17 @@ env:
   # Optional overrides with defaults
   - MLFLOW_EXPERIMENT_NAME=minimind-pretrain-remote
   - MLFLOW_ARTIFACT_UPLOAD=0
+  - MLFLOW_PEAK_TFLOPS_PER_GPU=0.0
+  - MLFLOW_TIME_TO_TARGET_METRIC=none
+  - MLFLOW_TIME_TO_TARGET_VALUE=0.0
   - VERDA_PROFILE=remote
   - DSTACK_RUN_NAME=verda-minimind-pretrain
   # Dataset/output path overrides (rarely changed)
   - OUT_DIR=/workspace/out
   - HF_DATASET_REPO=jingyaogong/minimind_dataset
   - HF_DATASET_FILENAME=pretrain_t2t_mini.jsonl
+  - VALIDATION_SPLIT_RATIO=0.0
+  - VALIDATION_INTERVAL_STEPS=0
 
 commands:
   - bash /opt/training/scripts/remote-entrypoint.sh

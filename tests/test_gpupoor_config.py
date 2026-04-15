@@ -85,6 +85,19 @@ def test_remote_b300_example_loads_gpu_overrides() -> None:
     assert config.remote.max_price == 10.0
 
 
+def test_benchmark_examples_enable_validation_metrics() -> None:
+    config = load_run_config(REPO_ROOT / "examples" / "verda_a100_10m.toml")
+    two_gpu = load_run_config(REPO_ROOT / "examples" / "verda_a100x2_10m.toml")
+
+    assert config.recipe.validation_split_ratio == 0.01
+    assert config.recipe.validation_interval_steps == 100
+    assert config.mlflow.peak_tflops_per_gpu is None
+    assert config.mlflow.time_to_target_metric == "none"
+    assert two_gpu.recipe.validation_split_ratio == 0.01
+    assert two_gpu.recipe.validation_interval_steps == 100
+    assert two_gpu.mlflow.peak_tflops_per_gpu is None
+
+
 def test_remote_example_has_no_gpu_overrides_so_shell_defaults_apply() -> None:
     """The baseline verda_remote.toml must not set GPU overrides, so the
     shell-level defaults (H100/H200/A100) remain in effect for CI and
@@ -97,6 +110,27 @@ def test_remote_example_has_no_gpu_overrides_so_shell_defaults_apply() -> None:
     assert config.remote.gpu_count is None
     assert config.remote.spot_policy is None
     assert config.remote.max_price is None
+
+
+def test_config_rejects_invalid_time_to_target_metric(tmp_path: Path) -> None:
+    config_file = tmp_path / "invalid-target.toml"
+    config_file.write_text(
+        """
+name = "tiny_cpu"
+[recipe]
+[backend]
+kind = "local"
+[mlflow]
+time_to_target_metric = "bad-metric"
+[doctor]
+[smoke]
+[remote]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="time_to_target_metric must be one of"):
+        load_run_config(config_file)
 
 
 def test_non_toml_config_is_rejected(tmp_path: Path) -> None:
