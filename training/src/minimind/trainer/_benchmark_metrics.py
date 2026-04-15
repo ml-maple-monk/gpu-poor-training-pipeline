@@ -9,10 +9,8 @@ from typing import Any
 import torch
 import torch.distributed as dist
 
-try:
-    import pynvml
-except ImportError:  # pragma: no cover - exercised via runtime fallback
-    pynvml = None
+import pynvml
+
 
 
 class PeakFlopsProfile:

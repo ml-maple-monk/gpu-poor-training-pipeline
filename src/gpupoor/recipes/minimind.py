@@ -20,7 +20,7 @@ def ensure_local_dataset(config: RunConfig) -> Path:
     dataset_path = repo_path(*Path(config.recipe.dataset_path).parts)
     if config.recipe.prepare_data:
         bash_script(repo_path("training", "scripts", "prepare-data.sh"))
-    elif not dataset_path.is_file():
+    elif not dataset_path.exists():
         raise FileNotFoundError(
             f"{dataset_path} not found and prepare_data=false; run gpupoor data prep or enable prepare_data"
         )

@@ -3,7 +3,7 @@ name = "verda-remote"
 [recipe]
 kind = "minimind_pretrain"
 prepare_data = false
-dataset_path = "data/datasets/pretrain_t2t_mini.jsonl"
+dataset_path = "data/datasets/pretrain_t2t_mini"
 output_dir = "data/minimind-out"
 time_cap_seconds = 600
 

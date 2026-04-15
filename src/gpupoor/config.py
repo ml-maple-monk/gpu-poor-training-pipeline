@@ -32,7 +32,7 @@ class ConfigError(ValueError):
 class RecipeConfig:
     kind: str = "minimind_pretrain"
     prepare_data: bool = True
-    dataset_path: str = "data/datasets/pretrain_t2t_mini.jsonl"
+    dataset_path: str = "data/datasets/pretrain_t2t_mini"
     output_dir: str = "data/minimind-out"
     time_cap_seconds: int = 600
     validation_split_ratio: float = 0.0
@@ -399,7 +399,7 @@ def load_run_config(path: str | Path) -> RunConfig:
     recipe = RecipeConfig(
         kind=_require_str(recipe_data, "kind", default="minimind_pretrain"),
         prepare_data=_require_bool(recipe_data, "prepare_data", default=True),
-        dataset_path=_require_str(recipe_data, "dataset_path", default="data/datasets/pretrain_t2t_mini.jsonl"),
+        dataset_path=_require_str(recipe_data, "dataset_path", default="data/datasets/pretrain_t2t_mini"),
         output_dir=_require_str(recipe_data, "output_dir", default="data/minimind-out"),
         time_cap_seconds=_require_int(recipe_data, "time_cap_seconds", default=600),
         validation_split_ratio=_require_float(recipe_data, "validation_split_ratio", default=0.0),

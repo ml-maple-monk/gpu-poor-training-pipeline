@@ -33,8 +33,9 @@ COPY training/src/minimind/ /opt/training/minimind/
 # Bake training scripts
 COPY training/scripts/lib/train-pretrain-args.sh /opt/training/scripts/lib/train-pretrain-args.sh
 COPY training/scripts/lib/hf-dataset-bootstrap.sh /opt/training/scripts/lib/hf-dataset-bootstrap.sh
+COPY training/scripts/pretokenize-data.sh /opt/training/scripts/pretokenize-data.sh
 COPY training/scripts/remote-entrypoint.sh /opt/training/scripts/remote-entrypoint.sh
-RUN chmod +x /opt/training/scripts/remote-entrypoint.sh /opt/training/scripts/lib/train-pretrain-args.sh /opt/training/scripts/lib/hf-dataset-bootstrap.sh
+RUN chmod +x /opt/training/scripts/remote-entrypoint.sh /opt/training/scripts/pretokenize-data.sh /opt/training/scripts/lib/train-pretrain-args.sh /opt/training/scripts/lib/hf-dataset-bootstrap.sh
 
 # Workspace layout expected by the entrypoint
 RUN mkdir -p /workspace/data/datasets /workspace/out /workspace/hf_cache

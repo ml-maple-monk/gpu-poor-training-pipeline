@@ -12,7 +12,9 @@
 set -euo pipefail
 
 DATA_DIR="/workspace/data/datasets"
-DATASET_FILE="$DATA_DIR/pretrain_t2t_mini.jsonl"
+RAW_DATASET_FILE="$DATA_DIR/pretrain_t2t_mini.jsonl"
+DATASET_FILE="$RAW_DATASET_FILE"
+TOKENIZED_DATASET_DIR="$DATA_DIR/pretrain_t2t_mini"
 DATASET_MIN_BYTES=524288000  # 500 MB loose lower bound
 OUT_DIR="${OUT_DIR:-/workspace/out}"
 HF_DATASET_REPO="${HF_DATASET_REPO:-jingyaogong/minimind_dataset}"
@@ -20,6 +22,7 @@ HF_DATASET_FILENAME="${HF_DATASET_FILENAME:-pretrain_t2t_mini.jsonl}"
 TIME_CAP_SECONDS="${TIME_CAP_SECONDS:-600}"
 TRAIN_ARGS_FILE="/opt/training/scripts/lib/train-pretrain-args.sh"
 HF_BOOTSTRAP_HELPER="/opt/training/scripts/lib/hf-dataset-bootstrap.sh"
+PRETOKENIZE_SCRIPT="/opt/training/scripts/pretokenize-data.sh"
 
 if [ ! -f "$TRAIN_ARGS_FILE" ]; then
     echo "[remote-entrypoint] ERROR: $TRAIN_ARGS_FILE not found — image is missing shared training args helper" >&2
@@ -28,6 +31,11 @@ fi
 
 if [ ! -f "$HF_BOOTSTRAP_HELPER" ]; then
     echo "[remote-entrypoint] ERROR: $HF_BOOTSTRAP_HELPER not found — image is missing shared dataset bootstrap helper" >&2
+    exit 1
+fi
+
+if [ ! -f "$PRETOKENIZE_SCRIPT" ]; then
+    echo "[remote-entrypoint] ERROR: $PRETOKENIZE_SCRIPT not found — image is missing the pretokenization helper" >&2
     exit 1
 fi
 
@@ -73,11 +81,14 @@ if ! hf_dataset_bootstrap; then
     exit 1
 fi
 
+echo "[remote-entrypoint] Pretokenizing dataset ..."
+bash "$PRETOKENIZE_SCRIPT" "$RAW_DATASET_FILE" "$TOKENIZED_DATASET_DIR"
+
 # ── Launch training ───────────────────────────────────────────────────────────
 # doc-anchor: remote-entrypoint-train-exec
 echo "[remote-entrypoint] Starting train_pretrain.py ..."
 cd /opt/training/minimind/trainer
-minimind_train_pretrain_args "$DATASET_FILE" "$OUT_DIR"
+minimind_train_pretrain_args "$TOKENIZED_DATASET_DIR" "$OUT_DIR"
 
 set +e
 timeout --signal=SIGTERM --kill-after=30 "${TIME_CAP_SECONDS}" \
