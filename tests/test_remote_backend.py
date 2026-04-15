@@ -275,7 +275,8 @@ def test_launch_remote_reuses_cached_image_without_rebuild(tmp_path: Path, monke
     monkeypatch.setattr(
         dstack,
         "render_task",
-        lambda settings, config, image_sha: recorded_image_tags.append(image_sha) or fake_repo_path(".tmp", "task.yml"),
+        lambda settings, config, image_sha: recorded_image_tags.append(image_sha)
+        or fake_repo_path(".tmp", "task.yml"),
     )
     monkeypatch.setattr(dstack, "read_required_secret", lambda filename: "hf-token")
     monkeypatch.setattr(dstack, "dstack_has_run", lambda dstack_bin, run_name: True)
