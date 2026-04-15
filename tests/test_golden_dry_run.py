@@ -38,7 +38,12 @@ DRY_RUN_CONFIG = REPO_ROOT / "examples" / "verda_remote.toml"
 
 def normalize(text: str) -> str:
     home = str(Path.home())
-    return text.replace(str(REPO_ROOT), "<REPO_ROOT>").replace(home, "<HOME>")
+    normalized = text.replace(str(REPO_ROOT), "<REPO_ROOT>").replace(home, "<HOME>")
+    ignored_lines = {
+        "PREFLIGHT WARN: could not read Windows clock for skew check",
+        "PREFLIGHT WARN: powershell.exe not found — skipping clock skew check (non-WSL2 host?)",
+    }
+    return "".join(line for line in normalized.splitlines(keepends=True) if line.rstrip("\n") not in ignored_lines)
 
 
 def missing_precondition() -> str | None:

@@ -35,3 +35,5 @@ dstack/.*rendered*.yml
 .mutmut-cache
 .mutmut-baseline/*.txt
 !.mutmut-baseline/main.txt
+.tmp/
+.vscode/
