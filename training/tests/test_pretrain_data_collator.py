@@ -91,6 +91,6 @@ def test_pretrain_data_collator_truncates_oversized_samples_and_logs(lm_dataset_
 
     captured = capsys.readouterr()
     assert "truncating sample from length 5 to 4" in captured.out
-    assert torch.equal(batch["input_ids"][0], torch.tensor([1, 2, 3, 4]))
-    assert torch.equal(batch["labels"][0], torch.tensor([1, 2, 3, 4]))
+    assert torch.equal(batch["input_ids"][0], torch.tensor([1, 2, 3, 99]))
+    assert torch.equal(batch["labels"][0], torch.tensor([1, 2, 3, 99]))
     assert torch.equal(batch["position_ids"][0], torch.tensor([0, 1, 2, 3]))

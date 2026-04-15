@@ -51,6 +51,15 @@ if [ ! -f "$TARGET" ]; then
 fi
 
 ls -lh "$TARGET"
-echo "Running pretokenization into $TOKENIZED_DIR"
-USE_UV_VENV=1 bash "$REPO_ROOT/training/scripts/pretokenize-data.sh" "$TARGET" "$TOKENIZED_DIR"
+if [ -f "$TOKENIZED_DIR/metadata.json" ] && [ -f "$TOKENIZED_DIR/tokens.bin" ] && [ -f "$TOKENIZED_DIR/index.bin" ]; then
+    echo "Pretokenized dataset already present at $TOKENIZED_DIR — skipping rebuild."
+else
+    echo "Running pretokenization into $TOKENIZED_DIR"
+    USE_UV_VENV=1 bash "$REPO_ROOT/training/scripts/pretokenize-data.sh" "$TARGET" "$TOKENIZED_DIR"
+fi
+
+if [ "${UPLOAD_PRETOKENIZED_DATASET:-0}" = "1" ]; then
+    bash "$REPO_ROOT/training/scripts/upload-pretokenized-data.sh" "$TOKENIZED_DIR"
+fi
+
 echo "Setup complete."

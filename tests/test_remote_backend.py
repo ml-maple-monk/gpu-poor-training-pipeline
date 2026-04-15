@@ -168,6 +168,8 @@ def test_launch_remote_keeps_tunnel_alive_after_success(tmp_path: Path, monkeypa
             "OUT_DIR": "/workspace/custom-out",
             "HF_DATASET_REPO": "example/dataset",
             "HF_DATASET_FILENAME": "custom.jsonl",
+            "HF_PRETOKENIZED_DATASET_REPO": "example/dataset",
+            "HF_PRETOKENIZED_DATASET_FILENAME": "pretokenized/custom.tar.gz",
         },
     )
     monkeypatch.setattr(dstack, "require_remote_settings", lambda settings: None)
@@ -228,6 +230,8 @@ def test_launch_remote_keeps_tunnel_alive_after_success(tmp_path: Path, monkeypa
     assert apply_envs[0]["OUT_DIR"] == "/workspace/custom-out"
     assert apply_envs[0]["HF_DATASET_REPO"] == "example/dataset"
     assert apply_envs[0]["HF_DATASET_FILENAME"] == "custom.jsonl"
+    assert apply_envs[0]["HF_PRETOKENIZED_DATASET_REPO"] == "example/dataset"
+    assert apply_envs[0]["HF_PRETOKENIZED_DATASET_FILENAME"] == "pretokenized/custom.tar.gz"
     assert apply_envs[0]["TIME_CAP_SECONDS"] == str(config.recipe.time_cap_seconds)
     assert apply_envs[0]["MLFLOW_EXPERIMENT_NAME"] == config.mlflow.experiment_name
 

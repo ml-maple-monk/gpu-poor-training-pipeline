@@ -16,9 +16,13 @@ RAW_DATASET_FILE="$DATA_DIR/pretrain_t2t_mini.jsonl"
 DATASET_FILE="$RAW_DATASET_FILE"
 TOKENIZED_DATASET_DIR="$DATA_DIR/pretrain_t2t_mini"
 DATASET_MIN_BYTES=524288000  # 500 MB loose lower bound
+PRETOKENIZED_ARCHIVE_FILE="${PRETOKENIZED_ARCHIVE_FILE:-$DATA_DIR/pretrain_t2t_mini.tar.gz}"
 OUT_DIR="${OUT_DIR:-/workspace/out}"
 HF_DATASET_REPO="${HF_DATASET_REPO:-jingyaogong/minimind_dataset}"
 HF_DATASET_FILENAME="${HF_DATASET_FILENAME:-pretrain_t2t_mini.jsonl}"
+HF_PRETOKENIZED_DATASET_REPO="${HF_PRETOKENIZED_DATASET_REPO:-$HF_DATASET_REPO}"
+HF_PRETOKENIZED_DATASET_FILENAME="${HF_PRETOKENIZED_DATASET_FILENAME:-pretokenized/pretrain_t2t_mini.tar.gz}"
+HF_PRETOKENIZED_DATASET_MIN_BYTES="${HF_PRETOKENIZED_DATASET_MIN_BYTES:-1048576}"
 TIME_CAP_SECONDS="${TIME_CAP_SECONDS:-600}"
 TRAIN_ARGS_FILE="/opt/training/scripts/lib/train-pretrain-args.sh"
 HF_BOOTSTRAP_HELPER="/opt/training/scripts/lib/hf-dataset-bootstrap.sh"
@@ -55,6 +59,7 @@ echo "  VERDA_PROFILE            = ${VERDA_PROFILE:-remote}"
 echo "  DSTACK_RUN_NAME          = ${DSTACK_RUN_NAME:-<not set>}"
 echo "  HF_TOKEN                 = ${HF_TOKEN:+set (${#HF_TOKEN} chars)}"
 echo "  DATA_DIR                 = $DATA_DIR"
+echo "  HF_PRETOKENIZED_DATASET  = ${HF_PRETOKENIZED_DATASET_REPO}/${HF_PRETOKENIZED_DATASET_FILENAME}"
 echo "  OUT_DIR                  = $OUT_DIR"
 echo "  TIME_CAP_SECONDS         = $TIME_CAP_SECONDS"
 echo "  Hostname                 = $(hostname)"
@@ -75,14 +80,47 @@ fi
 # ── Prepare directories ───────────────────────────────────────────────────────
 mkdir -p "$DATA_DIR" "$OUT_DIR"
 
-# ── Dataset bootstrap (shared with local emulator) ───────────────────────────
-HF_BOOTSTRAP_LOG_PREFIX="[remote-entrypoint]"
-if ! hf_dataset_bootstrap; then
-    exit 1
-fi
+download_pretokenized_dataset() {
+    if [ -f "$TOKENIZED_DATASET_DIR/metadata.json" ] && [ -f "$TOKENIZED_DATASET_DIR/tokens.bin" ] && [ -f "$TOKENIZED_DATASET_DIR/index.bin" ]; then
+        echo "[remote-entrypoint] Pretokenized dataset already present at $TOKENIZED_DATASET_DIR"
+        return 0
+    fi
 
-echo "[remote-entrypoint] Pretokenizing dataset ..."
-bash "$PRETOKENIZE_SCRIPT" "$RAW_DATASET_FILE" "$TOKENIZED_DATASET_DIR"
+    if ! hf_dataset_download_to_path \
+        "$HF_PRETOKENIZED_DATASET_REPO" \
+        "$HF_PRETOKENIZED_DATASET_FILENAME" \
+        "$PRETOKENIZED_ARCHIVE_FILE" \
+        "$HF_PRETOKENIZED_DATASET_MIN_BYTES" \
+        "[remote-entrypoint]"
+    then
+        return 1
+    fi
+
+    rm -rf "$TOKENIZED_DATASET_DIR"
+    mkdir -p "$TOKENIZED_DATASET_DIR"
+    tar -xzf "$PRETOKENIZED_ARCHIVE_FILE" -C "$TOKENIZED_DATASET_DIR"
+
+    for required in metadata.json tokens.bin index.bin; do
+        if [ ! -f "$TOKENIZED_DATASET_DIR/$required" ]; then
+            echo "[remote-entrypoint] ERROR: extracted pretokenized dataset is missing $required" >&2
+            return 1
+        fi
+    done
+
+    echo "[remote-entrypoint] Reused pretokenized dataset from HF artifact"
+}
+
+# ── Dataset bootstrap (shared with local emulator) ───────────────────────────
+if ! download_pretokenized_dataset; then
+    echo "[remote-entrypoint] Pretokenized artifact unavailable — falling back to raw dataset bootstrap"
+    HF_BOOTSTRAP_LOG_PREFIX="[remote-entrypoint]"
+    if ! hf_dataset_bootstrap; then
+        exit 1
+    fi
+
+    echo "[remote-entrypoint] Pretokenizing dataset ..."
+    bash "$PRETOKENIZE_SCRIPT" "$RAW_DATASET_FILE" "$TOKENIZED_DATASET_DIR"
+fi
 
 # ── Launch training ───────────────────────────────────────────────────────────
 # doc-anchor: remote-entrypoint-train-exec
