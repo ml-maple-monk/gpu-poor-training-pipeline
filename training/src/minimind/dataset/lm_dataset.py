@@ -103,6 +103,7 @@ def get_attention_mask_for_packed_sequence(x, eos_token_id, pad_token_id):
     attention_mask = torch.zeros(T, T, dtype=torch.bool, device=x.device)
     position_ids = torch.zeros(T, dtype=torch.long, device=x.device)
     if valid_count == 0:
+        attention_mask.fill_diagonal_(True)
         return attention_mask, position_ids
 
     eos_indices = ((x == eos_token_id) & valid).nonzero(as_tuple=True)[0]

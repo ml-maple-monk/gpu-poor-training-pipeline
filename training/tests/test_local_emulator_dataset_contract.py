@@ -1,39 +1,51 @@
 """Regression checks for local-emulator HF dataset bootstrap."""
 
-from pathlib import Path
+from __future__ import annotations
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
-
-def test_local_emulator_compose_exposes_remote_dataset_env_contract():
-    compose = (REPO_ROOT / "infrastructure" / "local-emulator" / "compose" / "docker-compose.yml").read_text()
-
-    assert 'HF_TOKEN: "${HF_TOKEN:-}"' in compose
-    assert 'HF_DATASET_REPO: "${HF_DATASET_REPO:-jingyaogong/minimind_dataset}"' in compose
-    assert 'HF_DATASET_FILENAME: "${HF_DATASET_FILENAME:-pretrain_t2t_mini.jsonl}"' in compose
+import pytest
 
 
-def test_local_emulator_entrypoint_bootstraps_dataset_from_hugging_face():
-    entrypoint = (REPO_ROOT / "infrastructure" / "local-emulator" / "scripts" / "entrypoint.sh").read_text()
+def _compose_env_binding(name: str, default: str = "") -> str:
+    default_suffix = f":-{default}" if default else ":-"
+    return f'{name}: "${{{name}{default_suffix}}}"'
 
-    assert "/data/datasets" in entrypoint
-    assert "/app/lib/hf-dataset-bootstrap.sh" in entrypoint
+
+@pytest.mark.parametrize(
+    ("env_name", "default_value"),
+    [
+        ("HF_TOKEN", ""),
+        ("HF_DATASET_REPO", "jingyaogong/minimind_dataset"),
+        ("HF_DATASET_FILENAME", "pretrain_t2t_mini.jsonl"),
+    ],
+)
+def test_local_emulator_compose_exposes_remote_dataset_env_contract(repo_text, env_name, default_value):
+    compose = repo_text("infrastructure", "local-emulator", "compose", "docker-compose.yml")
+
+    assert _compose_env_binding(env_name, default_value) in compose
+
+
+def test_local_emulator_entrypoint_bootstraps_dataset_from_hugging_face(repo_text, container_path):
+    entrypoint = repo_text("infrastructure", "local-emulator", "scripts", "entrypoint.sh")
+
+    assert container_path("data", "datasets") in entrypoint
+    assert container_path("app", "lib", "hf-dataset-bootstrap.sh") in entrypoint
     assert "hf_dataset_bootstrap" in entrypoint
 
 
-def test_remote_and_local_share_dataset_bootstrap_helper():
-    helper = (REPO_ROOT / "training" / "scripts" / "lib" / "hf-dataset-bootstrap.sh").read_text()
-    remote_entrypoint = (REPO_ROOT / "training" / "scripts" / "remote-entrypoint.sh").read_text()
-    local_entrypoint = (REPO_ROOT / "infrastructure" / "local-emulator" / "scripts" / "entrypoint.sh").read_text()
+def test_remote_and_local_share_dataset_bootstrap_helper(repo_text):
+    helper_name = "hf-dataset-bootstrap.sh"
+    helper = repo_text("training", "scripts", "lib", helper_name)
+    remote_entrypoint = repo_text("training", "scripts", "remote-entrypoint.sh")
+    local_entrypoint = repo_text("infrastructure", "local-emulator", "scripts", "entrypoint.sh")
 
     assert "hf_dataset_bootstrap" in helper
-    assert "hf-dataset-bootstrap.sh" in remote_entrypoint
-    assert "hf-dataset-bootstrap.sh" in local_entrypoint
+    assert helper_name in remote_entrypoint
+    assert helper_name in local_entrypoint
 
 
-def test_local_emulator_start_script_loads_hf_token_file():
-    start_script = (REPO_ROOT / "infrastructure" / "local-emulator" / "start.sh").read_text()
-    emulator_service = (REPO_ROOT / "src" / "gpupoor" / "services" / "emulator.py").read_text()
+def test_local_emulator_start_script_loads_hf_token_file(repo_text):
+    start_script = repo_text("infrastructure", "local-emulator", "start.sh")
+    emulator_service = repo_text("src", "gpupoor", "services", "emulator.py")
 
     assert "python3 -m gpupoor.cli infra emulator" in start_script
     assert "_load_hf_token" in emulator_service
