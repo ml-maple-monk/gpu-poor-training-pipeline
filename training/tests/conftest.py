@@ -272,14 +272,32 @@ def fake_train_args():
         num_hidden_layers=8,
         batch_size=16,
         learning_rate=5e-4,
+        num_attention_heads=8,
+        num_key_value_heads=4,
+        intermediate_size=2432,
+        vocab_size=6400,
+        flash_attn=1,
+        rope_theta=1e6,
         use_moe=0,
+        num_experts=4,
+        num_experts_per_tok=1,
         dtype="bfloat16",
     )
 
 
 @pytest.fixture
 def fake_model_config():
-    return SimpleNamespace(hidden_size=768, num_hidden_layers=8, use_moe=False)
+    return SimpleNamespace(
+        hidden_size=768,
+        num_hidden_layers=8,
+        use_moe=False,
+        num_attention_heads=8,
+        num_key_value_heads=4,
+        intermediate_size=2432,
+        vocab_size=6400,
+        flash_attn=True,
+        rope_theta=1e6,
+    )
 
 
 @pytest.fixture

@@ -3,7 +3,9 @@ from __future__ import annotations
 import math
 
 
-def scheduled_lrs_for_epoch(get_lr, *, epochs: int, iters: int, accumulation_steps: int, learning_rate: float) -> list[float]:
+def scheduled_lrs_for_epoch(
+    get_lr, *, epochs: int, iters: int, accumulation_steps: int, learning_rate: float
+) -> list[float]:
     total_update_steps = epochs * math.ceil(iters / accumulation_steps)
     lrs: list[float] = []
     optimizer_step = 0
@@ -36,3 +38,19 @@ def test_schedule_length_scales_with_optimizer_updates(import_minimind_module) -
     expected_updates = 2 * math.ceil(10 / 4)
     assert len(lrs) == expected_updates
     assert lrs[-1] == get_lr(expected_updates, expected_updates, 0.01)
+
+
+def test_constant_schedule_stays_flat_after_warmup(import_minimind_module) -> None:
+    trainer_utils = import_minimind_module("minimind.trainer.trainer_utils")
+    get_lr = trainer_utils.get_lr
+
+    assert get_lr(1, 10, 1.0, schedule="constant", warmup_steps=2) == 0.5
+    assert get_lr(2, 10, 1.0, schedule="constant", warmup_steps=2) == 1.0
+    assert get_lr(5, 10, 1.0, schedule="constant", warmup_steps=2) == 1.0
+
+
+def test_cosine_schedule_respects_min_ratio(import_minimind_module) -> None:
+    trainer_utils = import_minimind_module("minimind.trainer.trainer_utils")
+    get_lr = trainer_utils.get_lr
+
+    assert get_lr(10, 10, 2.0, schedule="cosine", min_lr_ratio=0.25) == 0.5

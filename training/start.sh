@@ -23,7 +23,7 @@ case "$subcommand" in
     ;;
   local)
     shift
-    config="${1:-examples/tiny_cpu.toml}"
+    config="${1:-examples/tiny_local.toml}"
     if [ "$#" -gt 0 ]; then
       shift
     fi

@@ -18,7 +18,7 @@ import pytest
 from gpupoor.config import ConfigError, load_run_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-VALID_EXAMPLE = REPO_ROOT / "examples" / "tiny_cpu.toml"
+VALID_EXAMPLE = REPO_ROOT / "examples" / "tiny_local.toml"
 
 
 def write_toml(tmp_path: Path, body: str) -> Path:
@@ -30,7 +30,7 @@ def write_toml(tmp_path: Path, body: str) -> Path:
 def test_examples_load_cleanly() -> None:
     """All checked-in examples must parse under strict validation."""
     config = load_run_config(VALID_EXAMPLE)
-    assert config.name == "tiny_cpu"
+    assert config.name == "tiny_local"
 
 
 def test_rejects_unknown_top_level_key(tmp_path: Path) -> None:

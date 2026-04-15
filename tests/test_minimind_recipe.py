@@ -7,7 +7,7 @@ from gpupoor.recipes import minimind
 
 
 def test_ensure_local_dataset_reuses_existing_pretokenized_artifact(tmp_path: Path, monkeypatch) -> None:
-    config = load_run_config("examples/tiny_cpu.toml")
+    config = load_run_config("examples/tiny_local.toml")
     dataset_dir = tmp_path / "data" / "datasets" / "pretrain_t2t_mini"
     dataset_dir.mkdir(parents=True)
     (dataset_dir / "metadata.json").write_text('{"version": 1}', encoding="utf-8")

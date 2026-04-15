@@ -25,6 +25,62 @@ _METRIC_QUEUE_POLL_SECONDS = 0.2
 _METRIC_FLUSH_TIMEOUT_SECONDS = 5.0
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() in ("1", "true", "yes")
+
+
+def _recipe_config_from_runtime(args) -> dict[str, object]:
+    return {
+        "kind": os.environ.get("RECIPE_KIND", "minimind_pretrain"),
+        "prepare_data": _env_flag("RECIPE_PREPARE_DATA", default=False),
+        "dataset_path": getattr(args, "data_path", None),
+        "output_dir": getattr(args, "save_dir", None),
+        "time_cap_seconds": os.environ.get("TIME_CAP_SECONDS"),
+        "max_seq_len": getattr(args, "max_seq_len", None),
+        "validation_split_ratio": getattr(args, "validation_split_ratio", None),
+        "validation_interval_steps": getattr(args, "validation_interval_steps", None),
+    }
+
+
+def _mlflow_runtime_config() -> dict[str, object]:
+    return {
+        "tracking_uri": os.environ.get("MLFLOW_TRACKING_URI", ""),
+        "experiment_name": os.environ.get("MLFLOW_EXPERIMENT_NAME", "minimind-pretrain"),
+        "artifact_upload": _env_flag("MLFLOW_ARTIFACT_UPLOAD", default=False),
+        "enable_system_metrics_logging": _env_flag("MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING", default=True),
+        "system_metrics_sampling_interval": os.environ.get("MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL", "5"),
+        "system_metrics_samples_before_logging": os.environ.get("MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING", "1"),
+        "http_request_max_retries": os.environ.get("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "7"),
+        "http_request_timeout_seconds": os.environ.get("MLFLOW_HTTP_REQUEST_TIMEOUT", "120"),
+        "start_timeout_seconds": os.environ.get("MLFLOW_START_TIMEOUT_SECONDS", "180"),
+        "start_retry_seconds": os.environ.get("MLFLOW_START_RETRY_SECONDS", "5"),
+        "peak_tflops_per_gpu": os.environ.get("MLFLOW_PEAK_TFLOPS_PER_GPU", "0.0"),
+        "time_to_target_metric": os.environ.get("MLFLOW_TIME_TO_TARGET_METRIC", "none"),
+        "time_to_target_value": os.environ.get("MLFLOW_TIME_TO_TARGET_VALUE", "0.0"),
+    }
+
+
+def _log_runtime_config(mlflow, args, model_config) -> None:
+    recipe_cfg = _recipe_config_from_runtime(args)
+    training_cfg = {k: v for k, v in vars(args).items() if v is not None}
+    mlflow_cfg = _mlflow_runtime_config()
+
+    mlflow.log_params({k: str(v) for k, v in training_cfg.items()})
+    mlflow.log_params({f"recipe.{k}": str(v) for k, v in recipe_cfg.items() if v is not None})
+    mlflow.log_params({f"mlflow.{k}": str(v) for k, v in mlflow_cfg.items() if v is not None})
+    try:
+        cfg = {k: v for k, v in vars(model_config).items() if not k.startswith("_")}
+        mlflow.log_dict(cfg, "config/model_config.json")
+    except Exception:
+        pass
+    mlflow.log_dict(training_cfg, "config/training_args.json")
+    mlflow.log_dict(recipe_cfg, "config/recipe_config.json")
+    mlflow.log_dict(mlflow_cfg, "config/mlflow_config.json")
+
+
 def _reset_runtime_state() -> None:
     global \
         _active, \
@@ -157,7 +213,7 @@ def start(args, model_config, script_name="train_pretrain"):
                 f"{script_name}-h{args.hidden_size}-L{args.num_hidden_layers}"
                 f"-bs{args.batch_size}-lr{args.learning_rate}"
             )
-            log_sys = os.environ.get("MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING", "").lower() in ("1", "true", "yes")
+            log_sys = _env_flag("MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING", default=False)
             tags = {
                 "script": script_name,
                 "model_family": "minimind",
@@ -165,17 +221,13 @@ def start(args, model_config, script_name="train_pretrain"):
                 "num_hidden_layers": str(args.num_hidden_layers),
                 "use_moe": str(bool(args.use_moe)),
                 "dtype": args.dtype,
+                "recipe.kind": os.environ.get("RECIPE_KIND", "minimind_pretrain"),
                 "verda.profile": os.environ.get("VERDA_PROFILE", ""),
                 "verda.emulation": os.environ.get("VERDA_EMULATION", "true"),
                 "verda.run_name": os.environ.get("DSTACK_RUN_NAME", ""),
             }
             mlflow.start_run(run_name=run_name, log_system_metrics=log_sys, tags=tags)
-            mlflow.log_params({k: str(v) for k, v in vars(args).items() if v is not None})
-            try:
-                cfg = {k: v for k, v in vars(model_config).items() if not k.startswith("_")}
-                mlflow.log_dict(cfg, "config/model_config.json")
-            except Exception:
-                pass
+            _log_runtime_config(mlflow, args, model_config)
             env_info = {
                 "torch_version": torch.__version__,
                 "cuda_available": torch.cuda.is_available(),

@@ -95,18 +95,18 @@ def test_doctor_delegates_to_package_preflight(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_smoke_delegates_to_package_smoke(monkeypatch: pytest.MonkeyPatch) -> None:
-    config = load_run_config(REPO_ROOT / "examples" / "tiny_cpu.toml")
+    config = load_run_config(REPO_ROOT / "examples" / "tiny_local.toml")
     calls: list[tuple[object, object]] = []
 
     monkeypatch.setattr(cli, "tracked_fingerprint", lambda: "stable")
     monkeypatch.setattr(cli, "load_run_config", lambda path: config)
     monkeypatch.setattr(cli.ops, "run_smoke", lambda config=None, doctor=None: calls.append((config, doctor)))
 
-    cli.dispatch(cli.build_parser().parse_args(["smoke", "examples/tiny_cpu.toml", "--health-port", "9001"]))
+    cli.dispatch(cli.build_parser().parse_args(["smoke", "examples/tiny_local.toml", "--health-port", "9001"]))
 
     assert len(calls) == 1
     smoke_config, doctor_config = calls[0]
-    assert smoke_config.cpu is True
+    assert smoke_config.cpu is False
     assert smoke_config.health_port == 9001
     assert doctor_config == config.doctor
 

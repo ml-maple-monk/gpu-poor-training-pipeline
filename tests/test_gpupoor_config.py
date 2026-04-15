@@ -14,14 +14,22 @@ from gpupoor.utils import repo as repo_utils
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_tiny_cpu_example_loads() -> None:
-    config = load_run_config(REPO_ROOT / "examples" / "tiny_cpu.toml")
+def test_tiny_local_example_loads() -> None:
+    config = load_run_config(REPO_ROOT / "examples" / "tiny_local.toml")
 
-    assert config.name == "tiny_cpu"
+    assert config.name == "tiny_local"
     assert config.backend.kind == "local"
     assert config.recipe.time_cap_seconds == 120
+    assert config.recipe.max_seq_len == 2048
+    assert config.training.batch_size == 16
+    assert config.training.learning_rate == 5e-4
+    assert config.training.num_attention_heads == 8
+    assert config.training.num_key_value_heads == 4
+    assert config.training.intermediate_size == 2432
+    assert config.training.flash_attn is True
+    assert config.training.lr_schedule == "cosine"
     assert config.mlflow.tracking_uri == "http://host.docker.internal:5000"
-    assert config.smoke.cpu is True
+    assert config.smoke.cpu is False
     assert config.smoke.base_image == "nvidia/cuda:12.4.1-runtime-ubuntu22.04"
 
 
@@ -133,6 +141,53 @@ time_to_target_metric = "bad-metric"
         load_run_config(config_file)
 
 
+def test_config_rejects_invalid_attention_head_ratio(tmp_path: Path) -> None:
+    config_file = tmp_path / "bad-heads.toml"
+    config_file.write_text(
+        """
+name = "tiny_local"
+[recipe]
+[training]
+num_attention_heads = 12
+num_key_value_heads = 5
+[backend]
+kind = "local"
+[mlflow]
+[doctor]
+[smoke]
+[remote]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="num_attention_heads must be divisible by training.num_key_value_heads"):
+        load_run_config(config_file)
+
+
+def test_config_derives_intermediate_sizes_from_hidden_size(tmp_path: Path) -> None:
+    config_file = tmp_path / "derived-intermediate.toml"
+    config_file.write_text(
+        """
+name = "tiny_local"
+[recipe]
+[training]
+hidden_size = 512
+[backend]
+kind = "local"
+[mlflow]
+[doctor]
+[smoke]
+[remote]
+""",
+        encoding="utf-8",
+    )
+
+    config = load_run_config(config_file)
+
+    assert config.training.intermediate_size == 1664
+    assert config.training.moe_intermediate_size == 1664
+
+
 def test_non_toml_config_is_rejected(tmp_path: Path) -> None:
     config_file = tmp_path / "invalid.yaml"
     config_file.write_text("name: nope\n", encoding="utf-8")
@@ -184,7 +239,7 @@ kind = "dstack"
 
 
 def test_local_config_still_accepts_underscore_name(tmp_path: Path) -> None:
-    """tiny_cpu.toml uses underscores; the regex must only gate dstack."""
+    """tiny_local.toml uses underscores; the regex must only gate dstack."""
     config_file = tmp_path / "local.toml"
     config_file.write_text(
         """

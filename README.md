@@ -56,7 +56,7 @@ Requires **Python 3.11+**. The `[dev]` extras install linter, formatter, and tes
 
 ```bash
 gpupoor doctor                           # preflight: clocks, docker, secrets
-gpupoor train examples/tiny_cpu.toml     # tiny MiniMind, ~2 min on CPU
+gpupoor train examples/tiny_local.toml   # tiny MiniMind local run
 ```
 
 This is your fast feedback loop. Iterate here until the recipe is happy, then rent a GPU.
@@ -195,7 +195,7 @@ Full schema + validators live in [`src/gpupoor/config.py`](./src/gpupoor/config.
 
 | File                                     | Backend  | Scenario                       |
 | ---------------------------------------- | -------- | ------------------------------ |
-| `examples/tiny_cpu.toml`                 | `local`  | CPU-only smoke / first run     |
+| `examples/tiny_local.toml`               | `local`  | Local first run / smoke path   |
 | `examples/verda_remote.toml`             | `dstack` | Default remote launch          |
 | `examples/verda_a100_10m.toml`           | `dstack` | Single A100, 10-minute cap     |
 | `examples/verda_a100x2_10m.toml`         | `dstack` | 2× A100, 10-minute cap         |
@@ -210,17 +210,12 @@ Full schema + validators live in [`src/gpupoor/config.py`](./src/gpupoor/config.
 
 ```bash
 make format-check        # ruff format --check (CI required)
-make format              # ruff format
 make lint                # ruff check (CI required)
 make lint-fix            # ruff check --fix
 make test-fast           # required PR test lane
-make test-integration    # docker-dependent tests
 make test-live           # live-dashboard / remote smoke
-make test                # everything
 make ci-local            # format-check + lint + test-fast
-make mutants             # mutation testing (scoped to config + dstack)
-make mutants-report
-make mutants-baseline
+make train-local         # launch examples/tiny_local.toml
 ```
 
 **PR-required checks are `quality` and `tests`.** Live, containerized, and remote-dependent lanes stay in the non-blocking `live-checks` workflow. Promotion criteria are tracked in `.omx/plans/prd-repo-guardrails.md`.
@@ -288,13 +283,11 @@ remote-access/
 
 The `run.sh` wrapper exists so existing operator muscle memory still works. It maps named aliases onto the canonical `gpupoor` commands:
 
-| Shortcut            | Equivalent                                  |
-| ------------------- | ------------------------------------------- |
-| `./run.sh setup`    | `gpupoor doctor` → `gpupoor dstack setup`    |
-| `./run.sh local`    | `gpupoor train …`                           |
-| `./run.sh remote`   | `gpupoor launch dstack …`                   |
-| `./run.sh teardown` | `gpupoor dstack teardown`                   |
-| `./run.sh dashboard`| `gpupoor infra dashboard up`                |
+| Shortcut             | Equivalent                  |
+| -------------------- | --------------------------- |
+| `./run.sh local`     | `gpupoor train …`           |
+| `./run.sh remote`    | `gpupoor launch dstack …`   |
+| `./run.sh dashboard` | `gpupoor infra dashboard up`|
 
 Per-component starters (`./training/start.sh`, `./dstack/start.sh`, `./infrastructure/*/start.sh`) remain for anyone driving a single service in isolation.
 

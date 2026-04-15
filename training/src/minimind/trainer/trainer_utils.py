@@ -44,8 +44,30 @@ def Logger(content):
         print(content)
 
 
-def get_lr(current_step, total_steps, lr):
-    return lr * (0.1 + 0.45 * (1 + math.cos(math.pi * current_step / total_steps)))
+def get_lr(current_step, total_steps, lr, *, schedule="cosine", warmup_steps=0, min_lr_ratio=0.1):
+    if total_steps <= 0:
+        raise ValueError("total_steps must be > 0")
+    if warmup_steps < 0:
+        raise ValueError("warmup_steps must be >= 0")
+    if not 0.0 <= min_lr_ratio <= 1.0:
+        raise ValueError("min_lr_ratio must be >= 0.0 and <= 1.0")
+
+    step = max(0, min(current_step, total_steps))
+    if warmup_steps > 0 and step <= warmup_steps:
+        return lr * (step / warmup_steps)
+
+    if schedule == "constant":
+        return lr
+    if schedule != "cosine":
+        raise ValueError(f"Unsupported lr schedule: {schedule}")
+
+    if total_steps <= warmup_steps:
+        return lr
+
+    decay_progress = (step - warmup_steps) / (total_steps - warmup_steps)
+    decay_progress = max(0.0, min(decay_progress, 1.0))
+    cosine = 0.5 * (1.0 + math.cos(math.pi * decay_progress))
+    return lr * (min_lr_ratio + (1.0 - min_lr_ratio) * cosine)
 
 
 def init_distributed_mode():

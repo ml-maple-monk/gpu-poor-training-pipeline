@@ -57,7 +57,8 @@ The local container mounts `training/src/minimind` into `/workspace/minimind`, s
 ## Remote Training
 
 ```bash
-./run.sh setup
+python3 -m gpupoor.cli doctor examples/verda_remote.toml --remote
+python3 -m gpupoor.cli dstack setup
 ./infrastructure/mlflow/start.sh up
 ./run.sh remote
 ```

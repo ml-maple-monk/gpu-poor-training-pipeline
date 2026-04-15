@@ -232,6 +232,13 @@ def test_launch_remote_keeps_tunnel_alive_after_success(tmp_path: Path, monkeypa
     assert apply_envs[0]["HF_DATASET_FILENAME"] == "custom.jsonl"
     assert apply_envs[0]["HF_PRETOKENIZED_DATASET_REPO"] == "example/dataset"
     assert apply_envs[0]["HF_PRETOKENIZED_DATASET_FILENAME"] == "pretokenized/custom.tar.gz"
+    assert apply_envs[0]["TRAIN_BATCH_SIZE"] == str(config.training.batch_size)
+    assert apply_envs[0]["TRAIN_LEARNING_RATE"] == str(config.training.learning_rate)
+    assert apply_envs[0]["TRAIN_NUM_ATTENTION_HEADS"] == str(config.training.num_attention_heads)
+    assert apply_envs[0]["TRAIN_NUM_KEY_VALUE_HEADS"] == str(config.training.num_key_value_heads)
+    assert apply_envs[0]["TRAIN_INTERMEDIATE_SIZE"] == str(config.training.intermediate_size)
+    assert apply_envs[0]["TRAIN_LR_SCHEDULE"] == config.training.lr_schedule
+    assert apply_envs[0]["MAX_SEQ_LEN"] == str(config.recipe.max_seq_len)
     assert apply_envs[0]["TIME_CAP_SECONDS"] == str(config.recipe.time_cap_seconds)
     assert apply_envs[0]["MLFLOW_EXPERIMENT_NAME"] == config.mlflow.experiment_name
 

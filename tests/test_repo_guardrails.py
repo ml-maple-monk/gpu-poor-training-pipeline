@@ -43,6 +43,16 @@ def test_makefile_exposes_required_guardrail_commands() -> None:
     ):
         assert f"{target}:" in text
 
+    for removed_target in (
+        "format:",
+        "test:",
+        "test-integration:",
+        "mutants:",
+        "mutants-report:",
+        "mutants-baseline:",
+    ):
+        assert removed_target not in text
+
     assert "pre_commit install --install-hooks" in text
     assert "pre_commit run --all-files --show-diff-on-failure" in text
     assert "--cov=src/gpupoor" in text

@@ -9,11 +9,8 @@ usage() {
 Usage: ./run.sh <subcommand> [config.toml] [options]
 
 Subcommands:
-  setup               Run remote doctor checks, then render dstack config
-  fix-clock           Sync the WSL2 clock using the repo default config
-  local               Run local training (default config: examples/tiny_cpu.toml)
+  local               Run local training (default config: examples/tiny_local.toml)
   remote              Launch remote training (default config: examples/verda_remote.toml)
-  teardown            Stop tracked dstack runs and clean up tunnel state
   dashboard [action]  Manage the dashboard (default action: up)
 EOF
 }
@@ -23,27 +20,9 @@ case "$subcommand" in
   "" | help | -h | --help)
     usage
     ;;
-  setup)
-    shift
-    config="examples/verda_remote.toml"
-    if [ "${1:-}" != "" ] && [[ "${1:-}" != -* ]]; then
-      config="$1"
-      shift
-    fi
-    python3 -m gpupoor.cli doctor "$config" --remote
-    exec python3 -m gpupoor.cli dstack setup "$@"
-    ;;
-  fix-clock)
-    shift
-    config="${1:-examples/verda_remote.toml}"
-    if [ "$#" -gt 0 ]; then
-      shift
-    fi
-    exec python3 -m gpupoor.cli fix-clock "$config" "$@"
-    ;;
   local)
     shift
-    config="${1:-examples/tiny_cpu.toml}"
+    config="${1:-examples/tiny_local.toml}"
     if [ "$#" -gt 0 ]; then
       shift
     fi
@@ -57,10 +36,6 @@ case "$subcommand" in
       shift
     fi
     exec python3 -m gpupoor.cli launch dstack "$config" "$@"
-    ;;
-  teardown)
-    shift
-    exec python3 -m gpupoor.cli dstack teardown "$@"
     ;;
   dashboard)
     shift
