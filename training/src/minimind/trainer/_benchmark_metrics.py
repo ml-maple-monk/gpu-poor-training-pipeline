@@ -2,13 +2,27 @@
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import random
 import re
 from typing import Any
 
-import pynvml
 import torch
 import torch.distributed as dist
+
+_PYNVML_UNSET = object()
+pynvml: Any = _PYNVML_UNSET
+
+
+def _load_pynvml() -> Any | None:
+    global pynvml
+    if pynvml is _PYNVML_UNSET:
+        if importlib.util.find_spec("pynvml") is None:
+            pynvml = None
+        else:
+            pynvml = importlib.import_module("pynvml")
+    return None if pynvml is _PYNVML_UNSET else pynvml
 
 
 class PeakFlopsProfile:
@@ -216,7 +230,8 @@ class NvmlEnergyMeter:
     """Best-effort cumulative GPU energy reader for one process / one GPU."""
 
     def __init__(self, device_index: int):
-        self.enabled = pynvml is not None and torch.cuda.is_available()
+        self._pynvml = _load_pynvml()
+        self.enabled = self._pynvml is not None and torch.cuda.is_available()
         self.handle: Any | None = None
         self.start_mj: int | None = None
 
@@ -224,9 +239,9 @@ class NvmlEnergyMeter:
             return
 
         try:
-            pynvml.nvmlInit()
-            self.handle = pynvml.nvmlDeviceGetHandleByIndex(device_index)
-            self.start_mj = pynvml.nvmlDeviceGetTotalEnergyConsumption(self.handle)
+            self._pynvml.nvmlInit()
+            self.handle = self._pynvml.nvmlDeviceGetHandleByIndex(device_index)
+            self.start_mj = self._pynvml.nvmlDeviceGetTotalEnergyConsumption(self.handle)
         except Exception:
             self.enabled = False
             self.handle = None
@@ -237,7 +252,7 @@ class NvmlEnergyMeter:
             return None
 
         try:
-            current_mj = pynvml.nvmlDeviceGetTotalEnergyConsumption(self.handle)
+            current_mj = self._pynvml.nvmlDeviceGetTotalEnergyConsumption(self.handle)
         except Exception:
             self.enabled = False
             return None
