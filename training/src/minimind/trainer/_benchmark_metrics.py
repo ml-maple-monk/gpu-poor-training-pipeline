@@ -6,11 +6,9 @@ import random
 import re
 from typing import Any
 
+import pynvml
 import torch
 import torch.distributed as dist
-
-import pynvml
-
 
 
 class PeakFlopsProfile:

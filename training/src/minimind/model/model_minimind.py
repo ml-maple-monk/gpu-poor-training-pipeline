@@ -281,8 +281,9 @@ class MiniMindModel(nn.Module):
         self.register_buffer("freqs_cos", freqs_cos, persistent=False)
         self.register_buffer("freqs_sin", freqs_sin, persistent=False)
 
-    def forward(self, input_ids, attention_mask=None, position_ids=None, past_key_values=None, use_cache=False, **kwargs):
-        _, seq_length = input_ids.shape
+    def forward(
+        self, input_ids, attention_mask=None, position_ids=None, past_key_values=None, use_cache=False, **kwargs
+    ):
         if hasattr(past_key_values, "layers"):
             past_key_values = None
         past_key_values = past_key_values or [None] * len(self.layers)
@@ -377,8 +378,10 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
         for _ in range(max_new_tokens):
             past_len = past_key_values[0][0].shape[1] if past_key_values else 0
             if attention_mask is None:
-                full_position_ids = torch.arange(input_ids.shape[1], device=input_ids.device).view(1, -1).expand(
-                    input_ids.shape[0], -1
+                full_position_ids = (
+                    torch.arange(input_ids.shape[1], device=input_ids.device)
+                    .view(1, -1)
+                    .expand(input_ids.shape[0], -1)
                 )
             else:
                 full_position_ids = attention_mask.long().cumsum(dim=-1) - 1

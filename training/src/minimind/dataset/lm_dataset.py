@@ -252,9 +252,11 @@ def build_pretokenized_corpus(
 
     token_count = 0
     sample_count = 0
-    with source_path.open(encoding="utf-8") as source, tokens_tmp.open("wb") as tokens_fp, index_tmp.open(
-        "wb"
-    ) as index_fp:
+    with (
+        source_path.open(encoding="utf-8") as source,
+        tokens_tmp.open("wb") as tokens_fp,
+        index_tmp.open("wb") as index_fp,
+    ):
         for line_number, line in enumerate(source, start=1):
             if not line.strip():
                 continue

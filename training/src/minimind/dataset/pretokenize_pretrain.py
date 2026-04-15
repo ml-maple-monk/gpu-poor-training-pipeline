@@ -26,7 +26,9 @@ from dataset.lm_dataset import build_pretokenized_corpus
     type=click.Path(path_type=str),
     help="Tokenizer directory passed to AutoTokenizer",
 )
-@click.option("--max_length", default=340, show_default=True, type=int, help="Sequence length used during pretokenization")
+@click.option(
+    "--max_length", default=340, show_default=True, type=int, help="Sequence length used during pretokenization"
+)
 @click.option("--overwrite", is_flag=True, help="Replace an existing output directory")
 @click.option(
     "--progress_interval",

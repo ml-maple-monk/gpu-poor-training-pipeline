@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import os
 import queue
+import sys
 import threading
 import time
 import traceback
@@ -81,7 +82,16 @@ def _enqueue_metrics(metrics, step) -> None:
 
 
 def _load_mlflow_module():
-    if importlib.util.find_spec("mlflow") is None:
+    existing = sys.modules.get("mlflow")
+    if existing is not None:
+        return existing
+
+    try:
+        spec = importlib.util.find_spec("mlflow")
+    except ValueError:
+        return None
+
+    if spec is None:
         return None
 
     import mlflow

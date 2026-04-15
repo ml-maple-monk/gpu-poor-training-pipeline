@@ -32,6 +32,11 @@ from trainer._benchmark_metrics import (
     split_validation_indices,
     world_size,
 )
+from trainer._mlflow_helper import finish as _mlflow_finish
+from trainer._mlflow_helper import log_checkpoint as _mlflow_log_ckpt
+from trainer._mlflow_helper import log_metrics as _mlflow_log_metrics
+from trainer._mlflow_helper import log_step as _mlflow_log_step
+from trainer._mlflow_helper import start as _mlflow_start
 from trainer.trainer_utils import (
     Logger,
     SkipBatchSampler,
@@ -42,12 +47,6 @@ from trainer.trainer_utils import (
     lm_checkpoint,
     setup_seed,
 )
-from trainer._mlflow_helper import finish as _mlflow_finish
-from trainer._mlflow_helper import log_checkpoint as _mlflow_log_ckpt
-from trainer._mlflow_helper import log_metrics as _mlflow_log_metrics
-from trainer._mlflow_helper import log_step as _mlflow_log_step
-from trainer._mlflow_helper import start as _mlflow_start
-
 
 warnings.filterwarnings("ignore")
 
@@ -409,14 +408,28 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None, val_loader=None)
 
 def _coerce_args(options):
     runtime_args = SimpleNamespace(**options)
-    runtime_args.peak_tflops_per_gpu = runtime_args.peak_tflops_per_gpu if runtime_args.peak_tflops_per_gpu > 0 else None
-    runtime_args.time_to_target_value = runtime_args.time_to_target_value if runtime_args.time_to_target_value > 0 else None
+    runtime_args.peak_tflops_per_gpu = (
+        runtime_args.peak_tflops_per_gpu if runtime_args.peak_tflops_per_gpu > 0 else None
+    )
+    runtime_args.time_to_target_value = (
+        runtime_args.time_to_target_value if runtime_args.time_to_target_value > 0 else None
+    )
     runtime_args.peak_fp8_tflops_per_gpu = None
     return runtime_args
 
 
 def run_training(runtime_args):
-    global args, autocast_ctx, collective_device, device_type, energy_meter, lm_config, metric_state, model, optimizer, scaler
+    global \
+        args, \
+        autocast_ctx, \
+        collective_device, \
+        device_type, \
+        energy_meter, \
+        lm_config, \
+        metric_state, \
+        model, \
+        optimizer, \
+        scaler
 
     args = runtime_args
     signal.signal(signal.SIGTERM, _sigterm_handler)
@@ -574,14 +587,28 @@ def run_training(runtime_args):
 @click.option("--save_interval", default=1000, show_default=True, type=int, help="模型保存间隔")
 @click.option("--hidden_size", default=768, show_default=True, type=int, help="隐藏层维度")
 @click.option("--num_hidden_layers", default=8, show_default=True, type=int, help="隐藏层数量")
-@click.option("--max_seq_len", default=340, show_default=True, type=int, help="训练的最大截断长度（中文1token≈1.5~1.7字符）")
-@click.option("--use_moe", default=0, show_default=True, type=click.IntRange(0, 1), help="是否使用MoE架构（0=否，1=是）")
-@click.option("--data_path", default="../dataset/pretrain_t2t_mini", show_default=True, type=str, help="预训练数据路径")
+@click.option(
+    "--max_seq_len", default=340, show_default=True, type=int, help="训练的最大截断长度（中文1token≈1.5~1.7字符）"
+)
+@click.option(
+    "--use_moe", default=0, show_default=True, type=click.IntRange(0, 1), help="是否使用MoE架构（0=否，1=是）"
+)
+@click.option(
+    "--data_path", default="../dataset/pretrain_t2t_mini", show_default=True, type=str, help="预训练数据路径"
+)
 @click.option("--from_weight", default="none", show_default=True, type=str, help="基于哪个权重训练，为none则从头开始")
-@click.option("--from_resume", default=0, show_default=True, type=click.IntRange(0, 1), help="是否自动检测&续训（0=否，1=是）")
+@click.option(
+    "--from_resume", default=0, show_default=True, type=click.IntRange(0, 1), help="是否自动检测&续训（0=否，1=是）"
+)
 @click.option("--use_wandb", is_flag=True, help="是否使用wandb")
 @click.option("--wandb_project", default="MiniMind-Pretrain", show_default=True, type=str, help="wandb项目名")
-@click.option("--use_compile", default=0, show_default=True, type=click.IntRange(0, 1), help="是否使用torch.compile加速（0=否，1=是）")
+@click.option(
+    "--use_compile",
+    default=0,
+    show_default=True,
+    type=click.IntRange(0, 1),
+    help="是否使用torch.compile加速（0=否，1=是）",
+)
 @click.option("--validation_split_ratio", default=0.0, show_default=True, type=float, help="验证集切分比例")
 @click.option("--validation_interval_steps", default=0, show_default=True, type=int, help="验证间隔（优化器步数）")
 @click.option("--peak_tflops_per_gpu", default=0.0, show_default=True, type=float, help="每卡峰值TFLOPs，用于MFU")
