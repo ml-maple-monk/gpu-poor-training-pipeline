@@ -97,9 +97,7 @@ def test_training_wrappers_invoke_runtime_loader_via_python(repo_text, script_pa
         ),
     ],
 )
-def test_training_wrappers_fail_loudly_when_runtime_env_is_incomplete(
-    repo_text, script_path, expected_error
-) -> None:
+def test_training_wrappers_fail_loudly_when_runtime_env_is_incomplete(repo_text, script_path, expected_error) -> None:
     script = repo_text(*script_path)
 
     assert "require_loaded_runtime_env()" in script

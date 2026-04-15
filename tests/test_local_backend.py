@@ -1,6 +1,7 @@
 """Tests for the local training backend."""
 
 from __future__ import annotations
+
 from pathlib import Path
 
 import pytest
@@ -71,8 +72,7 @@ def test_run_training_can_log_effective_env_when_debug_enabled(monkeypatch) -> N
     local.run_training(config)
 
     assert any(
-        message == "local-train env GPUPOOR_RUN_CONFIG=/workspace/gpupoor-run-config.toml"
-        for message in messages
+        message == "local-train env GPUPOOR_RUN_CONFIG=/workspace/gpupoor-run-config.toml" for message in messages
     )
 
 
@@ -97,7 +97,4 @@ def test_run_training_logs_saved_config_summary(monkeypatch) -> None:
         f"hidden_size={config.training.hidden_size} "
         f"num_hidden_layers={config.training.num_hidden_layers}"
     )
-    assert any(
-        message == expected_message
-        for message in messages
-    )
+    assert any(message == expected_message for message in messages)
