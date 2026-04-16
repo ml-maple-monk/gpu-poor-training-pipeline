@@ -7,6 +7,7 @@ services:
       dockerfile: docker/Dockerfile
     container_name: ${DSTACK_CONTAINER_NAME}
     working_dir: /tmp
+    user: "root"
     entrypoint: []
     environment:
       HOME: /tmp
@@ -15,7 +16,7 @@ services:
     command:
       - /bin/sh
       - -lc
-      - rm -rf /tmp/.dstack && mkdir -p /tmp/.dstack && cp -a /seed-dstack/. /tmp/.dstack/ && exec /home/geeyang/.dstack-cli-venv/bin/dstack server --host 0.0.0.0 --port ${DSTACK_SERVER_PORT} -y
+      - rm -rf /tmp/.dstack && cp -r --no-preserve=all /seed-dstack /tmp/.dstack && chown -R app:app /tmp/.dstack && exec su -s /bin/sh app -c 'HOME=/tmp XDG_CACHE_HOME=/tmp/.cache exec /home/geeyang/.dstack-cli-venv/bin/dstack server --host 0.0.0.0 --port ${DSTACK_SERVER_PORT} -y'
     tmpfs:
       - /tmp:size=128m,mode=1777
     volumes:
@@ -27,6 +28,11 @@ services:
       - "no-new-privileges:true"
     cap_drop:
       - ALL
+    cap_add:
+      - DAC_OVERRIDE
+      - CHOWN
+      - SETUID
+      - SETGID
     healthcheck:
       test:
         - CMD
