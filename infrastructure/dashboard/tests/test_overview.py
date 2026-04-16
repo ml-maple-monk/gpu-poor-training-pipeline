@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections import deque
 import sys
+from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -118,8 +118,9 @@ def test_market_grid_renders_fixed_gpu_cards_with_svg_and_repeated_backend_rows(
     assert "vd-avail-chart" in html
     assert "polyline" in html
     assert "vd-offer-card-best" not in html
-    assert html.count("runpod") == 2
-    assert html.index("vastai") < html.index("runpod")
+    assert "h100-spot-a" in html
+    assert "h100-spot-b" in html
+    assert html.index("h100-on-demand") < html.index("h100-spot-a")
     assert "No availability" in html
 
 

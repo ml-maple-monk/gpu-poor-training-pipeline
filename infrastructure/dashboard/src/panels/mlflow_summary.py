@@ -42,10 +42,10 @@ def format_mlflow_md(state: AppState) -> str:
     latest = runs[0] if runs else None
 
     body = [
-        "<section class=\"section-card section-card--mlflow-summary\">",
-        "<div class=\"section-kicker\">Experiment flow</div>",
-        "<div class=\"section-title\">MLflow activity</div>",
-        "<div class=\"chip-strip compact\">",
+        '<section class="section-card section-card--mlflow-summary">',
+        '<div class="section-kicker">Experiment flow</div>',
+        '<div class="section-title">MLflow activity</div>',
+        '<div class="chip-strip compact">',
         badge(f"{len(runs)} tracked", tone="neutral"),
         badge(f"{len(running)} running", tone="good" if running else "neutral"),
         badge(f"{len(finished)} finished", tone="good" if finished else "neutral"),
@@ -55,11 +55,11 @@ def format_mlflow_md(state: AppState) -> str:
     ]
 
     if latest is None:
-        body.append("<div class=\"section-empty\">No recent MLflow runs were found.</div>")
+        body.append('<div class="section-empty">No recent MLflow runs were found.</div>')
     else:
         body.extend(
             [
-                "<div class=\"meta-stack\">",
+                '<div class="meta-stack">',
                 meta("Latest run", latest.run_name or latest.run_id[:8]),
                 meta("Started", compact_time(latest.start_time)),
                 meta("Experiment", latest.experiment_id or "n/a"),
@@ -78,10 +78,10 @@ def format_mlflow_glance(state: AppState, limit: int = 5) -> str:
 
     if not runs:
         return (
-            "<section class=\"section-card section-card--mlflow-feed\">"
-            "<div class=\"section-kicker\">Run board</div>"
-            "<div class=\"section-title\">Recent runs</div>"
-            "<div class=\"section-empty\">Nothing has hit MLflow recently.</div>"
+            '<section class="section-card section-card--mlflow-feed">'
+            '<div class="section-kicker">Run board</div>'
+            '<div class="section-title">Recent runs</div>'
+            '<div class="section-empty">Nothing has hit MLflow recently.</div>'
             "</section>"
         )
 
@@ -91,24 +91,22 @@ def format_mlflow_glance(state: AppState, limit: int = 5) -> str:
         for key, value in list(run.metrics.items())[:2]:
             metric_items.append(f"{esc(key)}={value:.4g}")
         items.append(
-            "<article class=\"feed-card\">"
-            f"<div class=\"feed-card-top\">{badge(run.status or 'unknown', tone=tone_for_status(run.status))}<span class=\"feed-card-time\">{esc(compact_time(run.start_time))}</span></div>"
-            f"<div class=\"feed-card-title\">{esc(run.run_name or run.run_id[:8])}</div>"
-            f"<div class=\"feed-card-meta\">exp {esc(run.experiment_id or 'n/a')}</div>"
+            '<article class="feed-card">'
+            f'<div class="feed-card-top">{badge(run.status or "unknown", tone=tone_for_status(run.status))}<span class="feed-card-time">{esc(compact_time(run.start_time))}</span></div>'
+            f'<div class="feed-card-title">{esc(run.run_name or run.run_id[:8])}</div>'
+            f'<div class="feed-card-meta">exp {esc(run.experiment_id or "n/a")}</div>'
             + (
-                f"<div class=\"feed-card-metrics\">{' · '.join(metric_items)}</div>"
+                f'<div class="feed-card-metrics">{" · ".join(metric_items)}</div>'
                 if metric_items
-                else "<div class=\"feed-card-metrics muted-copy\">No scalar metrics yet.</div>"
+                else '<div class="feed-card-metrics muted-copy">No scalar metrics yet.</div>'
             )
             + "</article>"
         )
 
     return (
-        "<section class=\"section-card section-card--mlflow-feed\">"
-        "<div class=\"section-kicker\">Run board</div>"
-        "<div class=\"section-title\">Recent runs</div>"
-        "<div class=\"feed-grid\">"
-        + "".join(items)
-        + "</div>"
+        '<section class="section-card section-card--mlflow-feed">'
+        '<div class="section-kicker">Run board</div>'
+        '<div class="section-title">Recent runs</div>'
+        '<div class="feed-grid">' + "".join(items) + "</div>"
         "</section>"
     )

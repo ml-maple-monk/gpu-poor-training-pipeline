@@ -98,11 +98,7 @@ def _filter_offers_by_memory(offers: list[dict[str, Any]], min_memory_mib: int |
     if min_memory_mib is None:
         return offers
 
-    filtered = [
-        offer
-        for offer in offers
-        if _first_gpu_memory_mib(offer) >= min_memory_mib
-    ]
+    filtered = [offer for offer in offers if _first_gpu_memory_mib(offer) >= min_memory_mib]
     return filtered or offers
 
 

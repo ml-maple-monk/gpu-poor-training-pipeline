@@ -36,11 +36,7 @@ def _archive_offer_snapshots(state: AppState, offers: list[SeekerOffer], now: da
         grouped.setdefault((offer.gpu_name, offer.backend), []).append(offer)
 
     backends = sorted({offer.backend for offer in offers if offer.backend})
-    tracked_pairs = {
-        (gpu_display_name, backend)
-        for _, gpu_display_name, _ in GPU_SPECS
-        for backend in backends
-    }
+    tracked_pairs = {(gpu_display_name, backend) for _, gpu_display_name, _ in GPU_SPECS for backend in backends}
     tracked_pairs.update(grouped)
 
     for gpu_name, backend in sorted(tracked_pairs):

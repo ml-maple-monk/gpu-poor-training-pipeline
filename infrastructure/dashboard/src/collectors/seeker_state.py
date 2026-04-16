@@ -65,7 +65,9 @@ def parse_attempt(item: dict[str, Any]) -> SeekerAttempt:
     )
 
 
-def collect_seeker_state() -> tuple[list[SeekerOffer], SeekerJob | None, list[SeekerJob], list[SeekerAttempt], SourceStatus]:
+def collect_seeker_state() -> tuple[
+    list[SeekerOffer], SeekerJob | None, list[SeekerJob], list[SeekerAttempt], SourceStatus
+]:
     offers_file = seeker_dir() / "latest_offers.json"
     queue_file = seeker_dir() / "queue.json"
     attempts_file = seeker_dir() / "attempts.jsonl"
@@ -80,23 +82,11 @@ def collect_seeker_state() -> tuple[list[SeekerOffer], SeekerJob | None, list[Se
                 line = line.strip()
                 if line:
                     attempts_rows.append(json.loads(line))
-        offers = [
-            parse_offer(item)
-            for item in offers_payload.get("offers", [])
-            if isinstance(item, dict)
-        ]
+        offers = [parse_offer(item) for item in offers_payload.get("offers", []) if isinstance(item, dict)]
         active_raw = queue_payload.get("active")
         active = parse_job(active_raw) if isinstance(active_raw, dict) else None
-        pending = [
-            parse_job(item)
-            for item in queue_payload.get("pending", [])
-            if isinstance(item, dict)
-        ]
-        attempts = [
-            parse_attempt(item)
-            for item in attempts_rows[-10:]
-            if isinstance(item, dict)
-        ]
+        pending = [parse_job(item) for item in queue_payload.get("pending", []) if isinstance(item, dict)]
+        attempts = [parse_attempt(item) for item in attempts_rows[-10:] if isinstance(item, dict)]
         return offers, active, pending, attempts, SourceStatus.OK
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         log.warning("seeker state collect failed: %s", exc)

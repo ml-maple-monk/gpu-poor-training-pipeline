@@ -71,15 +71,15 @@ def badge(label: str, *, tone: str = _NEUTRAL, subtle: bool = False) -> str:
     classes = ["tone-pill", f"tone-{tone}"]
     if subtle:
         classes.append("is-subtle")
-    return f"<span class=\"{' '.join(classes)}\">{esc(label)}</span>"
+    return f'<span class="{" ".join(classes)}">{esc(label)}</span>'
 
 
 def meta(label: str, value: str) -> str:
     """Render a small label/value pair for dense cards."""
     return (
-        "<div class=\"meta-row\">"
-        f"<span class=\"meta-label\">{esc(label)}</span>"
-        f"<span class=\"meta-value\">{esc(value)}</span>"
+        '<div class="meta-row">'
+        f'<span class="meta-label">{esc(label)}</span>'
+        f'<span class="meta-value">{esc(value)}</span>'
         "</div>"
     )
 
@@ -87,10 +87,10 @@ def meta(label: str, value: str) -> str:
 def stat_card(label: str, value: str, detail: str, *, tone: str = _NEUTRAL) -> str:
     """Render one compact KPI card for hero sections."""
     return (
-        f"<article class=\"hero-stat tone-{tone}\">"
-        f"<div class=\"hero-stat-label\">{esc(label)}</div>"
-        f"<div class=\"hero-stat-value\">{esc(value)}</div>"
-        f"<div class=\"hero-stat-detail\">{esc(detail)}</div>"
+        f'<article class="hero-stat tone-{tone}">'
+        f'<div class="hero-stat-label">{esc(label)}</div>'
+        f'<div class="hero-stat-value">{esc(value)}</div>'
+        f'<div class="hero-stat-detail">{esc(detail)}</div>'
         "</article>"
     )
 
@@ -99,11 +99,11 @@ def progress_row(label: str, value: float | int, detail: str, *, tone: str = _NE
     """Render a horizontal progress row."""
     amount = max(0.0, min(100.0, float(value)))
     return (
-        "<div class=\"progress-row\">"
-        "<div class=\"progress-copy\">"
-        f"<span class=\"progress-label\">{esc(label)}</span>"
-        f"<span class=\"progress-value\">{esc(detail)}</span>"
+        '<div class="progress-row">'
+        '<div class="progress-copy">'
+        f'<span class="progress-label">{esc(label)}</span>'
+        f'<span class="progress-value">{esc(detail)}</span>'
         "</div>"
-        f"<div class=\"progress-track\"><span class=\"progress-fill tone-{tone}\" style=\"width: {amount:.1f}%\"></span></div>"
+        f'<div class="progress-track"><span class="progress-fill tone-{tone}" style="width: {amount:.1f}%"></span></div>'
         "</div>"
     )

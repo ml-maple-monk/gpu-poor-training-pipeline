@@ -263,13 +263,7 @@ def cloudflare_dns_token() -> str | None:
 
 def cloudflare_zone_id() -> str:
     raw = read_mapping_file(cloudflare_secret_path())
-    return (
-        raw.get("ZoneID")
-        or raw.get("Zone-id")
-        or raw.get("Zone ID")
-        or raw.get("zone_id")
-        or ""
-    )
+    return raw.get("ZoneID") or raw.get("Zone-id") or raw.get("Zone ID") or raw.get("zone_id") or ""
 
 
 def find_existing_tunnel(account_id: str, api_token: str, tunnel_name: str) -> dict[str, Any] | None:
@@ -324,9 +318,15 @@ def publish_tunnel_config(account_id: str, api_token: str, tunnel_id: str, domai
         payload={
             "config": {
                 "ingress": [
-                    {"hostname": hostnames["CF_MLFLOW_API_HOST"], "service": f"http://localhost:{default_mlflow_port}"},
+                    {
+                        "hostname": hostnames["CF_MLFLOW_API_HOST"],
+                        "service": f"http://localhost:{default_mlflow_port}",
+                    },
                     {"hostname": hostnames["CF_MLFLOW_UI_HOST"], "service": f"http://localhost:{default_mlflow_port}"},
-                    {"hostname": hostnames["CF_DASHBOARD_HOST"], "service": f"http://localhost:{default_dashboard_port}"},
+                    {
+                        "hostname": hostnames["CF_DASHBOARD_HOST"],
+                        "service": f"http://localhost:{default_dashboard_port}",
+                    },
                     {"service": "http_status:404"},
                 ]
             }
@@ -382,10 +382,16 @@ def normalized_r2_values(raw: dict[str, str], connector_env: dict[str, str]) -> 
         "endpoint url": "MLFLOW_S3_ENDPOINT_URL",
         "s3 endpoint": "MLFLOW_S3_ENDPOINT_URL",
     }
-    _known_output_keys = frozenset({
-        "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_DEFAULT_REGION",
-        "MLFLOW_S3_ENDPOINT_URL", "MLFLOW_ARTIFACTS_DESTINATION", "R2_BUCKET_NAME",
-    })
+    _known_output_keys = frozenset(
+        {
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_DEFAULT_REGION",
+            "MLFLOW_S3_ENDPOINT_URL",
+            "MLFLOW_ARTIFACTS_DESTINATION",
+            "R2_BUCKET_NAME",
+        }
+    )
     normalized: dict[str, str] = {}
     for key, value in values.items():
         normalized_key = aliases.get(key.lower())
@@ -426,11 +432,16 @@ def sync_r2_env() -> dict[str, str]:
         # Fall back: check the cloudflare credentials file for R2 keys.
         cf_raw = read_mapping_file(cloudflare_secret_path())
         r2_keys_present = any(
-            k.lower().replace("-", "_").replace(" ", "_") in (
-                "access_key_id", "accesskeyid",
-                "secret_access_key", "secretaccesskey",
-                "s3_access_key", "s3_secret_key",
-                "s3_access_key_id", "s3_secret_access_key",
+            k.lower().replace("-", "_").replace(" ", "_")
+            in (
+                "access_key_id",
+                "accesskeyid",
+                "secret_access_key",
+                "secretaccesskey",
+                "s3_access_key",
+                "s3_secret_key",
+                "s3_access_key_id",
+                "s3_secret_access_key",
             )
             for k in cf_raw
         )
@@ -449,13 +460,18 @@ def r2_candidate_mapping() -> tuple[dict[str, str], str]:
         return raw, str(r2_credentials_path())
     cf_raw = read_mapping_file(cloudflare_secret_path())
     r2_keys_present = any(
-        key.lower().replace("-", "_").replace(" ", "_") in
-        (
-            "access_key_id", "accesskeyid",
-            "secret_access_key", "secretaccesskey",
-            "s3_access_key", "s3_secret_key",
-            "s3_access_key_id", "s3_secret_access_key",
-            "bucket", "bucket_name",
+        key.lower().replace("-", "_").replace(" ", "_")
+        in (
+            "access_key_id",
+            "accesskeyid",
+            "secret_access_key",
+            "secretaccesskey",
+            "s3_access_key",
+            "s3_secret_key",
+            "s3_access_key_id",
+            "s3_secret_access_key",
+            "bucket",
+            "bucket_name",
         )
         for key in cf_raw
     )
@@ -513,9 +529,7 @@ def r2_status_payload() -> dict[str, Any]:
     diagnostics["r2_api_accessible"] = True
     if isinstance(result, list):
         diagnostics["r2_bucket_names"] = [
-            str(bucket.get("name"))
-            for bucket in result
-            if isinstance(bucket, dict) and bucket.get("name")
+            str(bucket.get("name")) for bucket in result if isinstance(bucket, dict) and bucket.get("name")
         ]
     diagnostics["r2_status"] = "blocked"
     diagnostics["r2_blocker"] = (
@@ -775,7 +789,7 @@ def ensure_remote_runtime(config: RunConfig) -> ConnectionBundle:
         mlflow_auth_mode="none",
         mlflow_auth_payload="",
         artifact_upload_enabled=config.mlflow.artifact_upload,
-        artifact_store_kind=artifact_store_kind(),
+        artifact_store_kind=str(payload.get("artifact_store_kind", artifact_store_kind())),
         health_verdict="healthy",
     )
 
@@ -913,10 +927,7 @@ def doctor() -> None:
             + (f" ({payload.get('remote_mlflow_blocker', '')})" if payload.get("remote_mlflow_blocker") else "")
         )
     if payload["r2_status"] != "ready":
-        missing.append(
-            "R2 is not ready"
-            + (f" ({payload['r2_blocker']})" if payload["r2_blocker"] else "")
-        )
+        missing.append("R2 is not ready" + (f" ({payload['r2_blocker']})" if payload["r2_blocker"] else ""))
     if missing:
         raise RuntimeError("; ".join(missing))
     if not payload.get("public_dashboard_ready", False) and payload.get("public_dashboard_blocker"):

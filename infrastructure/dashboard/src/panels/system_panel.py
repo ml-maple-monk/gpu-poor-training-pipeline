@@ -45,17 +45,21 @@ def format_system_glance(state: AppState) -> str:
         sys = state.system
 
     body = [
-        "<section class=\"section-card section-card--system\">",
-        "<div class=\"section-kicker\">Host telemetry</div>",
-        f"<div class=\"section-title\">{esc(sys.hostname or 'unknown host')}</div>",
-        f"<div class=\"section-subtitle\">{esc(sys.gpu_name or 'CPU-only host')} · driver {esc(sys.gpu_driver or 'n/a')}</div>",
-        "<div class=\"meta-stack\">",
+        '<section class="section-card section-card--system">',
+        '<div class="section-kicker">Host telemetry</div>',
+        f'<div class="section-title">{esc(sys.hostname or "unknown host")}</div>',
+        f'<div class="section-subtitle">{esc(sys.gpu_name or "CPU-only host")} · driver {esc(sys.gpu_driver or "n/a")}</div>',
+        '<div class="meta-stack">',
         meta("CPU cores", str(sys.cpu_count or 0)),
         meta("Memory", f"{sys.mem_used_gb:.1f}/{sys.mem_total_gb:.1f} GB"),
         meta("GPU temp", f"{sys.gpu_temp_c:.0f}C" if sys.nvidia_smi_available else "n/a"),
         "</div>",
-        progress_row("CPU", sys.cpu_percent, f"{sys.cpu_percent:.1f}% busy", tone="warn" if sys.cpu_percent >= 85 else "good"),
-        progress_row("RAM", sys.mem_percent, f"{sys.mem_percent:.1f}% used", tone="warn" if sys.mem_percent >= 85 else "good"),
+        progress_row(
+            "CPU", sys.cpu_percent, f"{sys.cpu_percent:.1f}% busy", tone="warn" if sys.cpu_percent >= 85 else "good"
+        ),
+        progress_row(
+            "RAM", sys.mem_percent, f"{sys.mem_percent:.1f}% used", tone="warn" if sys.mem_percent >= 85 else "good"
+        ),
     ]
 
     if sys.nvidia_smi_available and sys.gpu_mem_total_mb:
@@ -77,7 +81,7 @@ def format_system_glance(state: AppState) -> str:
             )
         )
     else:
-        body.append("<div class=\"section-empty\">GPU telemetry is unavailable on this host right now.</div>")
+        body.append('<div class="section-empty">GPU telemetry is unavailable on this host right now.</div>')
 
     body.append("</section>")
     return "".join(body)

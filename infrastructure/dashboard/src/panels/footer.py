@@ -45,10 +45,10 @@ def format_footer_html(state: AppState) -> str:
 
     return (
         f'<div class="vd-footer">'
-        f'Verda Dashboard'
-        f'&ensp;&middot;&ensp;{html.escape(now)}'
-        f'&ensp;&middot;&ensp;'
+        f"Verda Dashboard"
+        f"&ensp;&middot;&ensp;{html.escape(now)}"
+        f"&ensp;&middot;&ensp;"
         f'<span class="vd-dot {dot_cls}"></span>'
         f'<span class="{text_cls}">{health_text}</span>'
-        f'</div>'
+        f"</div>"
     )

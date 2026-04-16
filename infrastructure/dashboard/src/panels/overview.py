@@ -113,7 +113,7 @@ def _render_backend_row(offer, history: list) -> str:
     <div class="vd-gpu-backend-row">
       <div class="vd-gpu-backend-meta">
         <div class="vd-gpu-backend-name"><span class="vd-dot {_dot_class(status)}"></span>{_safe(offer.backend)}</div>
-        <div class="vd-gpu-backend-context">{_safe(offer.region or 'region n/a')} · {_safe(offer.mode or 'mode n/a')} · {_safe(offer.instance_type or 'instance n/a')}</div>
+        <div class="vd-gpu-backend-context">{_safe(offer.region or "region n/a")} · {_safe(offer.mode or "mode n/a")} · {_safe(offer.instance_type or "instance n/a")}</div>
       </div>
       <div class="vd-gpu-backend-price">{_safe(_fmt_money(offer.price_per_hour))}</div>
       {_render_availability_sparkline(history)}
@@ -138,17 +138,14 @@ def _render_gpu_card(gpu_name: str, offers: list, history_by_backend: dict[str, 
         </div>
         """
 
-    rows = [
-        _render_backend_row(offer, history_by_backend.get(offer.backend, []))
-        for offer in offers
-    ]
+    rows = [_render_backend_row(offer, history_by_backend.get(offer.backend, [])) for offer in offers]
     return f"""
     <div class="{card_class}">
       <div class="vd-gpu-card-header">
         <div class="vd-gpu-card-name">{_safe(gpu_name)}</div>
         <div class="vd-gpu-card-count">{_safe(header)}</div>
       </div>
-      <div class="vd-gpu-backend-list">{''.join(rows)}</div>
+      <div class="vd-gpu-backend-list">{"".join(rows)}</div>
     </div>
     """
 
@@ -179,9 +176,7 @@ def format_statusbar_html(state: AppState) -> str:
         if tunnel_url
         else "<span class='vd-badge vd-badge-idle'>Tunnel offline</span>"
     )
-    mlflow_link = (
-        f"<a href='{escape(MLFLOW_URL, quote=True)}' target='_blank' rel='noreferrer'>MLflow {_safe(_fmt_url(MLFLOW_URL))}</a>"
-    )
+    mlflow_link = f"<a href='{escape(MLFLOW_URL, quote=True)}' target='_blank' rel='noreferrer'>MLflow {_safe(_fmt_url(MLFLOW_URL))}</a>"
 
     return f"""
     <div class="vd-statusbar">
@@ -197,7 +192,7 @@ def format_statusbar_html(state: AppState) -> str:
         <span class="vd-badge vd-badge-success">ok {ok}</span>
         <span class="vd-badge vd-badge-pending">stale {stale}</span>
         <span class="vd-badge vd-badge-error">error {error}</span>
-        {''.join(health_bits[:4])}
+        {"".join(health_bits[:4])}
       </div>
     </div>
     """
@@ -249,8 +244,8 @@ def format_hero_html(state: AppState) -> str:
           <div class="vd-card-accent vd-progress-green"></div>
           <div class="vd-card-title">Best Offer Now</div>
           <div class="vd-card-value">{_safe(best_offer.gpu_name)} · {_safe(best_offer.count)}x</div>
-          <div class="vd-card-sub">{_safe(best_offer.backend)} · {_safe(best_offer.region)} · {_safe(best_offer.mode or 'mode n/a')}</div>
-          <div class="vd-card-sub">{_safe(best_offer.instance_type or 'instance n/a')} · <span class="vd-green">{_safe(_fmt_money(best_offer.price_per_hour))}</span></div>
+          <div class="vd-card-sub">{_safe(best_offer.backend)} · {_safe(best_offer.region)} · {_safe(best_offer.mode or "mode n/a")}</div>
+          <div class="vd-card-sub">{_safe(best_offer.instance_type or "instance n/a")} · <span class="vd-green">{_safe(_fmt_money(best_offer.price_per_hour))}</span></div>
         </div>
         """
         if best_offer
@@ -274,7 +269,7 @@ def format_hero_html(state: AppState) -> str:
       <div class="vd-card-title">Seeker Queue</div>
       <div class="vd-card-value">{_safe(pending_count)}</div>
       <div class="vd-card-sub">{_safe(seeker_title)}</div>
-      <div class="vd-card-sub"><span class="vd-badge {_badge_class(seeker_status)}">{_safe(seeker_status or 'idle')}</span> · retries {_safe(seeker_retries)}</div>
+      <div class="vd-card-sub"><span class="vd-badge {_badge_class(seeker_status)}">{_safe(seeker_status or "idle")}</span> · retries {_safe(seeker_retries)}</div>
       <div class="vd-progress vd-progress-lg"><div class="vd-progress-fill vd-progress-blue" style="width: {seeker_progress}%"></div></div>
     </div>
     """
@@ -286,7 +281,7 @@ def format_hero_html(state: AppState) -> str:
       <div class="vd-card-accent vd-progress-green"></div>
       <div class="vd-card-title">Active Run</div>
       <div class="vd-card-value">{_safe(active_run_name)}</div>
-      <div class="vd-card-sub">{_safe(running_run.backend if running_run else 'backend n/a')} · {_safe(running_run.region if running_run else 'region n/a')}</div>
+      <div class="vd-card-sub">{_safe(running_run.backend if running_run else "backend n/a")} · {_safe(running_run.region if running_run else "region n/a")}</div>
       <div class="vd-card-sub"><span class="vd-badge {_badge_class(run_status)}">{_safe(run_status)}</span> · {_safe(run_cost)}</div>
     </div>
     """
@@ -297,9 +292,9 @@ def format_hero_html(state: AppState) -> str:
     <div class="vd-card">
       <div class="vd-card-accent vd-progress-yellow"></div>
       <div class="vd-card-title">Training Container</div>
-      <div class="vd-card-value">{_safe(training.container_name or 'trainer')}</div>
-      <div class="vd-card-sub"><span class="vd-badge {_badge_class(training_status)}">{_safe(training_status)}</span> · uptime {_safe(f"{training.uptime_seconds:.0f}s" if training.uptime_seconds > 0 else 'n/a')}</div>
-      <div class="vd-card-sub">GPU {_safe(f'{training.gpu_util_percent:.0f}%') if training.gpu_mem_total_mb else 'n/a'} · VRAM {_safe(f'{training.gpu_mem_used_mb:.0f}/{training.gpu_mem_total_mb:.0f} MB' if training.gpu_mem_total_mb else 'n/a')}</div>
+      <div class="vd-card-value">{_safe(training.container_name or "trainer")}</div>
+      <div class="vd-card-sub"><span class="vd-badge {_badge_class(training_status)}">{_safe(training_status)}</span> · uptime {_safe(f"{training.uptime_seconds:.0f}s" if training.uptime_seconds > 0 else "n/a")}</div>
+      <div class="vd-card-sub">GPU {_safe(f"{training.gpu_util_percent:.0f}%") if training.gpu_mem_total_mb else "n/a"} · VRAM {_safe(f"{training.gpu_mem_used_mb:.0f}/{training.gpu_mem_total_mb:.0f} MB" if training.gpu_mem_total_mb else "n/a")}</div>
       <div class="vd-progress vd-progress-lg"><div class="vd-progress-fill {_progress_class(gpu_percent)}" style="width: {gpu_percent}%"></div></div>
     </div>
     """
@@ -369,10 +364,7 @@ def format_market_grid_html(state: AppState, limit: int = 6) -> str:
     """Render a fixed GPU-first market board with backend availability history."""
     with state.lock:
         offers = list(_merge_offers(state))
-        offer_history = {
-            key: list(history)
-            for key, history in state.offer_history.items()
-        }
+        offer_history = {key: list(history) for key, history in state.offer_history.items()}
 
     gpu_offers = [offer for offer in offers if offer.gpu_name]
     cpu_only_count = len(offers) - len(gpu_offers)
@@ -398,10 +390,9 @@ def format_market_grid_html(state: AppState, limit: int = 6) -> str:
 
     cards = []
     for gpu_name in TARGET_GPUS:
-        offers_for_gpu = offers_by_gpu[gpu_name][:limit]
+        offers_for_gpu = offers_by_gpu[gpu_name]
         history_by_backend = {
-            offer.backend: offer_history.get((gpu_name, offer.backend), [])
-            for offer in offers_for_gpu
+            offer.backend: offer_history.get((gpu_name, offer.backend), []) for offer in offers_for_gpu
         }
         cards.append(_render_gpu_card(gpu_name, offers_for_gpu, history_by_backend))
 
@@ -468,7 +459,7 @@ def format_alert_feed_html(state: AppState, limit: int = 6) -> str:
             f"""
             <div class="vd-feed-item">
               <span class="vd-dot {_dot_class(attempt.status)}"></span>
-              <div class="vd-feed-name">{_safe(attempt.backend or 'backend')}</div>
+              <div class="vd-feed-name">{_safe(attempt.backend or "backend")}</div>
               <div class="vd-feed-detail">{_safe(attempt.status)} · {_safe(attempt.gpu)} · {_safe(reason)}</div>
               <div class="vd-feed-metric">{_safe(_fmt_money(attempt.price_per_hour))}</div>
             </div>
@@ -517,9 +508,7 @@ def format_mlflow_feed_html(state: AppState, limit: int = 5) -> str:
 
     items = []
     for run in runs[:limit]:
-        metrics = " · ".join(
-            f"{key}={value:.4g}" for key, value in list(run.metrics.items())[:2]
-        )
+        metrics = " · ".join(f"{key}={value:.4g}" for key, value in list(run.metrics.items())[:2])
         run_name = run.run_name or (run.run_id[:8] if run.run_id else "run")
         started = run.start_time.strftime("%H:%M") if run.start_time else "--:--"
         items.append(
@@ -527,7 +516,7 @@ def format_mlflow_feed_html(state: AppState, limit: int = 5) -> str:
             <div class="vd-feed-item">
               <span class="vd-dot {_dot_class(run.status)}"></span>
               <div class="vd-feed-name">{_safe(run_name)}</div>
-              <div class="vd-feed-detail"><span class="vd-badge {_badge_class(run.status)}">{_safe(run.status)}</span> · {_safe(started)} · {_safe(metrics or 'no metrics yet')}</div>
+              <div class="vd-feed-detail"><span class="vd-badge {_badge_class(run.status)}">{_safe(run.status)}</span> · {_safe(started)} · {_safe(metrics or "no metrics yet")}</div>
             </div>
             """
         )
@@ -552,7 +541,7 @@ def format_runs_feed_html(state: AppState, limit: int = 5) -> str:
             <div class="vd-feed-item">
               <span class="vd-dot {_dot_class(run.status)}"></span>
               <div class="vd-feed-name">{_safe(run.run_name)}</div>
-              <div class="vd-feed-detail">{_safe(run.backend)} · {_safe(run.region)} · {_safe(run.instance_type or 'instance n/a')} · {_safe(gpu_count)}</div>
+              <div class="vd-feed-detail">{_safe(run.backend)} · {_safe(run.region)} · {_safe(run.instance_type or "instance n/a")} · {_safe(gpu_count)}</div>
               <div class="vd-feed-metric">{_safe(cost)}</div>
             </div>
             """

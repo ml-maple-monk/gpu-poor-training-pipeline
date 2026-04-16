@@ -117,7 +117,11 @@ class ConfigError(ValueError):
 
 def training_intermediate_size_default(hidden_size: int) -> int:
     return (
-        (hidden_size * DEFAULT_TRAINING_INTERMEDIATE_SIZE_NUMERATOR + DEFAULT_TRAINING_INTERMEDIATE_SIZE_DENOMINATOR - 1)
+        (
+            hidden_size * DEFAULT_TRAINING_INTERMEDIATE_SIZE_NUMERATOR
+            + DEFAULT_TRAINING_INTERMEDIATE_SIZE_DENOMINATOR
+            - 1
+        )
         // DEFAULT_TRAINING_INTERMEDIATE_SIZE_DENOMINATOR
     ) * DEFAULT_TRAINING_INTERMEDIATE_SIZE_ALIGNMENT
 
@@ -168,21 +172,11 @@ def runtime_env_from_tables(
         "MLFLOW_HTTP_REQUEST_TIMEOUT": str(
             mlflow.get("http_request_timeout_seconds", DEFAULT_MLFLOW_HTTP_REQUEST_TIMEOUT_SECONDS)
         ),
-        "MLFLOW_START_TIMEOUT_SECONDS": str(
-            mlflow.get("start_timeout_seconds", DEFAULT_MLFLOW_START_TIMEOUT_SECONDS)
-        ),
-        "MLFLOW_START_RETRY_SECONDS": str(
-            mlflow.get("start_retry_seconds", DEFAULT_MLFLOW_START_RETRY_SECONDS)
-        ),
-        "MLFLOW_PEAK_TFLOPS_PER_GPU": str(
-            mlflow.get("peak_tflops_per_gpu") or DEFAULT_MLFLOW_PEAK_TFLOPS_PER_GPU
-        ),
-        "MLFLOW_TIME_TO_TARGET_METRIC": str(
-            mlflow.get("time_to_target_metric", DEFAULT_MLFLOW_TIME_TO_TARGET_METRIC)
-        ),
-        "MLFLOW_TIME_TO_TARGET_VALUE": str(
-            mlflow.get("time_to_target_value") or DEFAULT_MLFLOW_TIME_TO_TARGET_VALUE
-        ),
+        "MLFLOW_START_TIMEOUT_SECONDS": str(mlflow.get("start_timeout_seconds", DEFAULT_MLFLOW_START_TIMEOUT_SECONDS)),
+        "MLFLOW_START_RETRY_SECONDS": str(mlflow.get("start_retry_seconds", DEFAULT_MLFLOW_START_RETRY_SECONDS)),
+        "MLFLOW_PEAK_TFLOPS_PER_GPU": str(mlflow.get("peak_tflops_per_gpu") or DEFAULT_MLFLOW_PEAK_TFLOPS_PER_GPU),
+        "MLFLOW_TIME_TO_TARGET_METRIC": str(mlflow.get("time_to_target_metric", DEFAULT_MLFLOW_TIME_TO_TARGET_METRIC)),
+        "MLFLOW_TIME_TO_TARGET_VALUE": str(mlflow.get("time_to_target_value") or DEFAULT_MLFLOW_TIME_TO_TARGET_VALUE),
         "TRAIN_EPOCHS": str(training.get("epochs", DEFAULT_TRAINING_EPOCHS)),
         "TRAIN_BATCH_SIZE": str(training.get("batch_size", DEFAULT_TRAINING_BATCH_SIZE)),
         "TRAIN_LEARNING_RATE": str(training.get("learning_rate", DEFAULT_TRAINING_LEARNING_RATE)),
@@ -190,18 +184,12 @@ def runtime_env_from_tables(
         "TRAIN_NUM_WORKERS": str(training.get("num_workers", DEFAULT_TRAINING_NUM_WORKERS)),
         "TRAIN_GRAD_CLIP": str(training.get("grad_clip", DEFAULT_TRAINING_GRAD_CLIP)),
         "TRAIN_HIDDEN_SIZE": str(hidden_size),
-        "TRAIN_NUM_HIDDEN_LAYERS": str(
-            training.get("num_hidden_layers", DEFAULT_TRAINING_NUM_HIDDEN_LAYERS)
-        ),
+        "TRAIN_NUM_HIDDEN_LAYERS": str(training.get("num_hidden_layers", DEFAULT_TRAINING_NUM_HIDDEN_LAYERS)),
         "TRAIN_DROPOUT": str(training.get("dropout", DEFAULT_TRAINING_DROPOUT)),
         "TRAIN_VOCAB_SIZE": str(training.get("vocab_size", DEFAULT_TRAINING_VOCAB_SIZE)),
         "TRAIN_FLASH_ATTN": bool01(bool(training.get("flash_attn", DEFAULT_TRAINING_FLASH_ATTN))),
-        "TRAIN_NUM_ATTENTION_HEADS": str(
-            training.get("num_attention_heads", DEFAULT_TRAINING_NUM_ATTENTION_HEADS)
-        ),
-        "TRAIN_NUM_KEY_VALUE_HEADS": str(
-            training.get("num_key_value_heads", DEFAULT_TRAINING_NUM_KEY_VALUE_HEADS)
-        ),
+        "TRAIN_NUM_ATTENTION_HEADS": str(training.get("num_attention_heads", DEFAULT_TRAINING_NUM_ATTENTION_HEADS)),
+        "TRAIN_NUM_KEY_VALUE_HEADS": str(training.get("num_key_value_heads", DEFAULT_TRAINING_NUM_KEY_VALUE_HEADS)),
         "TRAIN_HIDDEN_ACT": str(training.get("hidden_act", DEFAULT_TRAINING_HIDDEN_ACT)),
         "TRAIN_INTERMEDIATE_SIZE": str(intermediate_size),
         "TRAIN_MAX_POSITION_EMBEDDINGS": str(
@@ -218,16 +206,10 @@ def runtime_env_from_tables(
         "TRAIN_USE_COMPILE": bool01(bool(training.get("use_compile", DEFAULT_TRAINING_USE_COMPILE))),
         "TRAIN_USE_MOE": bool01(bool(training.get("use_moe", DEFAULT_TRAINING_USE_MOE))),
         "TRAIN_NUM_EXPERTS": str(training.get("num_experts", DEFAULT_TRAINING_NUM_EXPERTS)),
-        "TRAIN_NUM_EXPERTS_PER_TOK": str(
-            training.get("num_experts_per_tok", DEFAULT_TRAINING_NUM_EXPERTS_PER_TOK)
-        ),
+        "TRAIN_NUM_EXPERTS_PER_TOK": str(training.get("num_experts_per_tok", DEFAULT_TRAINING_NUM_EXPERTS_PER_TOK)),
         "TRAIN_MOE_INTERMEDIATE_SIZE": str(moe_intermediate_size),
-        "TRAIN_NORM_TOPK_PROB": bool01(
-            bool(training.get("norm_topk_prob", DEFAULT_TRAINING_NORM_TOPK_PROB))
-        ),
-        "TRAIN_ROUTER_AUX_LOSS_COEF": str(
-            training.get("router_aux_loss_coef", DEFAULT_TRAINING_ROUTER_AUX_LOSS_COEF)
-        ),
+        "TRAIN_NORM_TOPK_PROB": bool01(bool(training.get("norm_topk_prob", DEFAULT_TRAINING_NORM_TOPK_PROB))),
+        "TRAIN_ROUTER_AUX_LOSS_COEF": str(training.get("router_aux_loss_coef", DEFAULT_TRAINING_ROUTER_AUX_LOSS_COEF)),
         "TRAIN_SAVE_WEIGHT": str(training.get("save_weight", DEFAULT_TRAINING_SAVE_WEIGHT)),
         "TRAIN_FROM_WEIGHT": str(training.get("from_weight", DEFAULT_TRAINING_FROM_WEIGHT)),
         "TRAIN_FROM_RESUME": bool01(bool(training.get("from_resume", DEFAULT_TRAINING_FROM_RESUME))),
@@ -242,9 +224,7 @@ def runtime_env_from_tables(
         "OUTPUT_DIR": containerize_data_path(recipe_output_dir),
         "TIME_CAP_SECONDS": str(recipe.get("time_cap_seconds", DEFAULT_RECIPE_TIME_CAP_SECONDS)),
         "MAX_SEQ_LEN": str(recipe.get("max_seq_len", DEFAULT_RECIPE_MAX_SEQ_LEN)),
-        "VALIDATION_SPLIT_RATIO": str(
-            recipe.get("validation_split_ratio", DEFAULT_RECIPE_VALIDATION_SPLIT_RATIO)
-        ),
+        "VALIDATION_SPLIT_RATIO": str(recipe.get("validation_split_ratio", DEFAULT_RECIPE_VALIDATION_SPLIT_RATIO)),
         "VALIDATION_INTERVAL_STEPS": str(
             recipe.get("validation_interval_steps", DEFAULT_RECIPE_VALIDATION_INTERVAL_STEPS)
         ),

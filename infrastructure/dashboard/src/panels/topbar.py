@@ -61,32 +61,30 @@ def format_topbar_glance(state: AppState) -> str:
         elif status == "error":
             tone = "bad"
         refreshed_at = compact_time(refreshed.get(name))
-        health_bits.append(
-            badge(f"{name} {status} {refreshed_at}", tone=tone, subtle=True)
-        )
+        health_bits.append(badge(f"{name} {status} {refreshed_at}", tone=tone, subtle=True))
 
     tunnel = data["tunnel"]
     tunnel_html = (
-        f"<a href=\"{esc(tunnel)}\" target=\"_blank\" rel=\"noreferrer\">{esc(tunnel)}</a>"
+        f'<a href="{esc(tunnel)}" target="_blank" rel="noreferrer">{esc(tunnel)}</a>'
         if tunnel != "(no tunnel active)"
         else esc(tunnel)
     )
     mlflow = data["mlflow"]
-    mlflow_html = f"<a href=\"{esc(mlflow)}\" target=\"_blank\" rel=\"noreferrer\">{esc(mlflow)}</a>"
+    mlflow_html = f'<a href="{esc(mlflow)}" target="_blank" rel="noreferrer">{esc(mlflow)}</a>'
 
     return (
-        "<section class=\"hero-shell\">"
-        "<div class=\"hero-grid\">"
-        "<article class=\"hero-copy\">"
-        "<div class=\"hero-eyebrow\">Remote GPU operations</div>"
+        '<section class="hero-shell">'
+        '<div class="hero-grid">'
+        '<article class="hero-copy">'
+        '<div class="hero-eyebrow">Remote GPU operations</div>'
         "<h1>Capacity radar</h1>"
         "<p>"
         "A read-only operations board tuned for one-glance scanning: capacity, job health, training, and experiment state."
         "</p>"
-        "<div class=\"hero-links\">"
-        f"<span><span class=\"meta-label\">Tunnel</span>{tunnel_html}</span>"
-        f"<span><span class=\"meta-label\">MLflow</span>{mlflow_html}</span>"
-        f"<span><span class=\"meta-label\">Last sync</span>{esc(compact_time(latest_refresh))}</span>"
+        '<div class="hero-links">'
+        f'<span><span class="meta-label">Tunnel</span>{tunnel_html}</span>'
+        f'<span><span class="meta-label">MLflow</span>{mlflow_html}</span>'
+        f'<span><span class="meta-label">Last sync</span>{esc(compact_time(latest_refresh))}</span>'
         "</div>"
         "</article>"
         + stat_card(
@@ -108,7 +106,7 @@ def format_topbar_glance(state: AppState) -> str:
             tone="good",
         )
         + "</div>"
-        "<div class=\"chip-strip\">"
+        '<div class="chip-strip">'
         + "".join(health_bits or [badge("No collectors running", tone="neutral", subtle=True)])
         + "</div>"
         "</section>"

@@ -379,9 +379,7 @@ def fetch_offers(dstack_bin: str, *, max_offers: int = _DEFAULT_PROVIDER_MAX_OFF
     if provider_offers:
         payload["offers"] = provider_offers
         payload["total_offers"] = sum(
-            int(item.get("total_offers", 0))
-            for item in diagnostics
-            if item.get("status") == "ok"
+            int(item.get("total_offers", 0)) for item in diagnostics if item.get("status") == "ok"
         )
     payload["provider_diagnostics"] = diagnostics
     return payload

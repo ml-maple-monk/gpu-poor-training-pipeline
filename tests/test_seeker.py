@@ -39,11 +39,7 @@ def make_repo_path(tmp_path: Path):
 
 def read_attempt_rows(tmp_path: Path) -> list[dict[str, object]]:
     attempts_file = tmp_path / "data" / "seeker" / "attempts.jsonl"
-    return [
-        json.loads(line)
-        for line in attempts_file.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    return [json.loads(line) for line in attempts_file.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def test_enqueue_writes_pending_queue(tmp_path: Path, monkeypatch, capsys) -> None:

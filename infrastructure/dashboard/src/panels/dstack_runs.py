@@ -43,10 +43,10 @@ def format_dstack_glance(state: AppState, limit: int = 5) -> str:
     backend_count = len({run.backend for run in runs if run.backend})
 
     body = [
-        "<section class=\"section-card section-card--dstack\">",
-        "<div class=\"section-kicker\">Remote execution</div>",
-        "<div class=\"section-title\">dstack runs</div>",
-        "<div class=\"chip-strip compact\">",
+        '<section class="section-card section-card--dstack">',
+        '<div class="section-kicker">Remote execution</div>',
+        '<div class="section-title">dstack runs</div>',
+        '<div class="chip-strip compact">',
         badge(f"active {active}", tone="good" if active != "(none)" else "neutral"),
         badge(f"{running_count} live", tone="good" if running_count else "neutral"),
         badge(f"{backend_count} backends", tone="neutral"),
@@ -54,16 +54,16 @@ def format_dstack_glance(state: AppState, limit: int = 5) -> str:
     ]
 
     if not runs:
-        body.append("<div class=\"section-empty\">No dstack runs are active right now.</div>")
+        body.append('<div class="section-empty">No dstack runs are active right now.</div>')
     else:
-        body.append("<div class=\"feed-grid compact-grid\">")
+        body.append('<div class="feed-grid compact-grid">')
         for run in runs[:limit]:
             body.append(
-                "<article class=\"feed-card dense\">"
-                f"<div class=\"feed-card-top\">{badge(run.status or 'unknown', tone=tone_for_status(run.status))}<span class=\"feed-card-time\">{esc(run.region or '-')}</span></div>"
-                f"<div class=\"feed-card-title\">{esc(run.run_name or 'unnamed run')}</div>"
-                f"<div class=\"feed-card-meta\">{esc(run.backend or '-')} · {esc(run.instance_type or '-')}</div>"
-                f"<div class=\"feed-card-metrics\">{esc(money(run.cost_per_hour))} · {esc(str(run.gpu_count or 0))} GPU</div>"
+                '<article class="feed-card dense">'
+                f'<div class="feed-card-top">{badge(run.status or "unknown", tone=tone_for_status(run.status))}<span class="feed-card-time">{esc(run.region or "-")}</span></div>'
+                f'<div class="feed-card-title">{esc(run.run_name or "unnamed run")}</div>'
+                f'<div class="feed-card-meta">{esc(run.backend or "-")} · {esc(run.instance_type or "-")}</div>'
+                f'<div class="feed-card-metrics">{esc(money(run.cost_per_hour))} · {esc(str(run.gpu_count or 0))} GPU</div>'
                 "</article>"
             )
         body.append("</div>")

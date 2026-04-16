@@ -177,9 +177,7 @@ def test_setup_writes_connector_state_and_env(tmp_path: Path, monkeypatch, capsy
     monkeypatch.setattr(
         connector,
         "publish_tunnel_config",
-        lambda account_id, api_token, tunnel_id, domain: published.append(
-            (account_id, api_token, tunnel_id, domain)
-        ),
+        lambda account_id, api_token, tunnel_id, domain: published.append((account_id, api_token, tunnel_id, domain)),
     )
     monkeypatch.setattr(connector, "named_tunnel_token", lambda *args, **kwargs: "tunnel-token")
     monkeypatch.setattr(connector, "sync_r2_env", lambda: {})
@@ -472,7 +470,8 @@ def test_ensure_remote_runtime_reuses_existing_healthy_quick_tunnel(monkeypatch)
         connector,
         "status_payload",
         lambda: (
-            status_calls.__setitem__("count", status_calls["count"] + 1) or {
+            status_calls.__setitem__("count", status_calls["count"] + 1)
+            or {
                 "tracking_uri": "https://curious-mantis-example.trycloudflare.com",
                 "artifact_store_kind": "r2",
                 "remote_mlflow_ready": True,

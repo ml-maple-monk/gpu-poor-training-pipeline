@@ -380,7 +380,9 @@ def refresh_active_submission(queue: SeekerQueue, job: SeekerJob, config: RunCon
         record_attempt(job, status="completed", reason="run finished and is no longer visible in dstack ps")
         clear_active_job(queue)
         return
-    run_status, job_status, termination_reason = dstack_backend.dstack_run_status_triplet(dstack_bin, job.submitted_run_name)
+    run_status, job_status, termination_reason = dstack_backend.dstack_run_status_triplet(
+        dstack_bin, job.submitted_run_name
+    )
     outcome = classify_finished_run(run_status, job_status, termination_reason)
     if outcome == "failed_to_start":
         record_attempt(job, status="failed_to_start", reason=termination_reason or "failed before steady state")

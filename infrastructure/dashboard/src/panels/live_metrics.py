@@ -44,10 +44,10 @@ def format_live_metrics_glance(state: AppState, limit: int = 6) -> str:
 
     if not metrics:
         return (
-            "<section class=\"section-card section-card--metrics\">"
-            "<div class=\"section-kicker\">Training telemetry</div>"
-            "<div class=\"section-title\">Live metrics</div>"
-            "<div class=\"section-empty\">Waiting for an active MLflow run before metric cards light up.</div>"
+            '<section class="section-card section-card--metrics">'
+            '<div class="section-kicker">Training telemetry</div>'
+            '<div class="section-title">Live metrics</div>'
+            '<div class="section-empty">Waiting for an active MLflow run before metric cards light up.</div>'
             "</section>"
         )
 
@@ -57,22 +57,20 @@ def format_live_metrics_glance(state: AppState, limit: int = 6) -> str:
             continue
         step, value = points[-1]
         cards.append(
-            "<article class=\"metric-card\">"
-            f"<div class=\"metric-card-name\">{esc(name)}</div>"
-            f"<div class=\"metric-card-value\">{value:.5g}</div>"
-            f"<div class=\"metric-card-step\">step {step}</div>"
+            '<article class="metric-card">'
+            f'<div class="metric-card-name">{esc(name)}</div>'
+            f'<div class="metric-card-value">{value:.5g}</div>'
+            f'<div class="metric-card-step">step {step}</div>'
             "</article>"
         )
 
     if not cards:
-        cards.append("<div class=\"section-empty\">Metric history is empty for the current run.</div>")
+        cards.append('<div class="section-empty">Metric history is empty for the current run.</div>')
 
     return (
-        "<section class=\"section-card section-card--metrics\">"
-        "<div class=\"section-kicker\">Training telemetry</div>"
-        "<div class=\"section-title\">Live metrics</div>"
-        "<div class=\"metric-grid\">"
-        + "".join(cards)
-        + "</div>"
+        '<section class="section-card section-card--metrics">'
+        '<div class="section-kicker">Training telemetry</div>'
+        '<div class="section-title">Live metrics</div>'
+        '<div class="metric-grid">' + "".join(cards) + "</div>"
         "</section>"
     )

@@ -8,7 +8,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import threading
-
 from datetime import UTC, datetime
 
 from src.state import DstackRun, OfferSnapshot, TrainingSnapshot, get_state, reset_state

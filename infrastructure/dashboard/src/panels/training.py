@@ -52,11 +52,11 @@ def format_training_glance(state: AppState) -> str:
     )
 
     body = [
-        "<section class=\"section-card section-card--training\">",
-        "<div class=\"section-kicker\">Training lane</div>",
-        f"<div class=\"section-title\">{badge(_status_icon(snap.status), tone=tone)} {esc(snap.container_name or 'Local trainer')}</div>",
-        f"<div class=\"section-subtitle\">{esc(snap.image or 'No container image detected')}</div>",
-        "<div class=\"meta-stack\">",
+        '<section class="section-card section-card--training">',
+        '<div class="section-kicker">Training lane</div>',
+        f'<div class="section-title">{badge(_status_icon(snap.status), tone=tone)} {esc(snap.container_name or "Local trainer")}</div>',
+        f'<div class="section-subtitle">{esc(snap.image or "No container image detected")}</div>',
+        '<div class="meta-stack">',
         meta("Container ID", snap.container_id or "n/a"),
         meta("Uptime", f"{snap.uptime_seconds:.0f}s" if snap.uptime_seconds > 0 else "n/a"),
         meta("Exit code", str(snap.exit_code) if snap.exit_code is not None else "n/a"),
@@ -73,7 +73,7 @@ def format_training_glance(state: AppState) -> str:
             )
         )
     else:
-        body.append("<div class=\"section-empty\">Waiting for GPU metrics from the training container.</div>")
+        body.append('<div class="section-empty">Waiting for GPU metrics from the training container.</div>')
 
     body.append("</section>")
     return "".join(body)

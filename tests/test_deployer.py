@@ -43,15 +43,21 @@ def test_deploy_remote_request_fails_fast_when_registry_auth_missing(monkeypatch
     monkeypatch.setattr(
         deployer,
         "connection_bundle_for_request",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("connector should not run before auth preflight")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("connector should not run before auth preflight")
+        ),
     )
     monkeypatch.setattr(
         deployer.dstack_backend,
         "launch_remote",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("dstack launch should not run before auth preflight")),
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("dstack launch should not run before auth preflight")
+        ),
     )
 
-    with pytest.raises(RuntimeError, match="Remote registry auth is missing for docker.io/alextay96/gpupoor via docker.io"):
+    with pytest.raises(
+        RuntimeError, match="Remote registry auth is missing for docker.io/alextay96/gpupoor via docker.io"
+    ):
         deployer.deploy_remote_request(request)
 
 
@@ -84,4 +90,3 @@ def test_deploy_remote_request_passes_connector_bundle_through_unchanged(monkeyp
     assert len(launches) == 1
     assert launches[0]["connection_bundle"] is bundle
     assert launches[0]["dry_run"] is False
-

@@ -46,15 +46,15 @@ def format_seeker_summary_md(state: AppState) -> str:
     best_live = min(available_gpu, key=lambda offer: offer.price_per_hour) if available_gpu else None
 
     body = [
-        "<section class=\"section-card section-card--seeker-summary\">",
-        "<div class=\"section-kicker\">Mission control</div>",
-        "<div class=\"section-title\">Seeker status</div>",
-        "<div class=\"chip-strip compact\">",
+        '<section class="section-card section-card--seeker-summary">',
+        '<div class="section-kicker">Mission control</div>',
+        '<div class="section-title">Seeker status</div>',
+        '<div class="chip-strip compact">',
         badge(f"{len(available_gpu)} GPU offers live", tone="good" if available_gpu else "neutral"),
         badge(f"{pending_count} queued", tone="warn" if pending_count else "neutral"),
         badge(f"{len(attempts)} recent attempts", tone="neutral"),
         "</div>",
-        "<div class=\"meta-stack\">",
+        '<div class="meta-stack">',
         meta("Active job", active.config_name or active.job_id if active else "none"),
         meta("Status", active.last_status if active and active.last_status else "idle"),
         meta("Best live price", money(best_live.price_per_hour) if best_live else "n/a"),
@@ -100,36 +100,43 @@ def format_seeker_offer_glance(state: AppState, limit: int = 8) -> str:
         backend_counts[offer.backend] = backend_counts.get(offer.backend, 0) + 1
 
     body = [
-        "<section class=\"section-card section-card--market\">",
-        "<div class=\"section-kicker\">Capacity board</div>",
-        "<div class=\"section-title\">Live GPU market</div>",
-        "<div class=\"chip-strip compact\">",
+        '<section class="section-card section-card--market">',
+        '<div class="section-kicker">Capacity board</div>',
+        '<div class="section-title">Live GPU market</div>',
+        '<div class="chip-strip compact">',
         badge(f"{len(gpu_offers)} GPU listings", tone="good" if gpu_offers else "neutral"),
         badge(f"{len(available_gpu)} available now", tone="good" if available_gpu else "warn"),
         badge(f"{len(backend_counts)} backends", tone="neutral"),
-        *[badge(f"{backend} {count}", tone="neutral", subtle=True) for backend, count in sorted(backend_counts.items())],
+        *[
+            badge(f"{backend} {count}", tone="neutral", subtle=True)
+            for backend, count in sorted(backend_counts.items())
+        ],
         "</div>",
     ]
 
     if not gpu_offers:
-        body.append("<div class=\"section-empty\">No GPU offers are visible yet. CPU-only inventory is intentionally hidden from the main board.</div>")
+        body.append(
+            '<div class="section-empty">No GPU offers are visible yet. CPU-only inventory is intentionally hidden from the main board.</div>'
+        )
     else:
-        body.append("<div class=\"offer-grid\">")
+        body.append('<div class="offer-grid">')
         for offer in gpu_offers[:limit]:
             tone = "good" if offer.availability == "available" else "warn"
             body.append(
-                "<article class=\"offer-card\">"
-                f"<div class=\"offer-card-top\">{badge(offer.availability or 'unknown', tone=tone)}{badge(offer.mode or 'n/a', tone='neutral', subtle=True)}</div>"
-                f"<div class=\"offer-card-price\">{esc(money(offer.price_per_hour))}</div>"
-                f"<div class=\"offer-card-title\">{esc(offer.gpu_name)} · {esc(str(offer.count or 0))}x</div>"
-                f"<div class=\"offer-card-meta\">{esc(offer.backend or '-')} · {esc(offer.region or '-')}</div>"
-                f"<div class=\"offer-card-instance\">{esc(offer.instance_type or 'instance n/a')}</div>"
+                '<article class="offer-card">'
+                f'<div class="offer-card-top">{badge(offer.availability or "unknown", tone=tone)}{badge(offer.mode or "n/a", tone="neutral", subtle=True)}</div>'
+                f'<div class="offer-card-price">{esc(money(offer.price_per_hour))}</div>'
+                f'<div class="offer-card-title">{esc(offer.gpu_name)} · {esc(str(offer.count or 0))}x</div>'
+                f'<div class="offer-card-meta">{esc(offer.backend or "-")} · {esc(offer.region or "-")}</div>'
+                f'<div class="offer-card-instance">{esc(offer.instance_type or "instance n/a")}</div>'
                 "</article>"
             )
         body.append("</div>")
 
     if cpu_only_count:
-        body.append(f"<div class=\"section-note\">{cpu_only_count} CPU-only listings are hidden here so the board stays GPU-first.</div>")
+        body.append(
+            f'<div class="section-note">{cpu_only_count} CPU-only listings are hidden here so the board stays GPU-first.</div>'
+        )
 
     body.append("</section>")
     return "".join(body)
@@ -165,23 +172,23 @@ def format_seeker_attempt_glance(state: AppState, limit: int = 6) -> str:
         attempts = list(state.seeker_attempts)
 
     body = [
-        "<section class=\"section-card section-card--attempts\">",
-        "<div class=\"section-kicker\">Decision trail</div>",
-        "<div class=\"section-title\">Recent attempts</div>",
+        '<section class="section-card section-card--attempts">',
+        '<div class="section-kicker">Decision trail</div>',
+        '<div class="section-title">Recent attempts</div>',
     ]
 
     if not attempts:
-        body.append("<div class=\"section-empty\">No attempt history has been recorded yet.</div>")
+        body.append('<div class="section-empty">No attempt history has been recorded yet.</div>')
     else:
-        body.append("<div class=\"timeline-list\">")
+        body.append('<div class="timeline-list">')
         for attempt in reversed(attempts[-limit:]):
             price = money(attempt.price_per_hour, "price n/a")
             body.append(
-                "<article class=\"timeline-card\">"
-                f"<div class=\"timeline-top\">{badge(attempt.status or 'unknown', tone=tone_for_status(attempt.status))}<span class=\"timeline-time\">{esc(compact_time(attempt.ended_at or attempt.started_at))}</span></div>"
-                f"<div class=\"timeline-title\">{esc(attempt.gpu or 'unknown GPU')} · {esc(attempt.backend or '-')} · {esc(attempt.region or '-')}</div>"
-                f"<div class=\"timeline-meta\">{esc(price)} · {esc(str(attempt.count or 0))}x · {esc(attempt.mode or 'n/a')}</div>"
-                f"<div class=\"timeline-reason\">{esc(truncate(attempt.reason or 'No reason recorded.'))}</div>"
+                '<article class="timeline-card">'
+                f'<div class="timeline-top">{badge(attempt.status or "unknown", tone=tone_for_status(attempt.status))}<span class="timeline-time">{esc(compact_time(attempt.ended_at or attempt.started_at))}</span></div>'
+                f'<div class="timeline-title">{esc(attempt.gpu or "unknown GPU")} · {esc(attempt.backend or "-")} · {esc(attempt.region or "-")}</div>'
+                f'<div class="timeline-meta">{esc(price)} · {esc(str(attempt.count or 0))}x · {esc(attempt.mode or "n/a")}</div>'
+                f'<div class="timeline-reason">{esc(truncate(attempt.reason or "No reason recorded."))}</div>'
                 "</article>"
             )
         body.append("</div>")
