@@ -9,12 +9,14 @@ __package__ = "trainer"
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import math
 import random
+from contextlib import nullcontext
 
 import numpy as np
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import Sampler
+from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
 from model.model_minimind import MiniMindForCausalLM
@@ -42,6 +44,83 @@ def is_main_process():
 def Logger(content):
     if is_main_process():
         print(content)
+
+
+# doc-anchor: atomic-save-sigterm
+def atomic_torch_save(obj, path):
+    """Save checkpoints via a .tmp file so partial writes do not replace good weights."""
+    tmp_path = path + ".tmp"
+    torch.save(obj, tmp_path)
+    os.replace(tmp_path, path)
+
+
+def current_mlflow_step(epoch: int, step: int, iters: int) -> int:
+    return epoch * iters + step
+
+
+def validation_ppl_from_loss(val_loss: float) -> float:
+    if math.isnan(val_loss):
+        return float("nan")
+    if math.isinf(val_loss):
+        return float("inf")
+    max_log = math.log(sys.float_info.max)
+    if val_loss > max_log:
+        return float("inf")
+    return math.exp(val_loss)
+
+
+def _resolve_autocast_dtype(dtype_name: str):
+    if dtype_name == "bfloat16":
+        return torch.bfloat16
+    if dtype_name == "float16":
+        return torch.float16
+    if dtype_name == "float32":
+        return None
+    raise ValueError(f"Unsupported dtype: {dtype_name}")
+
+
+def build_autocast_context(device_type_name: str, dtype_name: str):
+    if device_type_name != "cuda":
+        return nullcontext()
+    autocast_dtype = _resolve_autocast_dtype(dtype_name)
+    if autocast_dtype is None:
+        return nullcontext()
+    return torch.amp.autocast("cuda", dtype=autocast_dtype)
+
+
+def build_grad_scaler(device_type_name: str, dtype_name: str):
+    scaler_device = "cuda" if device_type_name == "cuda" else "cpu"
+    scaler_enabled = device_type_name == "cuda" and dtype_name == "float16"
+    return torch.amp.GradScaler(scaler_device, enabled=scaler_enabled)
+
+
+def log_flash_attention_status(*, requested: bool, device_type_name: str, logger=Logger) -> None:
+    has_sdpa = hasattr(torch.nn.functional, "scaled_dot_product_attention")
+    if not requested:
+        logger("Flash attention disabled by config")
+        return
+
+    if device_type_name != "cuda":
+        logger("Flash attention requested, but CUDA is unavailable; training will use the fallback attention path")
+        return
+
+    is_available = True
+    if hasattr(torch.backends.cuda, "is_flash_attention_available"):
+        is_available = bool(torch.backends.cuda.is_flash_attention_available())
+
+    flash_sdp_enabled = True
+    if hasattr(torch.backends.cuda, "flash_sdp_enabled"):
+        flash_sdp_enabled = bool(torch.backends.cuda.flash_sdp_enabled())
+
+    if has_sdpa and is_available and flash_sdp_enabled:
+        logger("Flash attention check passed: PyTorch flash attention is available")
+        return
+
+    logger(
+        "Flash attention requested, but PyTorch flash attention is unavailable "
+        f"(sdpa={has_sdpa}, available={is_available}, flash_sdp_enabled={flash_sdp_enabled}); "
+        "training will use the fallback attention path"
+    )
 
 
 def get_lr(current_step, total_steps, lr, *, schedule="cosine", warmup_steps=0, min_lr_ratio=0.1):
@@ -195,3 +274,53 @@ class SkipBatchSampler(Sampler):
     def __len__(self):
         total_batches = (len(self.sampler) + self.batch_size - 1) // self.batch_size
         return max(0, total_batches - self.skip_batches)
+
+
+def build_packed_batches(indices, sample_lengths, packed_batch_size, max_seq_len, skip_batches=0, drop_last=False):
+    if packed_batch_size <= 0:
+        raise ValueError("packed_batch_size must be > 0")
+    if max_seq_len <= 0:
+        raise ValueError("max_seq_len must be > 0")
+
+    batches = []
+    current_batch = []
+    current_row_tokens = 0
+    current_row_count = 0
+    iterator = tqdm(
+        indices,
+        total=len(indices) if hasattr(indices, "__len__") else None,
+        desc="Building packed batches",
+        unit="sample",
+        disable=not is_main_process(),
+        leave=False,
+    )
+
+    for idx in iterator:
+        sample_length = min(int(sample_lengths[idx]), max_seq_len)
+        next_row_tokens = current_row_tokens
+        next_row_count = current_row_count
+
+        if next_row_count == 0:
+            next_row_count = 1
+            next_row_tokens = sample_length
+        elif next_row_tokens + sample_length <= max_seq_len:
+            next_row_tokens += sample_length
+        else:
+            next_row_count += 1
+            next_row_tokens = sample_length
+
+        if current_batch and next_row_count > packed_batch_size:
+            batches.append(current_batch)
+            current_batch = [idx]
+            current_row_tokens = sample_length
+            current_row_count = 1
+            continue
+
+        current_batch.append(idx)
+        current_row_tokens = next_row_tokens
+        current_row_count = next_row_count
+
+    if current_batch and (not drop_last or current_row_count == packed_batch_size):
+        batches.append(current_batch)
+
+    return batches[skip_batches:] if skip_batches > 0 else batches

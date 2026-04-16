@@ -69,6 +69,12 @@ class PretrainDataset(Dataset):
     def __len__(self):
         return int(self.sample_count if self.sample_indices is None else len(self.sample_indices))
 
+    def sample_lengths(self):
+        self._ensure_memmaps()
+        if self.sample_indices is None:
+            return np.asarray(self._index[:, 1], dtype=np.int64)
+        return np.asarray(self._index[self.sample_indices, 1], dtype=np.int64)
+
     def __getitem__(self, index):
         self._ensure_memmaps()
         sample_index = int(index if self.sample_indices is None else self.sample_indices[index])

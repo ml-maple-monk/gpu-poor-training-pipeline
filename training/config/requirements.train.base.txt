@@ -5,6 +5,7 @@
 datasets==3.6.0
 jsonlines==4.0.0
 numpy>=2,<3
+tqdm>=4.66,<5
 huggingface_hub>=0.24.0
 transformers==4.57.1
 click>=8,<9

@@ -2,6 +2,7 @@ transformers==4.57.6
 datasets==3.6.0
 jsonlines==4.0.0
 numpy==1.26.4
+tqdm>=4.66,<5
 huggingface_hub>=0.24.0
 click>=8,<9
 # MLflow client + system-metrics (psutil + pynvml for NVIDIA GPU telemetry)
