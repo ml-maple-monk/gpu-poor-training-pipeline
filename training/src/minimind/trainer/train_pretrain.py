@@ -4,7 +4,6 @@ import os
 import signal
 import sys
 import time
-from contextlib import nullcontext
 from types import SimpleNamespace
 
 __package__ = "trainer"
@@ -38,24 +37,22 @@ from trainer._mlflow_helper import log_step as _mlflow_log_step
 from trainer._mlflow_helper import start as _mlflow_start
 from trainer.trainer_utils import (
     Logger,
-    SkipBatchSampler,
+    atomic_torch_save as _atomic_torch_save,
+    build_autocast_context as _build_autocast_context,
+    build_packed_batches,
+    build_grad_scaler as _build_grad_scaler,
+    current_mlflow_step as _current_mlflow_step,
     get_lr,
     init_distributed_mode,
     init_model,
     is_main_process,
     lm_checkpoint,
+    log_flash_attention_status,
     setup_seed,
+    validation_ppl_from_loss as _validation_ppl_from_loss,
 )
 
 VALIDATION_SPLIT_SEED = 42
-
-
-# doc-anchor: atomic-save-sigterm
-def _atomic_torch_save(obj, path):
-    """Save checkpoints via a .tmp file so partial writes do not replace good weights."""
-    tmp_path = path + ".tmp"
-    torch.save(obj, tmp_path)
-    os.replace(tmp_path, path)
 
 
 def _sigterm_handler(signum, frame):
@@ -75,11 +72,6 @@ def _sigterm_handler(signum, frame):
         print(f"[SIGTERM] Warning: MLflow finish failed: {exc}", flush=True)
 
     sys.exit(143)
-
-
-def _current_mlflow_step(epoch: int, step: int, iters: int) -> int:
-    return epoch * iters + step
-
 
 def _reset_metric_window(state: dict[str, float | int | None]) -> None:
     state["window_start_time"] = time.perf_counter()
@@ -110,43 +102,6 @@ def _build_metric_state(
     }
     _reset_metric_window(state)
     return state
-
-
-def _validation_ppl_from_loss(val_loss: float) -> float:
-    if math.isnan(val_loss):
-        return float("nan")
-    if math.isinf(val_loss):
-        return float("inf")
-    max_log = math.log(sys.float_info.max)
-    if val_loss > max_log:
-        return float("inf")
-    return math.exp(val_loss)
-
-
-def _resolve_autocast_dtype(dtype_name: str):
-    if dtype_name == "bfloat16":
-        return torch.bfloat16
-    if dtype_name == "float16":
-        return torch.float16
-    if dtype_name == "float32":
-        return None
-    raise ValueError(f"Unsupported dtype: {dtype_name}")
-
-
-def _build_autocast_context(device_type_name: str, dtype_name: str):
-    if device_type_name != "cuda":
-        return nullcontext()
-    autocast_dtype = _resolve_autocast_dtype(dtype_name)
-    if autocast_dtype is None:
-        return nullcontext()
-    return torch.amp.autocast("cuda", dtype=autocast_dtype)
-
-
-def _build_grad_scaler(device_type_name: str, dtype_name: str):
-    scaler_device = "cuda" if device_type_name == "cuda" else "cpu"
-    scaler_enabled = device_type_name == "cuda" and dtype_name == "float16"
-    return torch.amp.GradScaler(scaler_device, enabled=scaler_enabled)
-
 
 def _build_pretrain_datasets(tokenizer):
     del tokenizer
@@ -315,10 +270,10 @@ def _run_validation(epoch: int, step: int, iters: int, val_loader) -> None:
 
     with torch.no_grad():
         for batch in val_loader:
-            input_ids = batch["input_ids"].to(args.device)
-            labels = batch["labels"].to(args.device)
-            position_ids = batch["position_ids"].to(args.device)
-            attention_mask = batch["attention_mask"].to(args.device)
+            input_ids = batch["input_ids"].to(args.device, non_blocking=True)
+            labels = batch["labels"].to(args.device, non_blocking=True)
+            position_ids = batch["position_ids"].to(args.device, non_blocking=True)
+            attention_mask = batch["attention_mask"].to(args.device, non_blocking=True)
             with autocast_ctx:
                 res = model(input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=labels)
             valid_tokens = count_valid_tokens(labels)
@@ -388,10 +343,10 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None, val_loader=None)
     last_step = start_step
     total_update_steps = args.epochs * math.ceil(iters / max(args.accumulation_steps, 1))
     for step, batch in enumerate(loader, start=start_step + 1):
-        input_ids = batch["input_ids"].to(args.device)
-        labels = batch["labels"].to(args.device)
-        position_ids = batch["position_ids"].to(args.device)
-        attention_mask = batch["attention_mask"].to(args.device)
+        input_ids = batch["input_ids"].to(args.device, non_blocking=True)
+        labels = batch["labels"].to(args.device, non_blocking=True)
+        position_ids = batch["position_ids"].to(args.device, non_blocking=True)
+        attention_mask = batch["attention_mask"].to(args.device, non_blocking=True)
         last_step = step
 
         with autocast_ctx:
@@ -569,6 +524,8 @@ def run_training(runtime_args):
         elif is_main_process():
             Logger(f"Peak TFLOPs auto-detect unavailable for GPU '{gpu_name}'")
 
+    log_flash_attention_status(requested=bool(args.flash_attn), device_type_name=device_type, logger=Logger)
+
     # ========== 4. 配wandb ==========
     wandb = None
     if args.use_wandb and is_main_process():
@@ -588,6 +545,8 @@ def run_training(runtime_args):
     # ========== 5. 定义模型、数据、优化器 ==========
     model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
     train_ds, val_ds = _build_pretrain_datasets(tokenizer)
+    train_sample_lengths = train_ds.sample_lengths()
+    drop_last_for_compile = bool(args.use_compile)
     pretrain_collator = PretrainDataCollator(
         eos_token_id=int(tokenizer.eos_token_id),
         pad_token_id=int(tokenizer.pad_token_id),
@@ -596,12 +555,22 @@ def run_training(runtime_args):
     train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None
     val_loader = None
     if val_ds is not None:
+        val_batches = build_packed_batches(
+            list(range(len(val_ds))),
+            val_ds.sample_lengths(),
+            args.batch_size,
+            args.max_seq_len,
+            drop_last=drop_last_for_compile,
+        )
         val_loader = DataLoader(
             val_ds,
-            batch_size=args.batch_size,
+            batch_sampler=val_batches,
             num_workers=args.num_workers,
             pin_memory=True,
             collate_fn=pretrain_collator,
+            persistent_workers=True,
+            prefetch_factor=8
+            
         )
     scaler = _build_grad_scaler(device_type, args.dtype)
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
@@ -635,15 +604,25 @@ def run_training(runtime_args):
     for epoch in range(start_epoch, args.epochs):
         train_sampler and train_sampler.set_epoch(epoch)
         setup_seed(42 + epoch)
-        indices = torch.randperm(len(train_ds)).tolist()
+        indices = list(train_sampler) if train_sampler is not None else torch.randperm(len(train_ds)).tolist()
         skip = start_step if (epoch == start_epoch and start_step > 0) else 0
-        batch_sampler = SkipBatchSampler(train_sampler or indices, args.batch_size, skip)
+        batch_sampler = build_packed_batches(
+            indices,
+            train_sample_lengths,
+            args.batch_size,
+            args.max_seq_len,
+            skip_batches=skip,
+            drop_last=drop_last_for_compile,
+        )
         loader = DataLoader(
             train_ds,
             batch_sampler=batch_sampler,
             num_workers=args.num_workers,
             pin_memory=True,
             collate_fn=pretrain_collator,
+            persistent_workers=True,
+            prefetch_factor=8
+            
         )
         if skip > 0:
             Logger(f"Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始")

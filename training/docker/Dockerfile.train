@@ -19,6 +19,12 @@ WORKDIR /workspace
 
 COPY training/config/requirements.train.txt /tmp/requirements.train.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.train.txt
+RUN python - <<'PY'
+import torch
+import tqdm
+
+print({"torch": torch.__version__, "gpu": torch.cuda.is_available(), "tqdm": tqdm.__version__})
+PY
 
 # non-root user matching Verda contract (UID 1000 = /data writer)
 ARG APP_UID=1000

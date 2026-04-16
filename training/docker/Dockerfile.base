@@ -185,6 +185,7 @@ RUN python - <<'PY'
 import flash_attn
 import torch
 import transformers
+import tqdm
 import vllm
 
 print(
@@ -194,9 +195,10 @@ print(
         "cuda": torch.version.cuda,
         "gpu": torch.cuda.is_available(),
         "transformers": transformers.__version__,
+        "tqdm": tqdm.__version__,
         "vllm": vllm.__version__,
     }
 )
 PY
 
-CMD ["python", "-c", "import torch, transformers, vllm; print({'torch': torch.__version__, 'cuda': torch.version.cuda, 'gpu': torch.cuda.is_available(), 'transformers': transformers.__version__, 'vllm': vllm.__version__})"]
+CMD ["python", "-c", "import torch, transformers, tqdm, vllm; print({'torch': torch.__version__, 'cuda': torch.version.cuda, 'gpu': torch.cuda.is_available(), 'transformers': transformers.__version__, 'tqdm': tqdm.__version__, 'vllm': vllm.__version__})"]
