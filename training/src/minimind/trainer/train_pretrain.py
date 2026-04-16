@@ -37,11 +37,7 @@ from trainer._mlflow_helper import log_step as _mlflow_log_step
 from trainer._mlflow_helper import start as _mlflow_start
 from trainer.trainer_utils import (
     Logger,
-    atomic_torch_save as _atomic_torch_save,
-    build_autocast_context as _build_autocast_context,
     build_packed_batches,
-    build_grad_scaler as _build_grad_scaler,
-    current_mlflow_step as _current_mlflow_step,
     get_lr,
     init_distributed_mode,
     init_model,
@@ -49,6 +45,20 @@ from trainer.trainer_utils import (
     lm_checkpoint,
     log_flash_attention_status,
     setup_seed,
+)
+from trainer.trainer_utils import (
+    atomic_torch_save as _atomic_torch_save,
+)
+from trainer.trainer_utils import (
+    build_autocast_context as _build_autocast_context,
+)
+from trainer.trainer_utils import (
+    build_grad_scaler as _build_grad_scaler,
+)
+from trainer.trainer_utils import (
+    current_mlflow_step as _current_mlflow_step,
+)
+from trainer.trainer_utils import (
     validation_ppl_from_loss as _validation_ppl_from_loss,
 )
 
@@ -72,6 +82,7 @@ def _sigterm_handler(signum, frame):
         print(f"[SIGTERM] Warning: MLflow finish failed: {exc}", flush=True)
 
     sys.exit(143)
+
 
 def _reset_metric_window(state: dict[str, float | int | None]) -> None:
     state["window_start_time"] = time.perf_counter()
@@ -102,6 +113,7 @@ def _build_metric_state(
     }
     _reset_metric_window(state)
     return state
+
 
 def _build_pretrain_datasets(tokenizer):
     del tokenizer
@@ -569,8 +581,7 @@ def run_training(runtime_args):
             pin_memory=True,
             collate_fn=pretrain_collator,
             persistent_workers=True,
-            prefetch_factor=8
-            
+            prefetch_factor=8,
         )
     scaler = _build_grad_scaler(device_type, args.dtype)
     optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate)
@@ -621,8 +632,7 @@ def run_training(runtime_args):
             pin_memory=True,
             collate_fn=pretrain_collator,
             persistent_workers=True,
-            prefetch_factor=8
-            
+            prefetch_factor=8,
         )
         if skip > 0:
             Logger(f"Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始")
