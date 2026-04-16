@@ -27,12 +27,18 @@ RUN if [ -n "$SSH_PUBKEY" ]; then \
         echo "$SSH_PUBKEY" > /root/.ssh/authorized_keys && \
         chmod 600 /root/.ssh/authorized_keys; \
     fi
+
+# Bake the pretokenized dataset into the derived remote image only so remote
+# runs can start training without an on-boot dataset bootstrap.
+COPY data/datasets/pretrain_t2t_mini/ /workspace/data/datasets/pretrain_t2t_mini/
+
 # Bake repo-owned training source (no runtime git clone)
 COPY training/src/minimind/ /opt/training/minimind/
 
 # Bake training scripts
 COPY training/scripts/lib/train-pretrain-args.sh /opt/training/scripts/lib/train-pretrain-args.sh
 COPY training/scripts/lib/hf-dataset-bootstrap.sh /opt/training/scripts/lib/hf-dataset-bootstrap.sh
+COPY training/scripts/lib/load-run-config-env.py /opt/training/scripts/lib/load-run-config-env.py
 COPY training/scripts/pretokenize-data.sh /opt/training/scripts/pretokenize-data.sh
 COPY training/scripts/remote-entrypoint.sh /opt/training/scripts/remote-entrypoint.sh
 RUN chmod +x /opt/training/scripts/remote-entrypoint.sh /opt/training/scripts/pretokenize-data.sh /opt/training/scripts/lib/train-pretrain-args.sh /opt/training/scripts/lib/hf-dataset-bootstrap.sh

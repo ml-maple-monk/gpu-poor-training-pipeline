@@ -7,9 +7,9 @@ Remote preflight OK (VCR_IMAGE_BASE=vccr.io/f53909d3-a071-4826-8635-a62417ffc867
 [dstack-setup] Written: <HOME>/.dstack/server/config.yml (mode 600)
 [STEP 4] dstack server config ready
 [gpupoor] dstack server already running
-[DRY-RUN] Would prepare and upload the pretokenized dataset artifact
-[DRY-RUN] Would build and push the remote image
 [DRY-RUN] Would start the MLflow Cloudflare tunnel
+[gpupoor] Skipping dataset preparation (prepare_data=false)
+[DRY-RUN] Would build and push the remote image
 [gpupoor] Config: <REPO_ROOT>/examples/verda_remote.toml
 [gpupoor] Backend: dstack
 [gpupoor] MLFLOW_URL=https://dry-run-example.trycloudflare.com
