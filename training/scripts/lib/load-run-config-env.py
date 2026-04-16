@@ -78,8 +78,6 @@ def _env_from_toml(path: Path) -> dict[str, str]:
         "TRAIN_SAVE_WEIGHT": str(training.get("save_weight", "pretrain")),
         "TRAIN_FROM_WEIGHT": str(training.get("from_weight", "none")),
         "TRAIN_FROM_RESUME": _bool01(bool(training.get("from_resume", False))),
-        "TRAIN_USE_WANDB": _bool01(bool(training.get("use_wandb", False))),
-        "TRAIN_WANDB_PROJECT": str(training.get("wandb_project", "MiniMind-Pretrain")),
         "TRAIN_LR_SCHEDULE": str(training.get("lr_schedule", "cosine")),
         "TRAIN_LR_WARMUP_STEPS": str(training.get("lr_warmup_steps", 0)),
         "TRAIN_LR_MIN_RATIO": str(training.get("lr_min_ratio", 0.1)),

@@ -48,8 +48,6 @@ TRAIN_ROUTER_AUX_LOSS_COEF=0.002
 TRAIN_SAVE_WEIGHT=custom_pretrain
 TRAIN_FROM_WEIGHT=seed
 TRAIN_FROM_RESUME=1
-TRAIN_USE_WANDB=1
-TRAIN_WANDB_PROJECT=MiniMind-Custom
 TRAIN_LR_SCHEDULE=constant
 TRAIN_LR_WARMUP_STEPS=12
 TRAIN_LR_MIN_RATIO=0.25
@@ -140,8 +138,6 @@ def test_shared_train_args_match_expected_contract(tmp_path, render_train_args):
         "seed",
         "--from_resume",
         "1",
-        "--wandb_project",
-        "MiniMind-Custom",
         "--lr_schedule",
         "constant",
         "--lr_warmup_steps",
@@ -162,5 +158,4 @@ def test_shared_train_args_match_expected_contract(tmp_path, render_train_args):
         str(data_path),
         "--save_dir",
         str(save_dir),
-        "--use_wandb",
     ]

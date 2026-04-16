@@ -40,7 +40,6 @@ minimind_train_pretrain_args() {
         --save_weight "${TRAIN_SAVE_WEIGHT:-pretrain}"
         --from_weight "${TRAIN_FROM_WEIGHT:-none}"
         --from_resume "${TRAIN_FROM_RESUME:-0}"
-        --wandb_project "${TRAIN_WANDB_PROJECT:-MiniMind-Pretrain}"
         --lr_schedule "${TRAIN_LR_SCHEDULE:-cosine}"
         --lr_warmup_steps "${TRAIN_LR_WARMUP_STEPS:-0}"
         --lr_min_ratio "${TRAIN_LR_MIN_RATIO:-0.1}"
@@ -52,8 +51,4 @@ minimind_train_pretrain_args() {
         --data_path "$data_path"
         --save_dir "$save_dir"
     )
-
-    if [ "${TRAIN_USE_WANDB:-0}" = "1" ]; then
-        MINIMIND_TRAIN_PRETRAIN_ARGS+=(--use_wandb)
-    fi
 }
