@@ -2,6 +2,40 @@
 # entrypoint.sh — generate dstack CLI config in tmpfs before launching dashboard
 set -euo pipefail
 
+# doc-anchor: dashboard-token-discovery
+# Auto-discover DSTACK_TOKEN from the mounted host config if not set.
+# The host's ~/.dstack/config.yml (mounted at /seed-dstack) contains the
+# project token the CLI and REST API need for authentication.
+if [ -z "${DSTACK_TOKEN:-}" ] && [ -f /seed-dstack/config.yml ]; then
+    _discovered=$(python3 -c '
+import json, pathlib, sys
+try:
+    import yaml
+    data = yaml.safe_load(pathlib.Path("/seed-dstack/config.yml").read_text())
+except Exception:
+    try:
+        data = json.loads(pathlib.Path("/seed-dstack/config.yml").read_text())
+    except Exception:
+        # Last resort: grep the token line from the YAML
+        import re
+        text = pathlib.Path("/seed-dstack/config.yml").read_text()
+        m = re.search(r"token:\s*(.+)", text)
+        if m:
+            print(m.group(1).strip())
+        sys.exit(0)
+for p in (data.get("projects") or []):
+    t = p.get("token")
+    if t:
+        print(t)
+        break
+' 2>/dev/null || true)
+    if [ -n "${_discovered}" ]; then
+        export DSTACK_TOKEN="${_discovered}"
+        export DSTACK_SERVER_ADMIN_TOKEN="${_discovered}"
+        echo "[entrypoint] auto-discovered token from /seed-dstack/config.yml"
+    fi
+fi
+
 # doc-anchor: dashboard-config-gen
 # Materialize a ~/.dstack/config.yml the CLI can read.
 # Using http://host.docker.internal:3000 so the CLI inside the container

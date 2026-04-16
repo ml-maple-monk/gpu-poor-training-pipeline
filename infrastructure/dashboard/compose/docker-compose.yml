@@ -95,6 +95,7 @@ services:
       - ../../../.cf-tunnel.url:/tunnel/.cf-tunnel.url:ro
       - ../../../defaults.toml:/app/defaults.toml:ro
       - ../../../examples/runpod_e2e_test.toml:/app/config-overlay.toml:ro
+      - /home/geeyang/.dstack/config.yml:/seed-dstack/config.yml:ro
     ports:
       - "${DASHBOARD_PORT}:${DASHBOARD_PORT}"
     restart: unless-stopped
