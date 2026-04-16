@@ -192,12 +192,14 @@ def ensure_dstack_server(
         # the server crashes before binding to port 3000. Feed "y\n" on stdin so
         # startup is non-interactive, then close stdin so the daemon doesn't wait
         # for more input.
+        server_env = {**os.environ, "DSTACK_FF_AUTOCREATED_FLEETS_ENABLED": "1"}
         process = subprocess.Popen(
             [dstack_bin, "server"],
             stdin=subprocess.PIPE,
             stdout=handle,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=server_env,
         )
         try:
             if process.stdin is None:

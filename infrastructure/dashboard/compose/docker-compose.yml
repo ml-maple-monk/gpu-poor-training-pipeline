@@ -13,6 +13,7 @@ services:
       HOME: /tmp
       GIT_PYTHON_REFRESH: "quiet"
       XDG_CACHE_HOME: /tmp/.cache
+      DSTACK_FF_AUTOCREATED_FLEETS_ENABLED: "1"
     command:
       - /bin/sh
       - -lc
