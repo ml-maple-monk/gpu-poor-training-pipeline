@@ -23,8 +23,28 @@ from gpupoor.config import (
     find_dstack_bin,
     load_remote_settings,
     require_remote_settings,
+    DEFAULT_DSTACK_RENDERED_TASK_PATH,
+    DEFAULT_DSTACK_TUNNEL_JOIN_TIMEOUT,
+    DEFAULT_DSTACK_MIN_RESTART_WAIT,
+    DEFAULT_DSTACK_HEALTH_RECHECK_TIMEOUT,
+    DEFAULT_DSTACK_TASK_SIGTERM_GRACE,
+    DEFAULT_DSTACK_TASK_DURATION_BUFFER_MINUTES,
+    DEFAULT_DSTACK_OFFER_TIMEOUT,
+    DEFAULT_DSTACK_OFFER_QUERY_TIMEOUT,
+    DEFAULT_DSTACK_PROVIDER_MAX_OFFERS,
+    DEFAULT_DSTACK_TARGETED_MAX_OFFERS,
+    DEFAULT_DSTACK_RUN_START_POLL_INTERVAL,
+    DEFAULT_DSTACK_APPLY_TIMEOUT_BUFFER,
+    DEFAULT_DSTACK_FINAL_TUNNEL_JOIN_TIMEOUT,
+    DEFAULT_DSTACK_DRY_RUN_MLFLOW_URL,
+    DEFAULT_REMOTE_IMAGE_TAG,
+    DEFAULT_REMOTE_OUTPUT_DIR,
+    DEFAULT_REMOTE_DATASET_PATH,
+    DEFAULT_HF_DATASET_REPO,
+    DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME,
+    DEFAULT_REMOTE_RUN_START_TIMEOUT_SECONDS,
 )
-from gpupoor.runtime_config import build_training_runtime_env, runtime_config_b64
+from gpupoor.runtime_config import merged_toml_b64
 from gpupoor.subprocess_utils import CommandError, bash_script, run_command
 from gpupoor.utils import repo_path
 from gpupoor.utils.http import http_ok
@@ -35,25 +55,24 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-_TUNNEL_JOIN_TIMEOUT = 180
-_MIN_RESTART_WAIT_SECONDS = 5
-_HEALTH_RECHECK_TIMEOUT_SECONDS = 1
-_DEFAULT_REMOTE_IMAGE_TAG = "latest"
-_TASK_SIGTERM_GRACE_SECONDS = 30
-_TASK_DURATION_BUFFER_MINUTES = 2
-_DEFAULT_OFFER_TIMEOUT_SECONDS = 60
-_OFFER_QUERY_TIMEOUT_SECONDS = 30
-_DEFAULT_PROVIDER_MAX_OFFERS = 200
-_DEFAULT_TARGETED_MAX_OFFERS = 400
-_RUN_START_POLL_INTERVAL_SECONDS = 10
-_DEFAULT_RUN_START_TIMEOUT_SECONDS = 480
-_DRY_RUN_MLFLOW_URL = "https://dry-run-example.trycloudflare.com"
-_CONTAINER_REMOTE_DATASET_PATH = "/workspace/data/datasets/pretrain_t2t_mini"
-_DEFAULT_REMOTE_OUTPUT_DIR = "/workspace/out"
-_DEFAULT_HF_DATASET_REPO = "jingyaogong/minimind_dataset"
-_DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME = "pretokenized/pretrain_t2t_mini.tar.gz"
-_DSTACK_APPLY_TIMEOUT_BUFFER_SECONDS = 60
-_FINAL_TUNNEL_JOIN_TIMEOUT_SECONDS = 5
+_TUNNEL_JOIN_TIMEOUT = DEFAULT_DSTACK_TUNNEL_JOIN_TIMEOUT
+_MIN_RESTART_WAIT_SECONDS = DEFAULT_DSTACK_MIN_RESTART_WAIT
+_HEALTH_RECHECK_TIMEOUT_SECONDS = DEFAULT_DSTACK_HEALTH_RECHECK_TIMEOUT
+_DEFAULT_REMOTE_IMAGE_TAG = DEFAULT_REMOTE_IMAGE_TAG
+_TASK_SIGTERM_GRACE_SECONDS = DEFAULT_DSTACK_TASK_SIGTERM_GRACE
+_TASK_DURATION_BUFFER_MINUTES = DEFAULT_DSTACK_TASK_DURATION_BUFFER_MINUTES
+_DEFAULT_OFFER_TIMEOUT_SECONDS = DEFAULT_DSTACK_OFFER_TIMEOUT
+_OFFER_QUERY_TIMEOUT_SECONDS = DEFAULT_DSTACK_OFFER_QUERY_TIMEOUT
+_DEFAULT_PROVIDER_MAX_OFFERS = DEFAULT_DSTACK_PROVIDER_MAX_OFFERS
+_DEFAULT_TARGETED_MAX_OFFERS = DEFAULT_DSTACK_TARGETED_MAX_OFFERS
+_RUN_START_POLL_INTERVAL_SECONDS = DEFAULT_DSTACK_RUN_START_POLL_INTERVAL
+_DRY_RUN_MLFLOW_URL = DEFAULT_DSTACK_DRY_RUN_MLFLOW_URL
+_CONTAINER_REMOTE_DATASET_PATH = DEFAULT_REMOTE_DATASET_PATH
+_DEFAULT_REMOTE_OUTPUT_DIR = DEFAULT_REMOTE_OUTPUT_DIR
+_DEFAULT_HF_DATASET_REPO = DEFAULT_HF_DATASET_REPO
+_DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME = DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME
+_DSTACK_APPLY_TIMEOUT_BUFFER_SECONDS = DEFAULT_DSTACK_APPLY_TIMEOUT_BUFFER
+_FINAL_TUNNEL_JOIN_TIMEOUT_SECONDS = DEFAULT_DSTACK_FINAL_TUNNEL_JOIN_TIMEOUT
 
 __all__ = [
     "ensure_dstack_server",
@@ -285,7 +304,7 @@ def task_max_duration(time_cap_seconds: int) -> str:
 
 
 def render_task(settings: dict[str, str], config: RunConfig, image_sha: str) -> Path:
-    rendered_task = repo_path(".tmp", "pretrain.task.rendered.yml")
+    rendered_task = repo_path(*Path(DEFAULT_DSTACK_RENDERED_TASK_PATH).parts)
     rendered_task.parent.mkdir(parents=True, exist_ok=True)
     render_env = dict(settings)
     render_env["IMAGE_SHA"] = image_sha
@@ -470,7 +489,7 @@ def wait_for_run_start(
     dstack_bin: str,
     run_name: str,
     *,
-    max_wait: int = _DEFAULT_RUN_START_TIMEOUT_SECONDS,
+    max_wait: int = DEFAULT_REMOTE_RUN_START_TIMEOUT_SECONDS,
 ) -> None:
     log.info("Waiting for run '%s' to leave startup states", run_name)
     elapsed = 0
@@ -700,31 +719,24 @@ def launch_remote(
             return
 
         rendered_task = render_task(settings, config, image_sha)
-        runtime_env = build_training_runtime_env(
-            config,
-            dataset_path=_CONTAINER_REMOTE_DATASET_PATH,
-            output_dir=settings.get("OUT_DIR", _DEFAULT_REMOTE_OUTPUT_DIR),
-            mlflow_tracking_uri=mlflow_url,
-            extra_env={
-                "VERDA_PROFILE": "remote",
-                "DSTACK_RUN_NAME": config.name,
-                "OUT_DIR": settings.get("OUT_DIR", _DEFAULT_REMOTE_OUTPUT_DIR),
-                "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", _DEFAULT_HF_DATASET_REPO),
-                "HF_DATASET_FILENAME": settings.get("HF_DATASET_FILENAME", Path(config.recipe.dataset_path).name),
-                "HF_PRETOKENIZED_DATASET_REPO": settings.get(
-                    "HF_PRETOKENIZED_DATASET_REPO",
-                    settings.get("HF_DATASET_REPO", _DEFAULT_HF_DATASET_REPO),
-                ),
-                "HF_PRETOKENIZED_DATASET_FILENAME": settings.get(
-                    "HF_PRETOKENIZED_DATASET_FILENAME",
-                    _DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME,
-                ),
-                **(connection_bundle.to_runtime_env() if connection_bundle is not None else {}),
-            },
-        )
         apply_env = {
             "HF_TOKEN": read_required_secret("hf_token"),
-            "GPUPOOR_RUN_CONFIG_B64": runtime_config_b64(runtime_env),
+            "GPUPOOR_RUN_CONFIG_B64": merged_toml_b64(config),
+            "VERDA_PROFILE": "remote",
+            "DSTACK_RUN_NAME": config.name,
+            "OUT_DIR": settings.get("OUT_DIR", _DEFAULT_REMOTE_OUTPUT_DIR),
+            "MLFLOW_TRACKING_URI": mlflow_url,
+            "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", _DEFAULT_HF_DATASET_REPO),
+            "HF_DATASET_FILENAME": settings.get("HF_DATASET_FILENAME", Path(config.recipe.dataset_path).name),
+            "HF_PRETOKENIZED_DATASET_REPO": settings.get(
+                "HF_PRETOKENIZED_DATASET_REPO",
+                settings.get("HF_DATASET_REPO", _DEFAULT_HF_DATASET_REPO),
+            ),
+            "HF_PRETOKENIZED_DATASET_FILENAME": settings.get(
+                "HF_PRETOKENIZED_DATASET_FILENAME",
+                _DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME,
+            ),
+            **(connection_bundle.to_runtime_env() if connection_bundle is not None else {}),
         }
         # `dstack apply` can hang indefinitely on registry auth or
         # network stalls; without a timeout the CLI freezes with no

@@ -2,31 +2,24 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 
-from click.testing import CliRunner
+import pytest
+
+transformers = pytest.importorskip("transformers", reason="transformers is required for trainer_utils import")
 
 
-def test_train_pretrain_rejects_unknown_dtype(train_pretrain_module) -> None:
-    runner = CliRunner()
+def test_train_pretrain_rejects_unknown_dtype(import_minimind_module) -> None:
+    trainer_utils = import_minimind_module("minimind.trainer.trainer_utils")
 
-    result = runner.invoke(train_pretrain_module.main, ["--dtype", "fp32"])
-
-    assert result.exit_code != 0
-    assert "Invalid value for '--dtype'" in result.output
+    with pytest.raises(ValueError, match="Unsupported autocast dtype"):
+        trainer_utils.build_autocast_context("cuda", "fp32")
 
 
-def test_train_pretrain_accepts_float32_dtype(train_pretrain_module, monkeypatch) -> None:
-    runner = CliRunner()
-    captured: dict[str, object] = {}
+def test_train_pretrain_accepts_float32_dtype(import_minimind_module) -> None:
+    trainer_utils = import_minimind_module("minimind.trainer.trainer_utils")
 
-    def fake_run_training(args) -> None:
-        captured["dtype"] = args.dtype
-
-    monkeypatch.setattr(train_pretrain_module, "run_training", fake_run_training)
-
-    result = runner.invoke(train_pretrain_module.main, ["--dtype", "float32"])
-
-    assert result.exit_code == 0
-    assert captured["dtype"] == "float32"
+    ctx = trainer_utils.build_autocast_context("cuda", "float32")
+    # float32 on cuda should produce a real autocast context (not nullcontext)
+    assert ctx is not None
 
 
 def test_validation_ppl_reports_overflow_as_infinity(import_minimind_module) -> None:

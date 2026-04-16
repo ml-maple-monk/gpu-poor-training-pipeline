@@ -6,96 +6,149 @@ import os
 import re
 import shutil
 import subprocess
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib  # type: ignore[no-redef]
 from dataclasses import dataclass
 from pathlib import Path
 
 from gpupoor.utils import repo_path
 
-DEFAULT_RECIPE_KIND = "minimind_pretrain"
-DEFAULT_RECIPE_PREPARE_DATA = True
-DEFAULT_RECIPE_DATASET_PATH = "data/datasets/pretrain_t2t_mini"
-DEFAULT_RECIPE_OUTPUT_DIR = "data/minimind-out"
-DEFAULT_RECIPE_TIME_CAP_SECONDS = 600
-DEFAULT_RECIPE_MAX_SEQ_LEN = 340
-DEFAULT_RECIPE_VALIDATION_SPLIT_RATIO = 0.0
-DEFAULT_RECIPE_VALIDATION_INTERVAL_STEPS = 0
+def _load_defaults() -> dict:
+    """Load the project-wide defaults from defaults.toml."""
+    _defaults_path = Path(__file__).resolve().parent.parent.parent / "defaults.toml"
+    with open(_defaults_path, "rb") as _f:
+        return tomllib.load(_f)
 
-DEFAULT_TRAINING_EPOCHS = 1
-DEFAULT_TRAINING_BATCH_SIZE = 16
-DEFAULT_TRAINING_LEARNING_RATE = 5e-4
-DEFAULT_TRAINING_ACCUMULATION_STEPS = 8
-DEFAULT_TRAINING_NUM_WORKERS = 4
-DEFAULT_TRAINING_GRAD_CLIP = 1.0
-DEFAULT_TRAINING_HIDDEN_SIZE = 768
-DEFAULT_TRAINING_NUM_HIDDEN_LAYERS = 8
-DEFAULT_TRAINING_DROPOUT = 0.0
-DEFAULT_TRAINING_VOCAB_SIZE = 6400
-DEFAULT_TRAINING_FLASH_ATTN = True
-DEFAULT_TRAINING_NUM_ATTENTION_HEADS = 8
-DEFAULT_TRAINING_NUM_KEY_VALUE_HEADS = 4
-DEFAULT_TRAINING_HIDDEN_ACT = "silu"
-DEFAULT_TRAINING_MAX_POSITION_EMBEDDINGS = 32768
-DEFAULT_TRAINING_RMS_NORM_EPS = 1e-6
-DEFAULT_TRAINING_ROPE_THETA = 1e6
-DEFAULT_TRAINING_INFERENCE_ROPE_SCALING = False
-DEFAULT_TRAINING_DTYPE = "bfloat16"
-DEFAULT_TRAINING_LOG_INTERVAL = 10
-DEFAULT_TRAINING_SAVE_INTERVAL = 100
-DEFAULT_TRAINING_USE_COMPILE = False
-DEFAULT_TRAINING_USE_MOE = False
-DEFAULT_TRAINING_NUM_EXPERTS = 4
-DEFAULT_TRAINING_NUM_EXPERTS_PER_TOK = 1
-DEFAULT_TRAINING_NORM_TOPK_PROB = True
-DEFAULT_TRAINING_ROUTER_AUX_LOSS_COEF = 5e-4
-DEFAULT_TRAINING_SAVE_WEIGHT = "pretrain"
-DEFAULT_TRAINING_FROM_WEIGHT = "none"
-DEFAULT_TRAINING_FROM_RESUME = False
-DEFAULT_TRAINING_LR_SCHEDULE = "cosine"
-DEFAULT_TRAINING_LR_WARMUP_STEPS = 0
-DEFAULT_TRAINING_LR_MIN_RATIO = 0.1
-DEFAULT_TRAINING_INTERMEDIATE_SIZE_NUMERATOR = 314159
-DEFAULT_TRAINING_INTERMEDIATE_SIZE_DENOMINATOR = 6400000
-DEFAULT_TRAINING_INTERMEDIATE_SIZE_ALIGNMENT = 64
 
-DEFAULT_MLFLOW_EXPERIMENT_NAME = "minimind-pretrain"
-DEFAULT_MLFLOW_ARTIFACT_UPLOAD = False
-DEFAULT_MLFLOW_TRACKING_URI = "http://host.docker.internal:5000"
-DEFAULT_MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING = True
-DEFAULT_MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL = 5
-DEFAULT_MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING = 1
-DEFAULT_MLFLOW_HTTP_REQUEST_MAX_RETRIES = 7
-DEFAULT_MLFLOW_HTTP_REQUEST_TIMEOUT_SECONDS = 120
-DEFAULT_MLFLOW_START_TIMEOUT_SECONDS = 180
-DEFAULT_MLFLOW_START_RETRY_SECONDS = 5
-DEFAULT_MLFLOW_PEAK_TFLOPS_PER_GPU = 0.0
-DEFAULT_MLFLOW_TIME_TO_TARGET_METRIC = "none"
-DEFAULT_MLFLOW_TIME_TO_TARGET_VALUE = 0.0
+_DEFAULTS = _load_defaults()
 
-DEFAULT_LOCAL_BASE_IMAGE = "nvidia/cuda:12.4.1-runtime-ubuntu22.04"
-DEFAULT_VCR_IMAGE_BASE = "vccr.io/f53909d3-a071-4826-8635-a62417ffc867/verda-minimind"
-DEFAULT_DSTACK_SERVER_HEALTH_URL = "http://127.0.0.1:3000/"
-DEFAULT_MLFLOW_HEALTH_URL = "http://127.0.0.1:5000/health"
-DEFAULT_DOCTOR_SKIP_PREFLIGHT = False
-DEFAULT_DOCTOR_MAX_CLOCK_SKEW_SECONDS = 5
-DEFAULT_SMOKE_CPU = False
-DEFAULT_SMOKE_HEALTH_PORT = 8000
-DEFAULT_SMOKE_HEALTH_TIMEOUT_SECONDS = 30
-DEFAULT_SMOKE_STRICT_PORT = 18001
-DEFAULT_SMOKE_DEGRADED_PORT = 18002
-DEFAULT_SMOKE_SIGTERM_TIMEOUT_SECONDS = 30
-DEFAULT_SMOKE_DATA_WAIT_TIMEOUT_SECONDS = 2
-DEFAULT_SMOKE_PRUNE_VOLUMES = False
-DEFAULT_REMOTE_ENV_FILE = ".env.remote"
-DEFAULT_REMOTE_HEALTH_TIMEOUT_SECONDS = 5
-DEFAULT_REMOTE_DSTACK_SERVER_START_TIMEOUT_SECONDS = 30
-DEFAULT_REMOTE_RUN_START_TIMEOUT_SECONDS = 480
-DEFAULT_SEEKER_POLL_SECONDS = 30
-DEFAULT_SEEKER_MAX_OFFER_AGE_SECONDS = 60
-DEFAULT_SEEKER_MAX_SUBMIT_RETRIES = 3
-DEFAULT_CONTAINER_DATA_ROOT = "/data"
-DEFAULT_CONTAINER_RUNTIME_DATASET_PATH = "/data/datasets/pretrain_t2t_mini"
-DEFAULT_CONTAINER_RUNTIME_OUTPUT_DIR = "/data/minimind-out"
+# Recipe defaults (from defaults.toml)
+DEFAULT_RECIPE_KIND = _DEFAULTS["recipe"]["kind"]
+DEFAULT_RECIPE_PREPARE_DATA = _DEFAULTS["recipe"]["prepare_data"]
+DEFAULT_RECIPE_DATASET_PATH = _DEFAULTS["recipe"]["dataset_path"]
+DEFAULT_RECIPE_OUTPUT_DIR = _DEFAULTS["recipe"]["output_dir"]
+DEFAULT_RECIPE_TIME_CAP_SECONDS = _DEFAULTS["recipe"]["time_cap_seconds"]
+DEFAULT_RECIPE_MAX_SEQ_LEN = _DEFAULTS["recipe"]["max_seq_len"]
+DEFAULT_RECIPE_VALIDATION_SPLIT_RATIO = _DEFAULTS["recipe"]["validation_split_ratio"]
+DEFAULT_RECIPE_VALIDATION_INTERVAL_STEPS = _DEFAULTS["recipe"]["validation_interval_steps"]
+
+# Training defaults (from defaults.toml)
+DEFAULT_TRAINING_EPOCHS = _DEFAULTS["training"]["epochs"]
+DEFAULT_TRAINING_BATCH_SIZE = _DEFAULTS["training"]["batch_size"]
+DEFAULT_TRAINING_LEARNING_RATE = _DEFAULTS["training"]["learning_rate"]
+DEFAULT_TRAINING_ACCUMULATION_STEPS = _DEFAULTS["training"]["accumulation_steps"]
+DEFAULT_TRAINING_NUM_WORKERS = _DEFAULTS["training"]["num_workers"]
+DEFAULT_TRAINING_GRAD_CLIP = _DEFAULTS["training"]["grad_clip"]
+DEFAULT_TRAINING_HIDDEN_SIZE = _DEFAULTS["training"]["hidden_size"]
+DEFAULT_TRAINING_NUM_HIDDEN_LAYERS = _DEFAULTS["training"]["num_hidden_layers"]
+DEFAULT_TRAINING_DROPOUT = _DEFAULTS["training"]["dropout"]
+DEFAULT_TRAINING_VOCAB_SIZE = _DEFAULTS["training"]["vocab_size"]
+DEFAULT_TRAINING_FLASH_ATTN = _DEFAULTS["training"]["flash_attn"]
+DEFAULT_TRAINING_NUM_ATTENTION_HEADS = _DEFAULTS["training"]["num_attention_heads"]
+DEFAULT_TRAINING_NUM_KEY_VALUE_HEADS = _DEFAULTS["training"]["num_key_value_heads"]
+DEFAULT_TRAINING_HIDDEN_ACT = _DEFAULTS["training"]["hidden_act"]
+DEFAULT_TRAINING_MAX_POSITION_EMBEDDINGS = _DEFAULTS["training"]["max_position_embeddings"]
+DEFAULT_TRAINING_RMS_NORM_EPS = _DEFAULTS["training"]["rms_norm_eps"]
+DEFAULT_TRAINING_ROPE_THETA = _DEFAULTS["training"]["rope_theta"]
+DEFAULT_TRAINING_INFERENCE_ROPE_SCALING = _DEFAULTS["training"]["inference_rope_scaling"]
+DEFAULT_TRAINING_DTYPE = _DEFAULTS["training"]["dtype"]
+DEFAULT_TRAINING_LOG_INTERVAL = _DEFAULTS["training"]["log_interval"]
+DEFAULT_TRAINING_SAVE_INTERVAL = _DEFAULTS["training"]["save_interval"]
+DEFAULT_TRAINING_USE_COMPILE = _DEFAULTS["training"]["use_compile"]
+DEFAULT_TRAINING_USE_MOE = _DEFAULTS["training"]["use_moe"]
+DEFAULT_TRAINING_NUM_EXPERTS = _DEFAULTS["training"]["num_experts"]
+DEFAULT_TRAINING_NUM_EXPERTS_PER_TOK = _DEFAULTS["training"]["num_experts_per_tok"]
+DEFAULT_TRAINING_NORM_TOPK_PROB = _DEFAULTS["training"]["norm_topk_prob"]
+DEFAULT_TRAINING_ROUTER_AUX_LOSS_COEF = _DEFAULTS["training"]["router_aux_loss_coef"]
+DEFAULT_TRAINING_SAVE_WEIGHT = _DEFAULTS["training"]["save_weight"]
+DEFAULT_TRAINING_FROM_WEIGHT = _DEFAULTS["training"]["from_weight"]
+DEFAULT_TRAINING_FROM_RESUME = _DEFAULTS["training"]["from_resume"]
+DEFAULT_TRAINING_LR_SCHEDULE = _DEFAULTS["training"]["lr_schedule"]
+DEFAULT_TRAINING_LR_WARMUP_STEPS = _DEFAULTS["training"]["lr_warmup_steps"]
+DEFAULT_TRAINING_LR_MIN_RATIO = _DEFAULTS["training"]["lr_min_ratio"]
+DEFAULT_TRAINING_INTERMEDIATE_SIZE_NUMERATOR = _DEFAULTS["training"]["intermediate_size_numerator"]
+DEFAULT_TRAINING_INTERMEDIATE_SIZE_DENOMINATOR = _DEFAULTS["training"]["intermediate_size_denominator"]
+DEFAULT_TRAINING_INTERMEDIATE_SIZE_ALIGNMENT = _DEFAULTS["training"]["intermediate_size_alignment"]
+
+# MLflow defaults (from defaults.toml)
+DEFAULT_MLFLOW_EXPERIMENT_NAME = _DEFAULTS["mlflow"]["experiment_name"]
+DEFAULT_MLFLOW_ARTIFACT_UPLOAD = _DEFAULTS["mlflow"]["artifact_upload"]
+DEFAULT_MLFLOW_TRACKING_URI = _DEFAULTS["mlflow"]["tracking_uri"]
+DEFAULT_MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING = _DEFAULTS["mlflow"]["enable_system_metrics_logging"]
+DEFAULT_MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL = _DEFAULTS["mlflow"]["system_metrics_sampling_interval"]
+DEFAULT_MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING = _DEFAULTS["mlflow"]["system_metrics_samples_before_logging"]
+DEFAULT_MLFLOW_HTTP_REQUEST_MAX_RETRIES = _DEFAULTS["mlflow"]["http_request_max_retries"]
+DEFAULT_MLFLOW_HTTP_REQUEST_TIMEOUT_SECONDS = _DEFAULTS["mlflow"]["http_request_timeout_seconds"]
+DEFAULT_MLFLOW_START_TIMEOUT_SECONDS = _DEFAULTS["mlflow"]["start_timeout_seconds"]
+DEFAULT_MLFLOW_START_RETRY_SECONDS = _DEFAULTS["mlflow"]["start_retry_seconds"]
+DEFAULT_MLFLOW_PEAK_TFLOPS_PER_GPU = _DEFAULTS["mlflow"]["peak_tflops_per_gpu"]
+DEFAULT_MLFLOW_TIME_TO_TARGET_METRIC = _DEFAULTS["mlflow"]["time_to_target_metric"]
+DEFAULT_MLFLOW_TIME_TO_TARGET_VALUE = _DEFAULTS["mlflow"]["time_to_target_value"]
+
+# Smoke / local defaults (from defaults.toml)
+DEFAULT_LOCAL_BASE_IMAGE = _DEFAULTS["smoke"]["base_image"]
+DEFAULT_SMOKE_CPU = _DEFAULTS["smoke"]["cpu"]
+DEFAULT_SMOKE_HEALTH_PORT = _DEFAULTS["smoke"]["health_port"]
+DEFAULT_SMOKE_HEALTH_TIMEOUT_SECONDS = _DEFAULTS["smoke"]["health_timeout_seconds"]
+DEFAULT_SMOKE_STRICT_PORT = _DEFAULTS["smoke"]["strict_port"]
+DEFAULT_SMOKE_DEGRADED_PORT = _DEFAULTS["smoke"]["degraded_port"]
+DEFAULT_SMOKE_SIGTERM_TIMEOUT_SECONDS = _DEFAULTS["smoke"]["sigterm_timeout_seconds"]
+DEFAULT_SMOKE_DATA_WAIT_TIMEOUT_SECONDS = _DEFAULTS["smoke"]["data_wait_timeout_seconds"]
+DEFAULT_SMOKE_PRUNE_VOLUMES = _DEFAULTS["smoke"]["prune_volumes"]
+
+# Remote defaults (from defaults.toml)
+DEFAULT_VCR_IMAGE_BASE = _DEFAULTS["remote"]["vcr_image_base"]
+DEFAULT_DSTACK_SERVER_HEALTH_URL = _DEFAULTS["remote"]["dstack_server_health_url"]
+DEFAULT_MLFLOW_HEALTH_URL = _DEFAULTS["remote"]["mlflow_health_url"]
+DEFAULT_REMOTE_ENV_FILE = _DEFAULTS["remote"]["env_file"]
+DEFAULT_REMOTE_HEALTH_TIMEOUT_SECONDS = _DEFAULTS["remote"]["health_timeout_seconds"]
+DEFAULT_REMOTE_DSTACK_SERVER_START_TIMEOUT_SECONDS = _DEFAULTS["remote"]["dstack_server_start_timeout_seconds"]
+DEFAULT_REMOTE_RUN_START_TIMEOUT_SECONDS = _DEFAULTS["remote"]["run_start_timeout_seconds"]
+
+# Doctor defaults (from defaults.toml)
+DEFAULT_DOCTOR_SKIP_PREFLIGHT = _DEFAULTS["doctor"]["skip_preflight"]
+DEFAULT_DOCTOR_MAX_CLOCK_SKEW_SECONDS = _DEFAULTS["doctor"]["max_clock_skew_seconds"]
+
+# Seeker defaults (from defaults.toml)
+DEFAULT_SEEKER_POLL_SECONDS = _DEFAULTS["seeker"]["poll_seconds"]
+DEFAULT_SEEKER_MAX_OFFER_AGE_SECONDS = _DEFAULTS["seeker"]["max_offer_age_seconds"]
+DEFAULT_SEEKER_MAX_SUBMIT_RETRIES = _DEFAULTS["seeker"]["max_submit_retries"]
+
+# Container defaults (from defaults.toml)
+DEFAULT_CONTAINER_DATA_ROOT = _DEFAULTS["container"]["data_root"]
+DEFAULT_CONTAINER_RUNTIME_DATASET_PATH = _DEFAULTS["container"]["runtime_dataset_path"]
+DEFAULT_CONTAINER_RUNTIME_OUTPUT_DIR = _DEFAULTS["container"]["runtime_output_dir"]
+
+# Dstack operational defaults (from defaults.toml)
+DEFAULT_DSTACK_RENDERED_TASK_PATH = _DEFAULTS["dstack"]["rendered_task_path"]
+DEFAULT_DSTACK_TUNNEL_JOIN_TIMEOUT = _DEFAULTS["dstack"]["tunnel_join_timeout_seconds"]
+DEFAULT_DSTACK_MIN_RESTART_WAIT = _DEFAULTS["dstack"]["min_restart_wait_seconds"]
+DEFAULT_DSTACK_HEALTH_RECHECK_TIMEOUT = _DEFAULTS["dstack"]["health_recheck_timeout_seconds"]
+DEFAULT_DSTACK_TASK_SIGTERM_GRACE = _DEFAULTS["dstack"]["task_sigterm_grace_seconds"]
+DEFAULT_DSTACK_TASK_DURATION_BUFFER_MINUTES = _DEFAULTS["dstack"]["task_duration_buffer_minutes"]
+DEFAULT_DSTACK_OFFER_TIMEOUT = _DEFAULTS["dstack"]["offer_timeout_seconds"]
+DEFAULT_DSTACK_OFFER_QUERY_TIMEOUT = _DEFAULTS["dstack"]["offer_query_timeout_seconds"]
+DEFAULT_DSTACK_PROVIDER_MAX_OFFERS = _DEFAULTS["dstack"]["provider_max_offers"]
+DEFAULT_DSTACK_TARGETED_MAX_OFFERS = _DEFAULTS["dstack"]["targeted_max_offers"]
+DEFAULT_DSTACK_RUN_START_POLL_INTERVAL = _DEFAULTS["dstack"]["run_start_poll_interval_seconds"]
+DEFAULT_DSTACK_APPLY_TIMEOUT_BUFFER = _DEFAULTS["dstack"]["apply_timeout_buffer_seconds"]
+DEFAULT_DSTACK_FINAL_TUNNEL_JOIN_TIMEOUT = _DEFAULTS["dstack"]["final_tunnel_join_timeout_seconds"]
+DEFAULT_DSTACK_DRY_RUN_MLFLOW_URL = _DEFAULTS["dstack"]["dry_run_mlflow_url"]
+
+# Remote additional defaults (from defaults.toml)
+DEFAULT_REMOTE_IMAGE_TAG = _DEFAULTS["remote"]["remote_image_tag"]
+DEFAULT_REMOTE_OUTPUT_DIR = _DEFAULTS["remote"]["remote_output_dir"]
+DEFAULT_REMOTE_DATASET_PATH = _DEFAULTS["remote"]["remote_dataset_path"]
+DEFAULT_HF_DATASET_REPO = _DEFAULTS["remote"]["hf_dataset_repo"]
+DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME = _DEFAULTS["remote"]["hf_pretokenized_dataset_filename"]
+
+# Emulator defaults (from defaults.toml)
+DEFAULT_EMULATOR_HEALTH_PORT = _DEFAULTS["emulator"]["health_port"]
+DEFAULT_EMULATOR_HEALTH_TIMEOUT = _DEFAULTS["emulator"]["health_timeout_seconds"]
+DEFAULT_EMULATOR_PER_CHECK_TIMEOUT = _DEFAULTS["emulator"]["per_check_health_timeout_seconds"]
+DEFAULT_EMULATOR_LOG_TAIL_LINES = _DEFAULTS["emulator"]["log_tail_lines"]
 _BACKEND_ALIASES = {
     "runpod": "runpod",
     "runpodio": "runpod",
@@ -626,7 +679,7 @@ def find_dstack_bin() -> str:
     raise RuntimeError("No working dstack CLI found")
 
 
-_KNOWN_TOP_LEVEL = {"name", "recipe", "training", "backend", "mlflow", "doctor", "smoke", "remote", "seeker"}
+_KNOWN_TOP_LEVEL = {"name", "recipe", "training", "backend", "mlflow", "doctor", "smoke", "remote", "seeker", "model", "pretokenize", "gpu_profiles", "dataset", "container", "dstack", "emulator", "dashboard"}
 _KNOWN_RECIPE = {
     "kind",
     "prepare_data",
@@ -717,9 +770,24 @@ _KNOWN_REMOTE = {
     "gpu_count",
     "spot_policy",
     "max_price",
+    "remote_image_tag",
+    "remote_output_dir",
+    "remote_dataset_path",
+    "hf_dataset_repo",
+    "hf_pretokenized_dataset_filename",
 }
 _KNOWN_SEEKER = {"poll_seconds", "max_offer_age_seconds", "max_submit_retries", "targets"}
 _KNOWN_SEEKER_TARGET = {"backend", "gpu", "count", "mode", "regions", "max_price"}
+_KNOWN_MODEL = {"internals", "generation", "rope_scaling"}
+_KNOWN_MODEL_INTERNALS = {"bos_token_id", "eos_token_id", "rms_norm_forward_eps", "freqs_end", "moe_topk_epsilon", "rope_scaling_min_ramp_denominator"}
+_KNOWN_MODEL_GENERATION = {"max_new_tokens", "temperature", "top_p", "top_k", "eos_token_id", "repetition_penalty"}
+_KNOWN_MODEL_ROPE_SCALING = {"beta_fast", "beta_slow", "factor", "original_max_position_embeddings", "attention_factor", "type"}
+_KNOWN_PRETOKENIZE = {"tokenizer_path", "max_length", "overwrite", "progress_interval"}
+_KNOWN_DATASET = {"tokenizers_parallelism", "sample_add_system_ratio", "empty_think_ratio", "progress_interval", "tokens_dtype", "index_dtype", "version", "tokens_file", "index_file", "metadata_file", "system_prompts"}
+_KNOWN_CONTAINER = {"data_root", "runtime_dataset_path", "runtime_output_dir"}
+_KNOWN_DSTACK = {"rendered_task_path", "tunnel_join_timeout_seconds", "min_restart_wait_seconds", "health_recheck_timeout_seconds", "task_sigterm_grace_seconds", "task_duration_buffer_minutes", "offer_timeout_seconds", "offer_query_timeout_seconds", "provider_max_offers", "targeted_max_offers", "run_start_poll_interval_seconds", "apply_timeout_buffer_seconds", "final_tunnel_join_timeout_seconds", "dry_run_mlflow_url"}
+_KNOWN_EMULATOR = {"health_port", "health_timeout_seconds", "per_check_health_timeout_seconds", "log_tail_lines"}
+_KNOWN_GPU_PROFILE = {"pattern", "canonical_name", "training_tflops", "fp8_tflops"}
 
 
 def load_run_config(path: str | Path) -> RunConfig:
@@ -768,6 +836,46 @@ def load_run_config(path: str | Path) -> RunConfig:
     _reject_unknown(remote_data, _KNOWN_REMOTE, "remote")
     seeker_data = _optional_table(data, "seeker")
     _reject_unknown(seeker_data, _KNOWN_SEEKER, "seeker")
+
+    model_data = _optional_table(data, "model")
+    if model_data:
+        _reject_unknown(model_data, _KNOWN_MODEL, "model")
+        model_internals = _optional_table(model_data, "internals")
+        if model_internals:
+            _reject_unknown(model_internals, _KNOWN_MODEL_INTERNALS, "model.internals")
+        model_generation = _optional_table(model_data, "generation")
+        if model_generation:
+            _reject_unknown(model_generation, _KNOWN_MODEL_GENERATION, "model.generation")
+        model_rope = _optional_table(model_data, "rope_scaling")
+        if model_rope:
+            _reject_unknown(model_rope, _KNOWN_MODEL_ROPE_SCALING, "model.rope_scaling")
+
+    pretokenize_data = _optional_table(data, "pretokenize")
+    if pretokenize_data:
+        _reject_unknown(pretokenize_data, _KNOWN_PRETOKENIZE, "pretokenize")
+
+    dataset_data = _optional_table(data, "dataset")
+    if dataset_data:
+        _reject_unknown(dataset_data, _KNOWN_DATASET, "dataset")
+
+    container_data = _optional_table(data, "container")
+    if container_data:
+        _reject_unknown(container_data, _KNOWN_CONTAINER, "container")
+
+    dstack_data = _optional_table(data, "dstack")
+    if dstack_data:
+        _reject_unknown(dstack_data, _KNOWN_DSTACK, "dstack")
+
+    emulator_data = _optional_table(data, "emulator")
+    if emulator_data:
+        _reject_unknown(emulator_data, _KNOWN_EMULATOR, "emulator")
+
+    gpu_profiles_data = data.get("gpu_profiles")
+    if gpu_profiles_data is not None:
+        if not isinstance(gpu_profiles_data, list):
+            raise ConfigError("gpu_profiles must be an array of tables")
+        for i, profile in enumerate(gpu_profiles_data):
+            _reject_unknown(profile, _KNOWN_GPU_PROFILE, f"gpu_profiles[{i}]")
 
     recipe = RecipeConfig(
         kind=_require_str(recipe_data, "kind", default=DEFAULT_RECIPE_KIND),

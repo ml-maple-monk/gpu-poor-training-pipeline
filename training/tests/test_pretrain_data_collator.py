@@ -5,6 +5,9 @@ from __future__ import annotations
 import pytest
 import torch
 
+datasets = pytest.importorskip("datasets", reason="datasets is required for lm_dataset import")
+transformers = pytest.importorskip("transformers", reason="transformers is required for model_minimind import")
+
 
 def test_pretrain_data_collator_stacks_inputs_and_builds_position_ids(lm_dataset_module, packed_eos_features) -> None:
     collator = lm_dataset_module.PretrainDataCollator(eos_token_id=3, max_seq_len=6)

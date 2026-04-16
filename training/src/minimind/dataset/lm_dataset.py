@@ -10,48 +10,23 @@ import torch
 from datasets import Features, Value, load_dataset
 from torch.utils.data import Dataset
 
-TOKENIZERS_PARALLELISM_ENV = "TOKENIZERS_PARALLELISM"
-TOKENIZERS_PARALLELISM_DISABLED = "false"
-PRETOKENIZED_SAMPLE_ADD_SYSTEM_RATIO = 0.2
-PRETOKENIZED_EMPTY_THINK_RATIO = 0.2
-PRETOKENIZED_PROGRESS_INTERVAL = 50000
-PRETOKENIZED_TOKENS_DTYPE = np.int32
-PRETOKENIZED_INDEX_DTYPE = np.int64
-PRETOKENIZED_TOKENS_DTYPE_NAME = "int32"
-PRETOKENIZED_INDEX_DTYPE_NAME = "int64"
-
-os.environ[TOKENIZERS_PARALLELISM_ENV] = TOKENIZERS_PARALLELISM_DISABLED
-
-PRETOKENIZED_DATASET_VERSION = 1
-PRETOKENIZED_TOKENS_FILE = "tokens.bin"
-PRETOKENIZED_INDEX_FILE = "index.bin"
-PRETOKENIZED_METADATA_FILE = "metadata.json"
+_DTYPE_MAP = {"int32": np.int32, "int64": np.int64, "float32": np.float32}
 
 
-def pre_processing_chat(conversations, add_system_ratio=PRETOKENIZED_SAMPLE_ADD_SYSTEM_RATIO):
+def pre_processing_chat(conversations, add_system_ratio=0.2, system_prompts=None):
     # tool use 数据完整保留不做处理
     if any(conv.get("tools") for conv in conversations):
         return conversations
 
-    SYSTEM_PROMPTS = [
-        "你是一个知识丰富的AI，尽力为用户提供准确的信息。",
-        "你是minimind，一个小巧但有用的语言模型。",
-        "你是一个专业的AI助手，请提供有价值的回答。",
-        "你是minimind，请尽力帮助用户解决问题。",
-        "你是一个可靠的AI，请给出准确的回答。",
-        "You are a helpful AI assistant.",
-        "You are minimind, a lightweight intelligent assistant.",
-        "You are a friendly chatbot. Please answer the user's questions carefully.",
-        "You are a knowledgeable AI. Try your best to provide accurate information.",
-        "You are minimind, a small but useful language model.",
-    ]
+    if system_prompts is None:
+        system_prompts = []
     # 概率性添加system
-    if conversations[0].get("role") != "system" and random.random() < add_system_ratio:
-        return [{"role": "system", "content": random.choice(SYSTEM_PROMPTS)}] + conversations
+    if system_prompts and conversations[0].get("role") != "system" and random.random() < add_system_ratio:
+        return [{"role": "system", "content": random.choice(system_prompts)}] + conversations
     return conversations
 
 
-def post_processing_chat(prompt_content, empty_think_ratio=PRETOKENIZED_EMPTY_THINK_RATIO):
+def post_processing_chat(prompt_content, empty_think_ratio=0.2):
     # 以80%概率移除空思考标签
     if "<think>\n\n</think>\n\n" in prompt_content and random.random() > empty_think_ratio:
         prompt_content = prompt_content.replace("<think>\n\n</think>\n\n", "")
@@ -59,7 +34,20 @@ def post_processing_chat(prompt_content, empty_think_ratio=PRETOKENIZED_EMPTY_TH
 
 
 class PretrainDataset(Dataset):
-    def __init__(self, data_path=None, tokenizer=None, max_length=512, samples=None, sample_indices=None):
+    def __init__(
+        self,
+        data_path=None,
+        tokenizer=None,
+        max_length=512,
+        samples=None,
+        sample_indices=None,
+        tokens_file="tokens.bin",
+        index_file="index.bin",
+        metadata_file="metadata.json",
+        tokens_dtype_name="int32",
+        index_dtype_name="int64",
+        dataset_version=1,
+    ):
         super().__init__()
         if data_path is None:
             raise ValueError("data_path is required")
@@ -69,7 +57,13 @@ class PretrainDataset(Dataset):
             raise ValueError("PretrainDataset now reads pretokenized mmap data; samples is no longer accepted")
         self.max_length = max_length
         self.data_path = Path(data_path)
-        self.metadata = load_pretokenized_metadata(self.data_path)
+        self._tokens_file = tokens_file
+        self._index_file = index_file
+        self._tokens_dtype = _DTYPE_MAP[tokens_dtype_name]
+        self._index_dtype = _DTYPE_MAP[index_dtype_name]
+        self.metadata = load_pretokenized_metadata(
+            self.data_path, metadata_file=metadata_file, dataset_version=dataset_version
+        )
         self.pad_token_id = int(self.metadata["pad_token_id"])
         self.sample_count = int(self.metadata["sample_count"])
         self.sample_indices = None if sample_indices is None else np.asarray(sample_indices, dtype=np.int64)
@@ -95,15 +89,15 @@ class PretrainDataset(Dataset):
     def _ensure_memmaps(self):
         if self._tokens is None:
             self._tokens = np.memmap(
-                self.data_path / PRETOKENIZED_TOKENS_FILE,
-                dtype=PRETOKENIZED_TOKENS_DTYPE,
+                self.data_path / self._tokens_file,
+                dtype=self._tokens_dtype,
                 mode="r",
                 shape=(int(self.metadata["token_count"]),),
             )
         if self._index is None:
             self._index = np.memmap(
-                self.data_path / PRETOKENIZED_INDEX_FILE,
-                dtype=PRETOKENIZED_INDEX_DTYPE,
+                self.data_path / self._index_file,
+                dtype=self._index_dtype,
                 mode="r",
                 shape=(self.sample_count, 2),
             )
@@ -226,27 +220,27 @@ class PretrainDataCollator:
         }
 
 
-def pretokenized_dataset_exists(path):
-    return (Path(path) / PRETOKENIZED_METADATA_FILE).is_file()
+def pretokenized_dataset_exists(path, metadata_file="metadata.json"):
+    return (Path(path) / metadata_file).is_file()
 
 
-def load_pretokenized_metadata(path):
-    metadata_path = Path(path) / PRETOKENIZED_METADATA_FILE
+def load_pretokenized_metadata(path, metadata_file="metadata.json", dataset_version=1):
+    metadata_path = Path(path) / metadata_file
     if not metadata_path.is_file():
         raise FileNotFoundError(
             f"{metadata_path} not found. Run the pretokenization pipeline before starting pretraining."
         )
     with metadata_path.open(encoding="utf-8") as handle:
         metadata = json.load(handle)
-    if metadata.get("version") != PRETOKENIZED_DATASET_VERSION:
+    if metadata.get("version") != dataset_version:
         raise ValueError(
-            f"Unsupported pretokenized dataset version {metadata.get('version')}; expected {PRETOKENIZED_DATASET_VERSION}"
+            f"Unsupported pretokenized dataset version {metadata.get('version')}; expected {dataset_version}"
         )
     return metadata
 
 
-def pretokenized_sample_count(path):
-    return int(load_pretokenized_metadata(path)["sample_count"])
+def pretokenized_sample_count(path, metadata_file="metadata.json", dataset_version=1):
+    return int(load_pretokenized_metadata(path, metadata_file=metadata_file, dataset_version=dataset_version)["sample_count"])
 
 
 def build_pretokenized_corpus(
@@ -256,10 +250,19 @@ def build_pretokenized_corpus(
     max_length,
     *,
     overwrite=False,
-    progress_interval=PRETOKENIZED_PROGRESS_INTERVAL,
+    progress_interval=50000,
+    tokens_file="tokens.bin",
+    index_file="index.bin",
+    metadata_file="metadata.json",
+    tokens_dtype_name="int32",
+    index_dtype_name="int64",
+    dataset_version=1,
 ):
     if tokenizer is None:
         raise ValueError("tokenizer is required")
+
+    tokens_dtype = _DTYPE_MAP[tokens_dtype_name]
+    index_dtype = _DTYPE_MAP[index_dtype_name]
 
     source_path = Path(input_path)
     if not source_path.is_file():
@@ -271,8 +274,8 @@ def build_pretokenized_corpus(
         raise FileExistsError(f"{output_dir} already exists; pass overwrite=True to rebuild it")
 
     temp_dir = Path(tempfile.mkdtemp(prefix=f"{output_dir.name}.tmp.", dir=output_dir.parent))
-    tokens_tmp = temp_dir / PRETOKENIZED_TOKENS_FILE
-    index_tmp = temp_dir / PRETOKENIZED_INDEX_FILE
+    tokens_tmp = temp_dir / tokens_file
+    index_tmp = temp_dir / index_file
 
     token_count = 0
     sample_count = 0
@@ -291,8 +294,8 @@ def build_pretokenized_corpus(
                 str(payload["text"]), add_special_tokens=False, max_length=max_length - 2, truncation=True
             ).input_ids
             token_ids = [tokenizer.bos_token_id] + token_ids + [tokenizer.eos_token_id]
-            np.asarray(token_ids, dtype=PRETOKENIZED_TOKENS_DTYPE).tofile(tokens_fp)
-            np.asarray((token_count, len(token_ids)), dtype=PRETOKENIZED_INDEX_DTYPE).tofile(index_fp)
+            np.asarray(token_ids, dtype=tokens_dtype).tofile(tokens_fp)
+            np.asarray((token_count, len(token_ids)), dtype=index_dtype).tofile(index_fp)
             token_count += len(token_ids)
             sample_count += 1
             if progress_interval > 0 and sample_count % progress_interval == 0:
@@ -302,18 +305,18 @@ def build_pretokenized_corpus(
                 )
 
     metadata = {
-        "version": PRETOKENIZED_DATASET_VERSION,
+        "version": dataset_version,
         "max_length": int(max_length),
         "sample_count": int(sample_count),
         "token_count": int(token_count),
-        "tokens_dtype": PRETOKENIZED_TOKENS_DTYPE_NAME,
-        "index_dtype": PRETOKENIZED_INDEX_DTYPE_NAME,
+        "tokens_dtype": tokens_dtype_name,
+        "index_dtype": index_dtype_name,
         "bos_token_id": int(tokenizer.bos_token_id),
         "eos_token_id": int(tokenizer.eos_token_id),
         "pad_token_id": int(tokenizer.pad_token_id),
         "source_path": str(source_path),
     }
-    with (temp_dir / PRETOKENIZED_METADATA_FILE).open("w", encoding="utf-8") as handle:
+    with (temp_dir / metadata_file).open("w", encoding="utf-8") as handle:
         json.dump(metadata, handle, ensure_ascii=True, indent=2)
         handle.write("\n")
 

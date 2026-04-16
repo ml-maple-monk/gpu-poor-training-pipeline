@@ -25,9 +25,6 @@ services:
       - ../../src:/workspace/src:ro
       - ../../data:/data
       - ../../training/scripts/run-train.sh:/workspace/run-train.sh:ro
-      - ../../training/scripts/lib/train-pretrain-args.sh:/workspace/train-pretrain-args.sh:ro
-      - ../../training/scripts/lib/load-run-config-env.py:/workspace/load-run-config-env.py:ro
-      - ../../training/scripts/lib/runtime-defaults.sh:/workspace/runtime-defaults.sh:ro
     working_dir: /workspace/minimind
     deploy:
       resources:

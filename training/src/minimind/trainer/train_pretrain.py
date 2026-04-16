@@ -9,7 +9,6 @@ from types import SimpleNamespace
 __package__ = "trainer"
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-import click
 import torch
 import torch.distributed as dist
 from torch import optim
@@ -61,9 +60,6 @@ from trainer.trainer_utils import (
 from trainer.trainer_utils import (
     validation_ppl_from_loss as _validation_ppl_from_loss,
 )
-
-VALIDATION_SPLIT_SEED = 42
-
 
 def _sigterm_handler(signum, frame):
     print("[SIGTERM] Received SIGTERM — shutting down gracefully", flush=True)
@@ -130,7 +126,8 @@ def _build_pretrain_datasets(tokenizer):
                 Logger("Validation disabled: dataset has fewer than 2 samples after loading")
         else:
             train_indices, val_indices = split_validation_indices(
-                sample_count, args.validation_split_ratio, seed=VALIDATION_SPLIT_SEED
+                sample_count, args.validation_split_ratio,
+                seed=args._validation_split_seed,
             )
             if dist_ready():
                 val_indices = val_indices[dist.get_rank() :: world_size()]
@@ -472,6 +469,10 @@ def run_training(runtime_args):
 
     # ========== 2. 配置目录、模型参数、检查ckp ==========
     os.makedirs(args.save_dir, exist_ok=True)
+    model_internals = getattr(args, '_model_config', {}).get('internals', {})
+    model_rope_scaling = getattr(args, '_model_config', {}).get('rope_scaling', {})
+    model_generation = getattr(args, '_model_config', {}).get('generation', {})
+
     lm_config = MiniMindConfig(
         hidden_size=args.hidden_size,
         num_hidden_layers=args.num_hidden_layers,
@@ -492,6 +493,19 @@ def run_training(runtime_args):
         moe_intermediate_size=args.moe_intermediate_size,
         norm_topk_prob=bool(args.norm_topk_prob),
         router_aux_loss_coef=args.router_aux_loss_coef,
+        bos_token_id=model_internals.get('bos_token_id', 1),
+        eos_token_id=model_internals.get('eos_token_id', 2),
+        rms_norm_forward_eps=model_internals.get('rms_norm_forward_eps', 1e-5),
+        freqs_end=model_internals.get('freqs_end', 32768),
+        moe_topk_epsilon=model_internals.get('moe_topk_epsilon', 1e-20),
+        rope_scaling_min_ramp_denominator=model_internals.get('rope_scaling_min_ramp_denominator', 0.001),
+        rope_scaling_config=model_rope_scaling if model_rope_scaling else None,
+        generate_max_new_tokens=model_generation.get('max_new_tokens', 8192),
+        generate_temperature=model_generation.get('temperature', 0.85),
+        generate_top_p=model_generation.get('top_p', 0.85),
+        generate_top_k=model_generation.get('top_k', 50),
+        generate_eos_token_id=model_generation.get('eos_token_id', 2),
+        repetition_penalty=model_generation.get('repetition_penalty', 1.0),
     )
     ckp_data = (
         lm_checkpoint(lm_config, weight=args.save_weight, save_dir=args.save_dir) if args.from_resume == 1 else None
@@ -506,7 +520,7 @@ def run_training(runtime_args):
     resolved_peak_profile = None
     if device_type == "cuda":
         gpu_name = torch.cuda.get_device_name(torch.cuda.current_device())
-        resolved_peak_profile = resolve_peak_flops_profile(gpu_name)
+        resolved_peak_profile = resolve_peak_flops_profile(gpu_name, getattr(args, '_gpu_profiles', None))
         if resolved_peak_profile is not None:
             args.peak_fp8_tflops_per_gpu = resolved_peak_profile.fp8_tflops_per_gpu
             if args.peak_tflops_per_gpu is None:
@@ -528,7 +542,7 @@ def run_training(runtime_args):
 
     # ========== 4. MLflow (no-op unless MLFLOW_TRACKING_URI is set) ==========
     if is_main_process():
-        _mlflow_start(args, lm_config)
+        _mlflow_start(args, lm_config, getattr(args, '_mlflow_config', {}))
 
     # ========== 5. 定义模型、数据、优化器 ==========
     model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
@@ -623,141 +637,104 @@ def run_training(runtime_args):
         dist.destroy_process_group()
 
 
-@click.command(context_settings={"help_option_names": ["-h", "--help"]})
-@click.option("--save_dir", default="../out", show_default=True, type=str, help="模型保存目录")
-@click.option("--save_weight", default="pretrain", show_default=True, type=str, help="保存权重的前缀名")
-@click.option("--epochs", default=2, show_default=True, type=int, help="训练轮数")
-@click.option("--batch_size", default=32, show_default=True, type=int, help="batch size")
-@click.option("--learning_rate", default=5e-4, show_default=True, type=float, help="初始学习率")
-@click.option(
-    "--device",
-    default="cuda:0" if torch.cuda.is_available() else "cpu",
-    show_default=True,
-    type=str,
-    help="训练设备",
-)
-@click.option(
-    "--dtype",
-    default="bfloat16",
-    show_default=True,
-    type=click.Choice(["float16", "bfloat16", "float32"]),
-    help="混合精度类型",
-)
-@click.option("--num_workers", default=8, show_default=True, type=int, help="数据加载线程数")
-@click.option("--accumulation_steps", default=8, show_default=True, type=int, help="梯度累积步数")
-@click.option("--grad_clip", default=1.0, show_default=True, type=float, help="梯度裁剪阈值")
-@click.option("--log_interval", default=100, show_default=True, type=int, help="日志打印间隔")
-@click.option("--save_interval", default=1000, show_default=True, type=int, help="模型保存间隔")
-@click.option(
-    "--lr_schedule",
-    default="cosine",
-    show_default=True,
-    type=click.Choice(["cosine", "constant"]),
-    help="学习率调度器",
-)
-@click.option("--lr_warmup_steps", default=0, show_default=True, type=int, help="学习率 warmup 更新步数")
-@click.option("--lr_min_ratio", default=0.1, show_default=True, type=float, help="余弦调度最小学习率比例")
-@click.option("--hidden_size", default=768, show_default=True, type=int, help="隐藏层维度")
-@click.option("--num_hidden_layers", default=8, show_default=True, type=int, help="隐藏层数量")
-@click.option("--dropout", default=0.0, show_default=True, type=float, help="dropout 概率")
-@click.option("--vocab_size", default=6400, show_default=True, type=int, help="词表大小")
-@click.option(
-    "--flash_attn",
-    default=1,
-    show_default=True,
-    type=click.IntRange(0, 1),
-    help="是否启用 scaled_dot_product_attention 快路径（0=否，1=是）",
-)
-@click.option("--num_attention_heads", default=8, show_default=True, type=int, help="注意力头数量")
-@click.option("--num_key_value_heads", default=4, show_default=True, type=int, help="KV 头数量")
-@click.option(
-    "--hidden_act",
-    default="silu",
-    show_default=True,
-    type=click.Choice(["silu", "gelu", "relu", "swish"]),
-    help="MLP 激活函数",
-)
-@click.option("--intermediate_size", default=2432, show_default=True, type=int, help="MLP 中间层维度")
-@click.option(
-    "--max_position_embeddings",
-    default=32768,
-    show_default=True,
-    type=int,
-    help="模型最大位置编码长度",
-)
-@click.option("--rms_norm_eps", default=1e-6, show_default=True, type=float, help="RMSNorm epsilon")
-@click.option("--rope_theta", default=1e6, show_default=True, type=float, help="RoPE base theta")
-@click.option(
-    "--inference_rope_scaling",
-    default=0,
-    show_default=True,
-    type=click.IntRange(0, 1),
-    help="是否启用 YaRN rope scaling 配置（0=否，1=是）",
-)
-@click.option(
-    "--max_seq_len", default=340, show_default=True, type=int, help="训练的最大截断长度（中文1token≈1.5~1.7字符）"
-)
-@click.option(
-    "--use_moe", default=0, show_default=True, type=click.IntRange(0, 1), help="是否使用MoE架构（0=否，1=是）"
-)
-@click.option("--num_experts", default=4, show_default=True, type=int, help="MoE expert 数量")
-@click.option(
-    "--num_experts_per_tok",
-    default=1,
-    show_default=True,
-    type=int,
-    help="每个 token 路由到多少个 expert",
-)
-@click.option(
-    "--moe_intermediate_size",
-    default=2432,
-    show_default=True,
-    type=int,
-    help="MoE expert 的中间层维度",
-)
-@click.option(
-    "--norm_topk_prob",
-    default=1,
-    show_default=True,
-    type=click.IntRange(0, 1),
-    help="是否对 top-k 路由概率归一化（0=否，1=是）",
-)
-@click.option(
-    "--router_aux_loss_coef",
-    default=5e-4,
-    show_default=True,
-    type=float,
-    help="MoE router auxiliary loss 系数",
-)
-@click.option(
-    "--data_path", default="../dataset/pretrain_t2t_mini", show_default=True, type=str, help="预训练数据路径"
-)
-@click.option("--from_weight", default="none", show_default=True, type=str, help="基于哪个权重训练，为none则从头开始")
-@click.option(
-    "--from_resume", default=0, show_default=True, type=click.IntRange(0, 1), help="是否自动检测&续训（0=否，1=是）"
-)
-@click.option(
-    "--use_compile",
-    default=0,
-    show_default=True,
-    type=click.IntRange(0, 1),
-    help="是否使用torch.compile加速（0=否，1=是）",
-)
-@click.option("--validation_split_ratio", default=0.0, show_default=True, type=float, help="验证集切分比例")
-@click.option("--validation_interval_steps", default=0, show_default=True, type=int, help="验证间隔（优化器步数）")
-@click.option("--peak_tflops_per_gpu", default=0.0, show_default=True, type=float, help="每卡峰值TFLOPs，用于MFU")
-@click.option(
-    "--time_to_target_metric",
-    default="none",
-    show_default=True,
-    type=click.Choice(["none", "val_loss", "val_ppl"]),
-    help="time-to-target 使用的验证指标",
-)
-@click.option("--time_to_target_value", default=0.0, show_default=True, type=float, help="time-to-target 阈值")
-def main(**options):
-    """MiniMind pretraining entrypoint."""
+def main():
+    """MiniMind pretraining entrypoint — reads config from a TOML file."""
+    import sys
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib
 
-    run_training(_coerce_args(options))
+    if len(sys.argv) != 2:
+        print("usage: train_pretrain.py <config.toml>", file=sys.stderr)
+        raise SystemExit(2)
+
+    with open(sys.argv[1], "rb") as f:
+        config = tomllib.load(f)
+
+    training = config.get("training", {})
+    recipe = config.get("recipe", {})
+    mlflow_cfg = config.get("mlflow", {})
+    model_cfg = config.get("model", {})
+    dataset_cfg = config.get("dataset", {})
+
+    # Build the options dict that _coerce_args expects
+    # (same keys as the old Click options)
+    hidden_size = training["hidden_size"]
+
+    # Compute intermediate_size if not explicitly set
+    if "intermediate_size" in training:
+        intermediate_size = training["intermediate_size"]
+    else:
+        numerator = training["intermediate_size_numerator"]
+        denominator = training["intermediate_size_denominator"]
+        alignment = training["intermediate_size_alignment"]
+        intermediate_size = ((hidden_size * numerator + denominator - 1) // denominator) * alignment
+
+    moe_intermediate_size = training.get("moe_intermediate_size", intermediate_size)
+
+    # The TOML is fully-merged (all defaults present). Use direct access.
+    # Only "device" uses .get() since it's runtime-detected, not a TOML default.
+    options = {
+        "save_dir": recipe["output_dir"],
+        "save_weight": training["save_weight"],
+        "epochs": training["epochs"],
+        "batch_size": training["batch_size"],
+        "learning_rate": training["learning_rate"],
+        "device": training.get("device", "cuda:0" if torch.cuda.is_available() else "cpu"),
+        "dtype": training["dtype"],
+        "num_workers": training["num_workers"],
+        "accumulation_steps": training["accumulation_steps"],
+        "grad_clip": training["grad_clip"],
+        "log_interval": training["log_interval"],
+        "save_interval": training["save_interval"],
+        "lr_schedule": training["lr_schedule"],
+        "lr_warmup_steps": training["lr_warmup_steps"],
+        "lr_min_ratio": training["lr_min_ratio"],
+        "hidden_size": hidden_size,
+        "num_hidden_layers": training["num_hidden_layers"],
+        "dropout": training["dropout"],
+        "vocab_size": training["vocab_size"],
+        "flash_attn": 1 if training["flash_attn"] else 0,
+        "num_attention_heads": training["num_attention_heads"],
+        "num_key_value_heads": training["num_key_value_heads"],
+        "hidden_act": training["hidden_act"],
+        "intermediate_size": intermediate_size,
+        "max_position_embeddings": training["max_position_embeddings"],
+        "rms_norm_eps": training["rms_norm_eps"],
+        "rope_theta": training["rope_theta"],
+        "inference_rope_scaling": 1 if training["inference_rope_scaling"] else 0,
+        "max_seq_len": recipe["max_seq_len"],
+        "use_moe": 1 if training["use_moe"] else 0,
+        "num_experts": training["num_experts"],
+        "num_experts_per_tok": training["num_experts_per_tok"],
+        "moe_intermediate_size": moe_intermediate_size,
+        "norm_topk_prob": 1 if training["norm_topk_prob"] else 0,
+        "router_aux_loss_coef": training["router_aux_loss_coef"],
+        "data_path": recipe["dataset_path"],
+        "from_weight": training["from_weight"],
+        "from_resume": 1 if training["from_resume"] else 0,
+        "use_compile": 1 if training["use_compile"] else 0,
+        "validation_split_ratio": recipe["validation_split_ratio"],
+        "validation_interval_steps": recipe["validation_interval_steps"],
+        "peak_tflops_per_gpu": mlflow_cfg["peak_tflops_per_gpu"],
+        "time_to_target_metric": mlflow_cfg["time_to_target_metric"],
+        "time_to_target_value": mlflow_cfg["time_to_target_value"],
+    }
+
+    # Store extra config sections on the runtime args for downstream use
+    runtime_args = _coerce_args(options)
+    runtime_args._mlflow_config = mlflow_cfg
+    runtime_args._model_config = model_cfg
+    runtime_args._dataset_config = dataset_cfg
+    runtime_args._gpu_profiles = config.get("gpu_profiles")
+    runtime_args._validation_split_seed = training.get("validation_split_seed", 42)
+
+    # Set tokenizers parallelism from config
+    tokenizers_parallelism = dataset_cfg.get("tokenizers_parallelism", False)
+    os.environ["TOKENIZERS_PARALLELISM"] = "true" if tokenizers_parallelism else "false"
+
+    run_training(runtime_args)
 
 
 if __name__ == "__main__":

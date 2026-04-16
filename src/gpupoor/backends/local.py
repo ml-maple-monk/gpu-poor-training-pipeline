@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 
 from gpupoor.config import RunConfig
 from gpupoor.recipes.minimind import ensure_local_dataset
+from gpupoor.runtime_config import write_merged_toml
 from gpupoor.subprocess_utils import run_command
 from gpupoor.utils import repo_path
 from gpupoor.utils.compose import build_compose_cmd
@@ -101,6 +103,11 @@ def run_training(config: RunConfig) -> None:
     _log_local_training_config_summary(config)
     _container_data_path(dataset_path)
     _container_data_path(output_dir)
+
+    # Write fully-merged config to temp file
+    merged_config_path = Path(tempfile.mkdtemp()) / "merged-run-config.toml"
+    write_merged_toml(config, merged_config_path)
+
     runtime_env = {"GPUPOOR_RUN_CONFIG": _CONTAINER_RUN_CONFIG_PATH}
     _log_local_training_env(runtime_env)
-    run_command(local_training_command(config.source, env=runtime_env))
+    run_command(local_training_command(merged_config_path, env=runtime_env))

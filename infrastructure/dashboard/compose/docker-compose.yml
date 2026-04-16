@@ -1,11 +1,50 @@
 name: verda-dashboard
 
 services:
+  dstack-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: ${DSTACK_CONTAINER_NAME}
+    working_dir: /tmp
+    entrypoint: []
+    environment:
+      HOME: /tmp
+      GIT_PYTHON_REFRESH: "quiet"
+      XDG_CACHE_HOME: /tmp/.cache
+    command:
+      - /bin/sh
+      - -lc
+      - rm -rf /tmp/.dstack && mkdir -p /tmp/.dstack && cp -a /seed-dstack/. /tmp/.dstack/ && exec /home/geeyang/.dstack-cli-venv/bin/dstack server --host 0.0.0.0 --port ${DSTACK_SERVER_PORT} -y
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    volumes:
+      - /home/geeyang/.dstack:/seed-dstack:ro
+      - /home/geeyang/.dstack-cli-venv:/home/geeyang/.dstack-cli-venv:ro
+      - /home/geeyang/.local/share/uv/python:/home/geeyang/.local/share/uv/python:ro
+    restart: unless-stopped
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; s = socket.create_connection(('127.0.0.1', 3000), 2); s.close()"
+      interval: ${HEALTHCHECK_INTERVAL}
+      timeout: ${HEALTHCHECK_TIMEOUT}
+      retries: ${HEALTHCHECK_RETRIES}
+      start_period: ${HEALTHCHECK_START_PERIOD}
+    networks:
+      - verda-mlflow
+
   verda-dashboard:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    container_name: verda-dashboard-gradio
+    container_name: ${DASHBOARD_CONTAINER_NAME}
     read_only: true
     tmpfs:
       - /tmp:size=128m,mode=1777
@@ -18,17 +57,16 @@ services:
       HOME: /tmp
       XDG_CACHE_HOME: /tmp/.cache
       MPLCONFIGDIR: /tmp/mpl
-      DSTACK_SERVER_URL: "http://host.docker.internal:3000"
       DSTACK_SERVER_ADMIN_TOKEN: "${DSTACK_SERVER_ADMIN_TOKEN}"
-      MLFLOW_URL: "http://mlflow:5000"
-      TRAINER_CONTAINER: "${TRAINER_CONTAINER:-minimind-trainer}"
+      TRAINER_CONTAINER: "${TRAINER_CONTAINER}"
       # Remote log source: name of the active dstack run.
       # When set (and local TRAINER_CONTAINER is absent), log panel streams
       # `dstack logs -f <REMOTE_RUN_NAME>` via the mounted dstack CLI.
       REMOTE_RUN_NAME: "${REMOTE_RUN_NAME:-verda-minimind-pretrain}"
       DSTACK_PROJECT: "${DSTACK_PROJECT:-main}"
-      DSTACK_SERVER: "http://host.docker.internal:3000"
+      DSTACK_SERVER: "http://dstack-server:3000"
       DSTACK_TOKEN: "${DSTACK_SERVER_ADMIN_TOKEN}"
+      DSTACK_WAIT_FOR_SERVER: "1"
       # Absolute path to the dstack CLI inside the container. Must match the
       # bind-mount target below. Override via $DSTACK_CLI_PATH in the host env
       # if the host's isolated venv lives elsewhere.
@@ -36,7 +74,7 @@ services:
       # dstack imports GitPython which probes for `git` on PATH; suppress noise
       # since the dashboard doesn't need git operations.
       GIT_PYTHON_REFRESH: "quiet"
-      SEEKER_DATA_DIR: "/seeker-data"
+      SEEKER_DATA_DIR: "${SEEKER_DATA_DIR}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /usr/bin/docker:/usr/bin/docker:ro
@@ -49,13 +87,18 @@ services:
       - ../../../artifacts-pull:/artifacts-pull:ro
       - ../../../data/seeker:/seeker-data:ro
       - ../../../.cf-tunnel.url:/tunnel/.cf-tunnel.url:ro
+      - ../../../defaults.toml:/app/defaults.toml:ro
+      - ../../../examples/runpod_e2e_test.toml:/app/config-overlay.toml:ro
     ports:
-      - "7860:7860"
+      - "${DASHBOARD_PORT}:${DASHBOARD_PORT}"
     restart: unless-stopped
     security_opt:
       - "no-new-privileges:true"
     cap_drop:
       - ALL
+    depends_on:
+      dstack-server:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:

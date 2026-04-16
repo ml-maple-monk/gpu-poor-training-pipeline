@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import math
 
+import pytest
+
+transformers = pytest.importorskip("transformers", reason="transformers is required for trainer_utils import")
+
 
 def scheduled_lrs_for_epoch(
     get_lr, *, epochs: int, iters: int, accumulation_steps: int, learning_rate: float

@@ -17,10 +17,13 @@ from typing import Any
 
 try:
     import tomllib
-except ModuleNotFoundError:  # Python < 3.11
-    tomllib = None  # type: ignore[assignment]
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib  # type: ignore[no-redef]
+    except ModuleNotFoundError:
+        tomllib = None  # type: ignore[assignment]
 
-from gpupoor.config import RunConfig, parse_env_file
+from gpupoor.config import ConfigError, RunConfig, parse_env_file
 from gpupoor.services import dashboard as dashboard_service
 from gpupoor.services import mlflow as mlflow_service
 from gpupoor.utils import repo_path
@@ -30,35 +33,35 @@ from gpupoor.utils.http import http_ok, wait_for_health
 def _load_defaults() -> dict[str, Any]:
     """Load connector defaults from infrastructure/capacity-seeker/defaults.toml."""
     if tomllib is None:
-        return {}
+        raise ConfigError("tomllib is not available; Python >= 3.11 is required")
     defaults_path = repo_path("infrastructure", "capacity-seeker", "defaults.toml")
-    if defaults_path.is_file():
-        return tomllib.loads(defaults_path.read_text(encoding="utf-8"))
-    return {}
+    if not defaults_path.is_file():
+        raise ConfigError(f"Required defaults file not found: {defaults_path}")
+    return tomllib.loads(defaults_path.read_text(encoding="utf-8"))
 
 
 _DEFAULTS = _load_defaults()
-_CONNECTOR = _DEFAULTS.get("connector", {})
-_HOSTNAMES = _CONNECTOR.get("hostnames", {})
-_PORTS = _CONNECTOR.get("ports", {})
-_HEALTH = _CONNECTOR.get("health", {})
-_R2_DEFAULTS = _DEFAULTS.get("r2", {})
+_CONNECTOR = _DEFAULTS["connector"]
+_HOSTNAMES = _CONNECTOR["hostnames"]
+_PORTS = _CONNECTOR["ports"]
+_HEALTH = _CONNECTOR["health"]
+_R2_DEFAULTS = _DEFAULTS["r2"]
 
-default_connector_domain = _CONNECTOR.get("domain", "mlmonk96.net")
-default_tunnel_name = _CONNECTOR.get("tunnel_name", "capacity-seeker")
-default_allow_quick_tunnel = bool(_CONNECTOR.get("allow_quick_tunnel", False))
+default_connector_domain = _CONNECTOR["domain"]
+default_tunnel_name = _CONNECTOR["tunnel_name"]
+default_allow_quick_tunnel = bool(_CONNECTOR["allow_quick_tunnel"])
 default_mlflow_api_host = _HOSTNAMES.get("mlflow_api", f"mlflow-api.{default_connector_domain}")
 default_mlflow_ui_host = _HOSTNAMES.get("mlflow_ui", f"mlflow-ui.{default_connector_domain}")
 default_dashboard_host = _HOSTNAMES.get("dashboard", f"dashboard.{default_connector_domain}")
-default_mlflow_port = _PORTS.get("mlflow", 5000)
-default_dashboard_port = _PORTS.get("dashboard", 7860)
+default_mlflow_port = _PORTS["mlflow"]
+default_dashboard_port = _PORTS["dashboard"]
 default_mlflow_health_url = _HEALTH.get("mlflow_local_url", f"http://127.0.0.1:{default_mlflow_port}/health")
-default_mlflow_health_timeout = _HEALTH.get("mlflow_local_timeout", 2)
-default_r2_endpoint_template = _R2_DEFAULTS.get("endpoint_template", "https://{account_id}.r2.cloudflarestorage.com")
-default_r2_region = _R2_DEFAULTS.get("default_region", "auto")
-default_r2_artifact_suffix = _R2_DEFAULTS.get("artifact_path_suffix", "mlflow-artifacts")
-default_r2_bucket_name = _R2_DEFAULTS.get("bucket_name", "")
-default_zone_id = _CONNECTOR.get("zone_id", "")
+default_mlflow_health_timeout = _HEALTH["mlflow_local_timeout"]
+default_r2_endpoint_template = _R2_DEFAULTS["endpoint_template"]
+default_r2_region = _R2_DEFAULTS["default_region"]
+default_r2_artifact_suffix = _R2_DEFAULTS["artifact_path_suffix"]
+default_r2_bucket_name = _R2_DEFAULTS["bucket_name"]
+default_zone_id = _CONNECTOR["zone_id"]
 required_r2_keys = (
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",

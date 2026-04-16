@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import sys
 from collections import deque
-from datetime import UTC, datetime
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -45,13 +45,13 @@ def test_market_grid_hides_cpu_only_rows_from_primary_board() -> None:
     assert "CPU.4V.16G" not in html
     assert "Hidden CPU-only rows: 1" in html
     assert "A100-80G" in html
-    assert "B300" in html
+    assert "RTX 5090" in html
     assert html.count("No availability") >= 1
 
 
 def test_market_grid_renders_fixed_gpu_cards_with_svg_and_repeated_backend_rows() -> None:
     state = reset_state()
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     with state.lock:
         state.seeker_offers = [
             SeekerOffer(
@@ -112,11 +112,10 @@ def test_market_grid_renders_fixed_gpu_cards_with_svg_and_repeated_backend_rows(
 
     html = format_market_grid_html(state)
 
-    expected_order = ["A100-80G", "H100", "H200", "B200", "B300"]
+    expected_order = ["A100-80G", "H100", "H200", "B200", "RTX 5090"]
     positions = [html.index(gpu) for gpu in expected_order]
     assert positions == sorted(positions)
-    assert "vd-avail-chart" in html
-    assert "polyline" in html
+    assert "vd-heatmap-svg" in html
     assert "vd-offer-card-best" not in html
     assert "h100-spot-a" in html
     assert "h100-spot-b" in html

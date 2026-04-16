@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -256,8 +256,8 @@ def test_collect_verda_offers_targets_five_gpu_specs_and_prefers_a100_80g(monkey
     offers, status = verda_offers.collect_verda_offers()
 
     assert status == SourceStatus.OK
-    assert [spec[0] for spec in verda_offers.GPU_SPECS] == ["A100", "H100", "H200", "B200", "B300"]
-    assert [call[3] for call in calls] == ["A100", "H100", "H200", "B200", "B300"]
+    assert [spec[0] for spec in verda_offers.GPU_SPECS] == ["A100", "H100", "H200", "B200", "RTX 5090"]
+    assert [call[3] for call in calls] == ["A100", "H100", "H200", "B200", "RTX 5090"]
     assert all(call[2] == 15.0 for call in calls)
     assert len(offers) == 1
     assert offers[0].gpu_name == "A100-80G"
@@ -304,7 +304,7 @@ def test_archive_offer_snapshots_uses_cheapest_offer_and_tracks_unavailable_pair
     from src.state import SeekerOffer, reset_state
 
     state = reset_state()
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     offers = [
         SeekerOffer(
             gpu_name="H100",
@@ -347,14 +347,14 @@ def test_archive_offer_snapshots_uses_cheapest_offer_and_tracks_unavailable_pair
     assert runpod_h100[-1].price_per_hour == 1.9
     assert runpod_h100[-1].count == 1
 
-    unavailable = state.offer_history[("B300", "runpod")]
+    unavailable = state.offer_history[("RTX 5090", "runpod")]
     assert len(unavailable) == 60
     assert unavailable[-1].available is False
     assert unavailable[-1].price_per_hour == 0.0
     assert unavailable[-1].count == 0
 
 
-def test_start_all_collectors_exposes_dstack_offer_worker_at_sixty_seconds(monkeypatch):
+def test_start_all_collectors_exposes_dstack_offer_worker_at_thirty_seconds(monkeypatch):
     """Proves the dstack offer worker cadence was widened to avoid overlapping
     the slower multi-GPU probe sequence."""
     from src import collector_workers
@@ -376,7 +376,7 @@ def test_start_all_collectors_exposes_dstack_offer_worker_at_sixty_seconds(monke
         worker.join(timeout=1.0)
 
     cadence_by_name = {worker.name: worker.cadence for worker in workers}
-    assert cadence_by_name["dstack-offers-60s"] == 60.0
+    assert cadence_by_name["dstack-offers-30s"] == 30.0
 
 
 # ── F6 Test 5: collector timestamps must be timezone-aware UTC ────────────────

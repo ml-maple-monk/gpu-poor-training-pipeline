@@ -1,0 +1,432 @@
+# defaults.toml — Single source of truth for all configurable parameters.
+# User TOML files are deep-merged over this file; only override what you change.
+# This file is read by the host-side gpupoor CLI. Containers receive a fully-merged
+# TOML and never need this file directly.
+
+[recipe]
+kind = "minimind_pretrain"
+prepare_data = true
+dataset_path = "data/datasets/pretrain_t2t_mini"
+output_dir = "data/minimind-out"
+time_cap_seconds = 600
+max_seq_len = 340
+validation_split_ratio = 0.0
+validation_interval_steps = 0
+
+[training]
+epochs = 1
+batch_size = 16
+learning_rate = 0.0005
+accumulation_steps = 8
+num_workers = 4
+grad_clip = 1.0
+hidden_size = 768
+num_hidden_layers = 8
+dropout = 0.0
+vocab_size = 6400
+flash_attn = true
+num_attention_heads = 8
+num_key_value_heads = 4
+hidden_act = "silu"
+intermediate_size_numerator = 314159
+intermediate_size_denominator = 6400000
+intermediate_size_alignment = 64
+max_position_embeddings = 32768
+rms_norm_eps = 1e-6
+rope_theta = 1e6
+inference_rope_scaling = false
+dtype = "bfloat16"
+log_interval = 10
+save_interval = 100
+use_compile = false
+use_moe = false
+num_experts = 4
+num_experts_per_tok = 1
+norm_topk_prob = true
+router_aux_loss_coef = 0.0005
+save_weight = "pretrain"
+from_weight = "none"
+from_resume = false
+lr_schedule = "cosine"
+lr_warmup_steps = 0
+lr_min_ratio = 0.1
+validation_split_seed = 42
+
+[backend]
+kind = "local"
+skip_build = false
+remote_image_tag = "latest"
+
+[mlflow]
+experiment_name = "minimind-pretrain"
+artifact_upload = false
+tracking_uri = "http://host.docker.internal:5000"
+enable_system_metrics_logging = true
+system_metrics_sampling_interval = 5
+system_metrics_samples_before_logging = 1
+http_request_max_retries = 7
+http_request_timeout_seconds = 120
+start_timeout_seconds = 180
+start_retry_seconds = 5
+peak_tflops_per_gpu = 0.0
+time_to_target_metric = "none"
+time_to_target_value = 0.0
+script_name = "train_pretrain"
+recipe_kind = "minimind_pretrain"
+recipe_prepare_data = false
+metric_queue_maxsize = 256
+metric_queue_poll_seconds = 0.2
+metric_flush_timeout_seconds = 5.0
+
+[doctor]
+skip_preflight = false
+max_clock_skew_seconds = 5
+
+[smoke]
+cpu = false
+health_port = 8000
+health_timeout_seconds = 30
+strict_port = 18001
+degraded_port = 18002
+sigterm_timeout_seconds = 30
+data_wait_timeout_seconds = 2
+prune_volumes = false
+base_image = "nvidia/cuda:12.4.1-runtime-ubuntu22.04"
+
+[remote]
+env_file = ".env.remote"
+vcr_image_base = "vccr.io/f53909d3-a071-4826-8635-a62417ffc867/verda-minimind"
+dstack_server_health_url = "http://127.0.0.1:3000/"
+mlflow_health_url = "http://127.0.0.1:5000/health"
+health_timeout_seconds = 5
+dstack_server_start_timeout_seconds = 30
+run_start_timeout_seconds = 480
+remote_image_tag = "latest"
+remote_output_dir = "/workspace/out"
+remote_dataset_path = "/workspace/data/datasets/pretrain_t2t_mini"
+hf_dataset_repo = "jingyaogong/minimind_dataset"
+hf_pretokenized_dataset_filename = "pretokenized/pretrain_t2t_mini.tar.gz"
+
+[seeker]
+poll_seconds = 30
+max_offer_age_seconds = 60
+max_submit_retries = 3
+
+[container]
+data_root = "/data"
+runtime_dataset_path = "/data/datasets/pretrain_t2t_mini"
+runtime_output_dir = "/data/minimind-out"
+
+[dstack]
+rendered_task_path = ".tmp/pretrain.task.rendered.yml"
+tunnel_join_timeout_seconds = 180
+min_restart_wait_seconds = 5
+health_recheck_timeout_seconds = 1
+task_sigterm_grace_seconds = 30
+task_duration_buffer_minutes = 2
+offer_timeout_seconds = 60
+offer_query_timeout_seconds = 30
+provider_max_offers = 200
+targeted_max_offers = 400
+run_start_poll_interval_seconds = 10
+apply_timeout_buffer_seconds = 60
+final_tunnel_join_timeout_seconds = 5
+dry_run_mlflow_url = "https://dry-run-example.trycloudflare.com"
+
+[emulator]
+health_port = 8000
+health_timeout_seconds = 300
+per_check_health_timeout_seconds = 2
+log_tail_lines = 200
+
+# ---------------------------------------------------------------------------
+# Dashboard — Verda dashboard operational config.
+# ---------------------------------------------------------------------------
+
+[dashboard]
+# Service URLs (host-side defaults; container overrides via config-overlay)
+dstack_server_url = "http://localhost:3000"
+mlflow_url = "http://localhost:5000"
+
+# Docker
+trainer_container = "minimind-trainer"
+
+# File paths (container mount points)
+cf_tunnel_url_file = "/tunnel/.cf-tunnel.url"
+seeker_data_dir = "/seeker-data"
+
+# Gradio
+gradio_port = 7860
+gradio_queue_max_size = 5
+log_ring_size = 500
+
+# Collector cadences (seconds)
+collector_cadence_training = 2.0
+collector_cadence_live_metrics = 2.0
+collector_cadence_dstack = 5.0
+collector_cadence_system = 5.0
+collector_cadence_mlflow = 10.0
+collector_cadence_tunnel = 10.0
+collector_cadence_seeker = 10.0
+collector_cadence_offers = 30.0
+
+# UI timer intervals (seconds)
+timer_fast = 2.0
+timer_medium = 3.0
+timer_slow = 10.0
+timer_seeker = 10.0
+timer_detail = 30.0
+timer_log = 2.0
+timer_dstack_log = 2.0
+
+# Shutdown
+shutdown_grace_seconds = 80.0
+min_worker_join_timeout = 1.0
+
+# HTTP timeouts (seconds)
+timeout_dstack_rest = 10.0
+timeout_dstack_stream = 30.0
+timeout_dstack_offers = 15.0
+timeout_mlflow = 5
+timeout_bootstrap_rest = 5.0
+timeout_bootstrap_cli = 10.0
+
+# API limits
+dstack_runs_limit = 50
+mlflow_max_recent_runs = 20
+mlflow_max_metric_history = 200
+mlflow_max_metrics_per_run = 10
+max_offers_per_gpu = 20
+offer_history_maxlen = 60
+
+# GPU specs to query pricing for
+[[dashboard.gpu_specs]]
+probe_name = "A100"
+display_name = "A100-80G"
+min_memory_mib = 75000
+
+[[dashboard.gpu_specs]]
+probe_name = "H100"
+display_name = "H100"
+min_memory_mib = 0
+
+[[dashboard.gpu_specs]]
+probe_name = "H200"
+display_name = "H200"
+min_memory_mib = 0
+
+[[dashboard.gpu_specs]]
+probe_name = "B200"
+display_name = "B200"
+min_memory_mib = 0
+
+[[dashboard.gpu_specs]]
+probe_name = "RTX 5090"
+display_name = "RTX 5090"
+min_memory_mib = 0
+
+# Platform brand colors for visual differentiation
+[dashboard.platform_colors.verda]
+primary = "#3fb950"
+muted = "#1a3a2a"
+label = "Verda"
+
+[dashboard.platform_colors.runpod]
+primary = "#a371f7"
+muted = "#2d1f4e"
+label = "RunPod"
+
+[dashboard.platform_colors.vastai]
+primary = "#58a6ff"
+muted = "#1a2d4a"
+label = "Vast.ai"
+
+[dashboard.platform_colors._default]
+primary = "#8b949e"
+muted = "#21262d"
+label = "Other"
+
+# GPU display colors for availability matrix
+[dashboard.gpu_colors]
+"A100-80G" = "#3fb950"
+"H100" = "#58a6ff"
+"H200" = "#a371f7"
+"B200" = "#f0883e"
+"RTX 5090" = "#ff7b72"
+
+# Compose / container config
+[dashboard.compose]
+dstack_server_port = 3000
+dashboard_port = 7860
+dstack_container_name = "verda-dashboard-dstack-server"
+dashboard_container_name = "verda-dashboard-gradio"
+healthcheck_interval = "5s"
+healthcheck_timeout = "3s"
+healthcheck_retries = 20
+healthcheck_start_period = "2s"
+dstack_wait_timeout_seconds = 30
+
+[pretokenize]
+tokenizer_path = "../model"
+max_length = 340
+overwrite = false
+progress_interval = 50000
+
+# ---------------------------------------------------------------------------
+# Model internals — implementation constants, not typically user-configured.
+# ---------------------------------------------------------------------------
+
+[model.internals]
+bos_token_id = 1
+eos_token_id = 2
+rms_norm_forward_eps = 1e-5
+freqs_end = 32768            # 32 * 1024
+moe_topk_epsilon = 1e-20
+rope_scaling_min_ramp_denominator = 0.001
+
+[model.rope_scaling]
+beta_fast = 32
+beta_slow = 1
+factor = 16
+original_max_position_embeddings = 2048
+attention_factor = 1.0
+type = "yarn"
+
+[model.generation]
+max_new_tokens = 8192
+temperature = 0.85
+top_p = 0.85
+top_k = 50
+eos_token_id = 2
+repetition_penalty = 1.0
+
+[dataset]
+tokenizers_parallelism = false
+sample_add_system_ratio = 0.2
+empty_think_ratio = 0.2
+progress_interval = 50000
+tokens_dtype = "int32"
+index_dtype = "int64"
+version = 1
+tokens_file = "tokens.bin"
+index_file = "index.bin"
+metadata_file = "metadata.json"
+system_prompts = [
+    "你是一个知识丰富的AI，尽力为用户提供准确的信息。",
+    "你是minimind，一个小巧但有用的语言模型。",
+    "你是一个专业的AI助手，请提供有价值的回答。",
+    "你是minimind，请尽力帮助用户解决问题。",
+    "你是一个可靠的AI，请给出准确的回答。",
+    "You are a helpful AI assistant.",
+    "You are minimind, a lightweight intelligent assistant.",
+    "You are a friendly chatbot. Please answer the user's questions carefully.",
+    "You are a knowledgeable AI. Try your best to provide accurate information.",
+    "You are minimind, a small but useful language model.",
+]
+
+# ---------------------------------------------------------------------------
+# GPU peak FLOPS profiles — order matters (first regex match wins).
+# Pattern is matched against torch.cuda.get_device_name() output.
+# ---------------------------------------------------------------------------
+
+[[gpu_profiles]]
+pattern = "\\bRTX\\s+PRO\\s+6000\\b"
+canonical_name = "RTX PRO 6000"
+training_tflops = 1000.0
+fp8_tflops = 2000.0
+
+[[gpu_profiles]]
+pattern = "\\bRTX\\s+6000\\s+ADA(?:\\s+GENERATION)?\\b"
+canonical_name = "RTX 6000 ADA"
+training_tflops = 364.2
+fp8_tflops = 728.4
+
+[[gpu_profiles]]
+pattern = "\\bRTX\\s+A6000\\b"
+canonical_name = "RTX A6000"
+training_tflops = 154.8
+
+[[gpu_profiles]]
+pattern = "\\bL40S\\b"
+canonical_name = "L40S"
+training_tflops = 362.05
+fp8_tflops = 733.0
+
+[[gpu_profiles]]
+pattern = "\\bB300\\b"
+canonical_name = "B300"
+training_tflops = 2250.0
+fp8_tflops = 4500.0
+
+[[gpu_profiles]]
+pattern = "\\bB200\\b"
+canonical_name = "B200"
+training_tflops = 2250.0
+fp8_tflops = 4500.0
+
+[[gpu_profiles]]
+pattern = "\\bH200\\s+NVL\\b"
+canonical_name = "H200 NVL"
+training_tflops = 835.0
+fp8_tflops = 1671.0
+
+[[gpu_profiles]]
+pattern = "\\bH200\\b"
+canonical_name = "H200"
+training_tflops = 989.0
+fp8_tflops = 1979.0
+
+[[gpu_profiles]]
+pattern = "\\bH100\\s+NVL\\b"
+canonical_name = "H100 NVL"
+training_tflops = 835.0
+fp8_tflops = 1671.0
+
+[[gpu_profiles]]
+pattern = "\\bH100\\b"
+canonical_name = "H100"
+training_tflops = 989.0
+fp8_tflops = 1979.0
+
+[[gpu_profiles]]
+pattern = "\\bA100\\b"
+canonical_name = "A100"
+training_tflops = 312.0
+
+[[gpu_profiles]]
+pattern = "\\bV100\\b"
+canonical_name = "V100"
+training_tflops = 125.0
+
+[[gpu_profiles]]
+pattern = "\\bA10\\b"
+canonical_name = "A10"
+training_tflops = 125.0
+
+[[gpu_profiles]]
+pattern = "\\bL4\\b"
+canonical_name = "L4"
+training_tflops = 121.0
+fp8_tflops = 242.0
+
+[[gpu_profiles]]
+pattern = "\\bRTX\\s+4090\\s+LAPTOP\\b"
+canonical_name = "RTX 4090 Laptop"
+training_tflops = 85.8
+fp8_tflops = 171.5
+
+[[gpu_profiles]]
+pattern = "\\bRTX\\s+4090\\b"
+canonical_name = "RTX 4090"
+training_tflops = 165.2
+fp8_tflops = 330.3
+
+[[gpu_profiles]]
+pattern = "\\bRTX\\s+3090\\b"
+canonical_name = "RTX 3090"
+training_tflops = 71.0
+
+[[gpu_profiles]]
+pattern = "\\bT4\\b"
+canonical_name = "T4"
+training_tflops = 65.0

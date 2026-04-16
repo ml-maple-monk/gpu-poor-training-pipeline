@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+datasets = pytest.importorskip("datasets", reason="datasets is required for lm_dataset import")
+
 
 def test_build_pretokenized_corpus_and_read_it_back(tmp_path, lm_dataset_module, fake_tokenizer) -> None:
     source = tmp_path / "pretrain.jsonl"

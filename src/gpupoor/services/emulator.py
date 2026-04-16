@@ -5,6 +5,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from gpupoor.config import (
+    DEFAULT_EMULATOR_HEALTH_PORT,
+    DEFAULT_EMULATOR_HEALTH_TIMEOUT,
+    DEFAULT_EMULATOR_PER_CHECK_TIMEOUT,
+    DEFAULT_EMULATOR_LOG_TAIL_LINES,
+)
 from gpupoor.subprocess_utils import run_command
 from gpupoor.utils import repo_path
 from gpupoor.utils.compose import build_compose_cmd
@@ -14,10 +20,10 @@ from gpupoor.utils.http import wait_for_health
 _BASE_COMPOSE_PATH = ("infrastructure", "local-emulator", "compose", "docker-compose.yml")
 _CPU_COMPOSE_PATH = ("infrastructure", "local-emulator", "compose", "docker-compose.cpu.yml")
 _NVCR_COMPOSE_PATH = ("infrastructure", "local-emulator", "compose", "docker-compose.nvcr.yml")
-_LOG_TAIL_LINES = "200"
-_DEFAULT_HEALTH_PORT = 8000
-_DEFAULT_HEALTH_TIMEOUT_SECONDS = 300
-_PER_CHECK_HEALTH_TIMEOUT_SECONDS = 2
+_LOG_TAIL_LINES = str(DEFAULT_EMULATOR_LOG_TAIL_LINES)
+_DEFAULT_HEALTH_PORT = DEFAULT_EMULATOR_HEALTH_PORT
+_DEFAULT_HEALTH_TIMEOUT_SECONDS = DEFAULT_EMULATOR_HEALTH_TIMEOUT
+_PER_CHECK_HEALTH_TIMEOUT_SECONDS = DEFAULT_EMULATOR_PER_CHECK_TIMEOUT
 _HEALTH_OK_MESSAGE = "Health: 200"
 
 

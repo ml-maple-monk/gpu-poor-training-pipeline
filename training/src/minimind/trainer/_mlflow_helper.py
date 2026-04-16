@@ -20,88 +20,37 @@ _metric_worker = None
 _metric_stop_event = None
 _dropped_metric_events = 0
 
-_METRIC_QUEUE_MAXSIZE = 256
-_METRIC_QUEUE_POLL_SECONDS = 0.2
-_METRIC_FLUSH_TIMEOUT_SECONDS = 5.0
-_DEFAULT_SCRIPT_NAME = "train_pretrain"
-_DEFAULT_EXPERIMENT_NAME = "minimind-pretrain"
-_DEFAULT_TRACKING_URI = ""
-_DEFAULT_START_TIMEOUT_SECONDS = "180"
-_DEFAULT_START_RETRY_SECONDS = "5"
-_DEFAULT_SYSTEM_METRICS_SAMPLING_INTERVAL = "5"
-_DEFAULT_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING = "1"
-_DEFAULT_HTTP_REQUEST_MAX_RETRIES = "7"
-_DEFAULT_HTTP_REQUEST_TIMEOUT_SECONDS = "120"
-_DEFAULT_PEAK_TFLOPS_PER_GPU = "0.0"
-_DEFAULT_TIME_TO_TARGET_METRIC = "none"
-_DEFAULT_TIME_TO_TARGET_VALUE = "0.0"
-_DEFAULT_RECIPE_KIND = "minimind_pretrain"
-_DEFAULT_RECIPE_PREPARE_DATA = False
+# Module-level metric-queue tunables, set from mlflow_config in start().
+_metric_queue_maxsize = 256
+_metric_queue_poll_seconds = 0.2
+_metric_flush_timeout_seconds = 5.0
+
+# Stashed reference so post-start helpers can read it without env vars.
+_mlflow_config: dict = {}
 
 
-def _env_flag(name: str, default: bool = False) -> bool:
-    value = os.environ.get(name)
-    if value is None:
-        return default
-    return value.lower() in ("1", "true", "yes")
-
-
-def _recipe_config_from_runtime(args) -> dict[str, object]:
+def _recipe_config_from_runtime(args, mlflow_config: dict) -> dict[str, object]:
     return {
-        "kind": os.environ.get("RECIPE_KIND", _DEFAULT_RECIPE_KIND),
-        "prepare_data": _env_flag("RECIPE_PREPARE_DATA", default=_DEFAULT_RECIPE_PREPARE_DATA),
-        "dataset_path": os.environ.get("RECIPE_DATASET_PATH_RAW", getattr(args, "data_path", None)),
-        "output_dir": os.environ.get("RECIPE_OUTPUT_DIR_RAW", getattr(args, "save_dir", None)),
+        "kind": str(mlflow_config.get("recipe_kind", "minimind_pretrain")),
+        "prepare_data": bool(mlflow_config.get("recipe_prepare_data", False)),
+        "dataset_path": getattr(args, "data_path", None),
+        "output_dir": getattr(args, "save_dir", None),
         "runtime_dataset_path": getattr(args, "data_path", None),
         "runtime_output_dir": getattr(args, "save_dir", None),
-        "time_cap_seconds": os.environ.get("TIME_CAP_SECONDS"),
+        "time_cap_seconds": mlflow_config.get("time_cap_seconds"),
         "max_seq_len": getattr(args, "max_seq_len", None),
         "validation_split_ratio": getattr(args, "validation_split_ratio", None),
         "validation_interval_steps": getattr(args, "validation_interval_steps", None),
     }
 
 
-def _mlflow_runtime_config() -> dict[str, object]:
-    return {
-        "tracking_uri": os.environ.get("MLFLOW_TRACKING_URI", _DEFAULT_TRACKING_URI),
-        "experiment_name": os.environ.get("MLFLOW_EXPERIMENT_NAME", _DEFAULT_EXPERIMENT_NAME),
-        "artifact_upload": _env_flag("MLFLOW_ARTIFACT_UPLOAD", default=False),
-        "enable_system_metrics_logging": _env_flag("MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING", default=True),
-        "system_metrics_sampling_interval": os.environ.get(
-            "MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL",
-            _DEFAULT_SYSTEM_METRICS_SAMPLING_INTERVAL,
-        ),
-        "system_metrics_samples_before_logging": os.environ.get(
-            "MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING",
-            _DEFAULT_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING,
-        ),
-        "http_request_max_retries": os.environ.get(
-            "MLFLOW_HTTP_REQUEST_MAX_RETRIES",
-            _DEFAULT_HTTP_REQUEST_MAX_RETRIES,
-        ),
-        "http_request_timeout_seconds": os.environ.get(
-            "MLFLOW_HTTP_REQUEST_TIMEOUT",
-            _DEFAULT_HTTP_REQUEST_TIMEOUT_SECONDS,
-        ),
-        "start_timeout_seconds": os.environ.get("MLFLOW_START_TIMEOUT_SECONDS", _DEFAULT_START_TIMEOUT_SECONDS),
-        "start_retry_seconds": os.environ.get("MLFLOW_START_RETRY_SECONDS", _DEFAULT_START_RETRY_SECONDS),
-        "peak_tflops_per_gpu": os.environ.get("MLFLOW_PEAK_TFLOPS_PER_GPU", _DEFAULT_PEAK_TFLOPS_PER_GPU),
-        "time_to_target_metric": os.environ.get(
-            "MLFLOW_TIME_TO_TARGET_METRIC",
-            _DEFAULT_TIME_TO_TARGET_METRIC,
-        ),
-        "time_to_target_value": os.environ.get("MLFLOW_TIME_TO_TARGET_VALUE", _DEFAULT_TIME_TO_TARGET_VALUE),
-    }
-
-
-def _log_runtime_config(mlflow, args, model_config) -> None:
-    recipe_cfg = _recipe_config_from_runtime(args)
+def _log_runtime_config(mlflow, args, model_config, mlflow_config: dict) -> None:
+    recipe_cfg = _recipe_config_from_runtime(args, mlflow_config)
     training_cfg = {k: v for k, v in vars(args).items() if v is not None}
-    mlflow_cfg = _mlflow_runtime_config()
 
     mlflow.log_params({k: str(v) for k, v in training_cfg.items()})
     mlflow.log_params({f"recipe.{k}": str(v) for k, v in recipe_cfg.items() if v is not None})
-    mlflow.log_params({f"mlflow.{k}": str(v) for k, v in mlflow_cfg.items() if v is not None})
+    mlflow.log_params({f"mlflow.{k}": str(v) for k, v in mlflow_config.items() if v is not None})
     try:
         cfg = {k: v for k, v in vars(model_config).items() if not k.startswith("_")}
         mlflow.log_dict(cfg, "config/model_config.json")
@@ -109,7 +58,7 @@ def _log_runtime_config(mlflow, args, model_config) -> None:
         pass
     mlflow.log_dict(training_cfg, "config/training_args.json")
     mlflow.log_dict(recipe_cfg, "config/recipe_config.json")
-    mlflow.log_dict(mlflow_cfg, "config/mlflow_config.json")
+    mlflow.log_dict(dict(mlflow_config), "config/mlflow_config.json")
 
 
 def _reset_runtime_state() -> None:
@@ -120,7 +69,8 @@ def _reset_runtime_state() -> None:
         _metric_queue, \
         _metric_worker, \
         _metric_stop_event, \
-        _dropped_metric_events
+        _dropped_metric_events, \
+        _mlflow_config
 
     _active = False
     _start_time = None
@@ -129,6 +79,7 @@ def _reset_runtime_state() -> None:
     _metric_worker = None
     _metric_stop_event = None
     _dropped_metric_events = 0
+    _mlflow_config = {}
 
 
 def _metric_worker_loop() -> None:
@@ -136,7 +87,7 @@ def _metric_worker_loop() -> None:
         if _metric_stop_event.is_set() and _metric_queue.empty():
             return
         try:
-            payload = _metric_queue.get(timeout=_METRIC_QUEUE_POLL_SECONDS)
+            payload = _metric_queue.get(timeout=_metric_queue_poll_seconds)
         except queue.Empty:
             continue
         try:
@@ -151,7 +102,7 @@ def _metric_worker_loop() -> None:
 def _ensure_worker() -> None:
     global _metric_queue, _metric_worker, _metric_stop_event
 
-    _metric_queue = queue.Queue(maxsize=_METRIC_QUEUE_MAXSIZE)
+    _metric_queue = queue.Queue(maxsize=_metric_queue_maxsize)
     _metric_stop_event = threading.Event()
     _metric_worker = threading.Thread(target=_metric_worker_loop, name="mlflow-metric-writer", daemon=True)
     _metric_worker.start()
@@ -193,7 +144,7 @@ def _drain_metrics() -> None:
         return
 
     _metric_stop_event.set()
-    deadline = time.time() + _METRIC_FLUSH_TIMEOUT_SECONDS
+    deadline = time.time() + _metric_flush_timeout_seconds
     while _metric_queue.unfinished_tasks > 0 and time.time() < deadline:
         time.sleep(0.05)
 
@@ -218,47 +169,75 @@ def _drain_metrics() -> None:
 
 
 # doc-anchor: mlflow-helper-start
-def start(args, model_config, script_name=_DEFAULT_SCRIPT_NAME):
-    global _active, _start_time, _mlflow_module
+def start(runtime_args, model_config, mlflow_config: dict) -> None:
+    global _active, _start_time, _mlflow_module, _mlflow_config
+    global _metric_queue_maxsize, _metric_queue_poll_seconds, _metric_flush_timeout_seconds
 
-    uri = os.environ.get("MLFLOW_TRACKING_URI", _DEFAULT_TRACKING_URI).strip()
+    # Stash config for helpers that run after start().
+    _mlflow_config = dict(mlflow_config)
+
+    # Apply metric-queue tunables from config.
+    _metric_queue_maxsize = int(mlflow_config.get("metric_queue_maxsize", 256))
+    _metric_queue_poll_seconds = float(mlflow_config.get("metric_queue_poll_seconds", 0.2))
+    _metric_flush_timeout_seconds = float(mlflow_config.get("metric_flush_timeout_seconds", 5.0))
+
+    uri = str(mlflow_config.get("tracking_uri", "")).strip()
     if not uri:
-        print("[mlflow] MLFLOW_TRACKING_URI not set — skipping integration", flush=True)
+        print("[mlflow] tracking_uri not set — skipping integration", flush=True)
         return
+
+    # Set env vars that the MLflow SDK reads directly.
+    os.environ["MLFLOW_TRACKING_URI"] = uri
+    if mlflow_config.get("enable_system_metrics_logging"):
+        os.environ["MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING"] = "true"
+    os.environ["MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL"] = str(
+        mlflow_config.get("system_metrics_sampling_interval", "5")
+    )
+    os.environ["MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING"] = str(
+        mlflow_config.get("system_metrics_samples_before_logging", "1")
+    )
+    os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] = str(
+        mlflow_config.get("http_request_max_retries", "7")
+    )
+    os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] = str(
+        mlflow_config.get("http_request_timeout_seconds", "120")
+    )
+
     mlflow = _load_mlflow_module()
     if mlflow is None:
         print("[mlflow] mlflow python package not installed — skipping", flush=True)
         return
 
-    timeout_seconds = int(os.environ.get("MLFLOW_START_TIMEOUT_SECONDS", _DEFAULT_START_TIMEOUT_SECONDS))
-    retry_seconds = float(os.environ.get("MLFLOW_START_RETRY_SECONDS", _DEFAULT_START_RETRY_SECONDS))
+    timeout_seconds = int(mlflow_config.get("start_timeout_seconds", 180))
+    retry_seconds = float(mlflow_config.get("start_retry_seconds", 5))
     deadline = time.time() + timeout_seconds
     attempt = 0
     while True:
         attempt += 1
         try:
             mlflow.set_tracking_uri(uri)
-            exp_name = os.environ.get("MLFLOW_EXPERIMENT_NAME", _DEFAULT_EXPERIMENT_NAME)
+            exp_name = str(mlflow_config.get("experiment_name", "minimind-pretrain"))
             mlflow.set_experiment(exp_name)
+            script_name = str(mlflow_config.get("script_name", "train_pretrain"))
             run_name = (
-                f"{script_name}-h{args.hidden_size}-L{args.num_hidden_layers}"
-                f"-bs{args.batch_size}-lr{args.learning_rate}"
+                f"{script_name}-h{runtime_args.hidden_size}-L{runtime_args.num_hidden_layers}"
+                f"-bs{runtime_args.batch_size}-lr{runtime_args.learning_rate}"
             )
-            log_sys = _env_flag("MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING", default=False)
+            log_sys = bool(mlflow_config.get("enable_system_metrics_logging", False))
             tags = {
                 "script": script_name,
                 "model_family": "minimind",
-                "hidden_size": str(args.hidden_size),
-                "num_hidden_layers": str(args.num_hidden_layers),
-                "use_moe": str(bool(args.use_moe)),
-                "dtype": args.dtype,
-                "recipe.kind": os.environ.get("RECIPE_KIND", _DEFAULT_RECIPE_KIND),
+                "hidden_size": str(runtime_args.hidden_size),
+                "num_hidden_layers": str(runtime_args.num_hidden_layers),
+                "use_moe": str(bool(runtime_args.use_moe)),
+                "dtype": runtime_args.dtype,
+                "recipe.kind": str(mlflow_config.get("recipe_kind", "minimind_pretrain")),
                 "verda.profile": os.environ.get("VERDA_PROFILE", ""),
                 "verda.emulation": os.environ.get("VERDA_EMULATION", "true"),
                 "verda.run_name": os.environ.get("DSTACK_RUN_NAME", ""),
             }
             mlflow.start_run(run_name=run_name, log_system_metrics=log_sys, tags=tags)
-            _log_runtime_config(mlflow, args, model_config)
+            _log_runtime_config(mlflow, runtime_args, model_config, mlflow_config)
             env_info = {
                 "torch_version": torch.__version__,
                 "cuda_available": torch.cuda.is_available(),
@@ -320,7 +299,7 @@ def log_step(step, epoch, loss, logits_loss, aux_loss, lr, tokens_seen=None, upd
 def log_checkpoint(path, step):
     if not _active or _mlflow_module is None:
         return
-    if not bool(_mlflow_runtime_config()["artifact_upload"]):
+    if not bool(_mlflow_config.get("artifact_upload", False)):
         return
     try:
         if path and os.path.exists(path):

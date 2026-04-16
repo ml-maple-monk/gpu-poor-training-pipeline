@@ -30,13 +30,15 @@ def test_mlflow_start_retries_transient_failures(
 
     monkeypatch.setitem(sys.modules, "mlflow", mlflow_module)
     monkeypatch.setitem(sys.modules, "torch", fake_torch_module())
-    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example")
-    monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "minimind-pretrain-remote")
-    monkeypatch.setenv("MLFLOW_START_TIMEOUT_SECONDS", "30")
-    monkeypatch.setenv("MLFLOW_START_RETRY_SECONDS", "0")
     monkeypatch.setenv("DSTACK_RUN_NAME", "verda-minimind-pretrain")
 
-    mlflow_helper.start(fake_train_args, fake_model_config)
+    mlflow_config = {
+        "tracking_uri": "https://mlflow.example",
+        "experiment_name": "minimind-pretrain-remote",
+        "start_timeout_seconds": 30,
+        "start_retry_seconds": 0,
+    }
+    mlflow_helper.start(fake_train_args, fake_model_config, mlflow_config)
 
     assert mlflow_calls["set_experiment"] == 2
     assert mlflow_calls["start_run"] == 1
@@ -62,10 +64,12 @@ def test_mlflow_finish_flushes_async_metrics(
 
     monkeypatch.setitem(sys.modules, "mlflow", mlflow_module)
     monkeypatch.setitem(sys.modules, "torch", fake_torch_module())
-    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example")
-    monkeypatch.setenv("MLFLOW_START_RETRY_SECONDS", "0")
 
-    mlflow_helper.start(fake_train_args, fake_model_config)
+    mlflow_config = {
+        "tracking_uri": "https://mlflow.example",
+        "start_retry_seconds": 0,
+    }
+    mlflow_helper.start(fake_train_args, fake_model_config, mlflow_config)
     mlflow_helper.log_step(
         step=12,
         epoch=1,
@@ -107,14 +111,6 @@ def test_mlflow_start_logs_recipe_and_runtime_config(
 
     monkeypatch.setitem(sys.modules, "mlflow", mlflow_module)
     monkeypatch.setitem(sys.modules, "torch", fake_torch_module())
-    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example")
-    monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "minimind-pretrain")
-    monkeypatch.setenv("RECIPE_KIND", "minimind_pretrain")
-    monkeypatch.setenv("RECIPE_PREPARE_DATA", "0")
-    monkeypatch.setenv("RECIPE_DATASET_PATH_RAW", "data/datasets/pretrain_t2t_mini")
-    monkeypatch.setenv("RECIPE_OUTPUT_DIR_RAW", "data/minimind-out")
-    monkeypatch.setenv("TIME_CAP_SECONDS", "120")
-    monkeypatch.setenv("MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING", "true")
 
     fake_train_args.data_path = "/data/datasets/pretrain_t2t_mini"
     fake_train_args.save_dir = "/data/minimind-out"
@@ -122,7 +118,15 @@ def test_mlflow_start_logs_recipe_and_runtime_config(
     fake_train_args.validation_split_ratio = 0.0
     fake_train_args.validation_interval_steps = 0
 
-    mlflow_helper.start(fake_train_args, fake_model_config)
+    mlflow_config = {
+        "tracking_uri": "https://mlflow.example",
+        "experiment_name": "minimind-pretrain",
+        "recipe_kind": "minimind_pretrain",
+        "recipe_prepare_data": False,
+        "time_cap_seconds": 120,
+        "enable_system_metrics_logging": True,
+    }
+    mlflow_helper.start(fake_train_args, fake_model_config, mlflow_config)
     mlflow_helper.finish()
 
     merged_params = {}
@@ -133,8 +137,8 @@ def test_mlflow_start_logs_recipe_and_runtime_config(
     assert started[0]["tags"]["recipe.kind"] == "minimind_pretrain"
     assert merged_params["recipe.kind"] == "minimind_pretrain"
     assert merged_params["recipe.prepare_data"] == "False"
-    assert merged_params["recipe.dataset_path"] == "data/datasets/pretrain_t2t_mini"
-    assert merged_params["recipe.output_dir"] == "data/minimind-out"
+    assert merged_params["recipe.dataset_path"] == "/data/datasets/pretrain_t2t_mini"
+    assert merged_params["recipe.output_dir"] == "/data/minimind-out"
     assert merged_params["recipe.runtime_dataset_path"] == "/data/datasets/pretrain_t2t_mini"
     assert merged_params["recipe.runtime_output_dir"] == "/data/minimind-out"
     assert merged_params["recipe.max_seq_len"] == "2048"
@@ -189,8 +193,8 @@ def test_mlflow_start_is_noop_when_mlflow_missing(
     monkeypatch.setattr(mlflow_helper.importlib.util, "find_spec", lambda name: None)
     monkeypatch.delitem(sys.modules, "mlflow", raising=False)
     monkeypatch.setitem(sys.modules, "torch", fake_torch_module())
-    monkeypatch.setenv("MLFLOW_TRACKING_URI", "https://mlflow.example")
 
-    mlflow_helper.start(fake_train_args, fake_model_config)
+    mlflow_config = {"tracking_uri": "https://mlflow.example"}
+    mlflow_helper.start(fake_train_args, fake_model_config, mlflow_config)
 
     assert mlflow_helper._active is False

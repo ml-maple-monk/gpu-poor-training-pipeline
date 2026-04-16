@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 license = { text = "Proprietary" }
 authors = [{ name = "Codex" }]
 dependencies = [
+    "tomli-w>=1.0,<2",
     "tqdm>=4.66,<5",
 ]
 

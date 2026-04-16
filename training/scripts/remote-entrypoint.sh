@@ -7,15 +7,35 @@
 # Responsibilities:
 #   1. Print a diagnostic banner
 #   2. Ensure dataset is present (download from HF if missing)
-#   3. Exec train_pretrain.py with the correct flags
+#   3. Exec train_pretrain.py with the TOML config
 
 set -euo pipefail
 
-RUNTIME_DEFAULTS_FILE="/opt/training/scripts/lib/runtime-defaults.sh"
-# shellcheck source=/dev/null
-source "$RUNTIME_DEFAULTS_FILE"
+# ── Decode / locate TOML config ──────────────────────────────────────────────
+RUN_CONFIG_FILE="/tmp/gpupoor-run-config.toml"
+if [ -n "${GPUPOOR_RUN_CONFIG_B64:-}" ]; then
+    printf '%s' "$GPUPOOR_RUN_CONFIG_B64" | base64 -d > "$RUN_CONFIG_FILE"
+    echo "[remote-entrypoint] Decoded TOML config to $RUN_CONFIG_FILE"
+elif [ -n "${GPUPOOR_RUN_CONFIG:-}" ] && [ -f "${GPUPOOR_RUN_CONFIG}" ]; then
+    RUN_CONFIG_FILE="$GPUPOOR_RUN_CONFIG"
+fi
 
-RUN_CONFIG_FILE="${1:-${GPUPOOR_RUN_CONFIG:-/tmp/gpupoor-run-config.json}}"
+if [ ! -f "$RUN_CONFIG_FILE" ]; then
+    echo "[remote-entrypoint] ERROR: No TOML config found. Set GPUPOOR_RUN_CONFIG_B64 or GPUPOOR_RUN_CONFIG." >&2
+    exit 2
+fi
+
+# ── Extract time cap from TOML config ────────────────────────────────────────
+TIME_CAP_SECONDS=$(python3 -c "
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+with open('$RUN_CONFIG_FILE', 'rb') as f:
+    cfg = tomllib.load(f)
+print(cfg.get('recipe', {}).get('time_cap_seconds', 600))
+")
+
 DATA_DIR="/workspace/data/datasets"
 RAW_DATASET_FILE="$DATA_DIR/pretrain_t2t_mini.jsonl"
 DATASET_FILE="$RAW_DATASET_FILE"
@@ -28,43 +48,8 @@ HF_DATASET_FILENAME="${HF_DATASET_FILENAME:-pretrain_t2t_mini.jsonl}"
 HF_PRETOKENIZED_DATASET_REPO="${HF_PRETOKENIZED_DATASET_REPO:-$HF_DATASET_REPO}"
 HF_PRETOKENIZED_DATASET_FILENAME="${HF_PRETOKENIZED_DATASET_FILENAME:-pretokenized/pretrain_t2t_mini.tar.gz}"
 HF_PRETOKENIZED_DATASET_MIN_BYTES="${HF_PRETOKENIZED_DATASET_MIN_BYTES:-1048576}"
-TIME_CAP_SECONDS="${TIME_CAP_SECONDS:-$GPUPOOR_DEFAULT_RUNTIME_TIME_CAP_SECONDS}"
-TRAIN_ARGS_FILE="/opt/training/scripts/lib/train-pretrain-args.sh"
-RUN_CONFIG_LOADER="/opt/training/scripts/lib/load-run-config-env.py"
 HF_BOOTSTRAP_HELPER="/opt/training/scripts/lib/hf-dataset-bootstrap.sh"
 PRETOKENIZE_SCRIPT="/opt/training/scripts/pretokenize-data.sh"
-
-require_loaded_runtime_env() {
-    local missing=()
-    local required_vars=(
-        DATASET_PATH
-        OUTPUT_DIR
-        TIME_CAP_SECONDS
-        MAX_SEQ_LEN
-        TRAIN_BATCH_SIZE
-        TRAIN_HIDDEN_SIZE
-        TRAIN_NUM_HIDDEN_LAYERS
-        TRAIN_DTYPE
-        TRAIN_LR_SCHEDULE
-    )
-    local var_name
-    for var_name in "${required_vars[@]}"; do
-        if [ -z "${!var_name:-}" ]; then
-            missing+=("$var_name")
-        fi
-    done
-
-    if [ "${#missing[@]}" -gt 0 ]; then
-        echo "[remote-entrypoint] ERROR: runtime config did not populate required env vars: ${missing[*]}" >&2
-        echo "[remote-entrypoint] ERROR: refusing to continue with fallback defaults; check GPUPOOR_RUN_CONFIG payload and loader output" >&2
-        exit 1
-    fi
-}
-
-if [ ! -f "$TRAIN_ARGS_FILE" ]; then
-    echo "[remote-entrypoint] ERROR: $TRAIN_ARGS_FILE not found — image is missing shared training args helper" >&2
-    exit 1
-fi
 
 if [ ! -f "$HF_BOOTSTRAP_HELPER" ]; then
     echo "[remote-entrypoint] ERROR: $HF_BOOTSTRAP_HELPER not found — image is missing shared dataset bootstrap helper" >&2
@@ -76,22 +61,6 @@ if [ ! -f "$PRETOKENIZE_SCRIPT" ]; then
     exit 1
 fi
 
-if [ -n "${GPUPOOR_RUN_CONFIG_B64:-}" ]; then
-    printf '%s' "$GPUPOOR_RUN_CONFIG_B64" | base64 -d > "$RUN_CONFIG_FILE"
-fi
-
-if [ -f "$RUN_CONFIG_FILE" ]; then
-    if [ ! -f "$RUN_CONFIG_LOADER" ]; then
-        echo "[remote-entrypoint] ERROR: $RUN_CONFIG_LOADER not found — image is missing runtime config loader" >&2
-        exit 1
-    fi
-    # shellcheck disable=SC2046
-    eval "$(python3 "$RUN_CONFIG_LOADER" "$RUN_CONFIG_FILE")"
-    require_loaded_runtime_env
-fi
-
-# shellcheck source=/dev/null
-. "$TRAIN_ARGS_FILE"
 # shellcheck source=/dev/null
 . "$HF_BOOTSTRAP_HELPER"
 
@@ -109,17 +78,13 @@ echo "  DATA_DIR                 = $DATA_DIR"
 echo "  HF_PRETOKENIZED_DATASET  = ${HF_PRETOKENIZED_DATASET_REPO}/${HF_PRETOKENIZED_DATASET_FILENAME}"
 echo "  OUT_DIR                  = $OUT_DIR"
 echo "  TIME_CAP_SECONDS         = $TIME_CAP_SECONDS"
+echo "  RUN_CONFIG_FILE          = $RUN_CONFIG_FILE"
 echo "  Hostname                 = $(hostname)"
 echo "  Date UTC                 = $(date -u -Iseconds)"
 python3 -c "import torch; print(f'  torch={torch.__version__}  cuda={torch.cuda.is_available()}  device={torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"cpu\"}')" || true
 echo "================================================================"
 
 # ── SSH access note ───────────────────────────────────────────────────────────
-# We do NOT start our own sshd. dstack-runner's sshd is already listening on
-# :10022 inside the container with AuthorizedKeysFile = "/dstack/ssh/conf/
-# authorized_keys .ssh/authorized_keys", so it honors our baked-in
-# /root/.ssh/authorized_keys. To SSH in with the WSL2 key:
-#   ssh -i ~/.ssh/id_ed25519 -o IdentitiesOnly=yes verda-minimind-pretrain
 if [ -s /root/.ssh/authorized_keys ]; then
     echo "[remote-entrypoint] /root/.ssh/authorized_keys present (WSL2 pubkey baked) — ssh via dstack sshd on :10022"
 fi
@@ -170,22 +135,17 @@ if ! download_pretokenized_dataset; then
 fi
 
 # ── Launch training ───────────────────────────────────────────────────────────
-# doc-anchor: remote-entrypoint-train-exec
 echo "[remote-entrypoint] Starting train_pretrain.py ..."
 cd /opt/training/minimind/trainer
-minimind_train_pretrain_args "$TOKENIZED_DATASET_DIR" "$OUT_DIR"
 
 set +e
 timeout --signal=SIGTERM --kill-after=30 "${TIME_CAP_SECONDS}" \
-    python train_pretrain.py \
-        "${MINIMIND_TRAIN_PRETRAIN_ARGS[@]}"
+    python3 train_pretrain.py "$RUN_CONFIG_FILE"
 RC=$?
 set -e
 
 echo "[remote-entrypoint] End UTC: $(date -u -Iseconds)"
 echo "[remote-entrypoint] Training exit code: $RC  (124 = reached ${TIME_CAP_SECONDS}s cap)"
-# 124 = timeout's SIGTERM cap (expected end of the capped run).
-# 137 = SIGKILL (OOM, cgroup kill, external kill); propagate as failure.
 if [ "$RC" -eq 124 ]; then
     exit 0
 fi
