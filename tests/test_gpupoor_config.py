@@ -260,6 +260,121 @@ kind = "local"
     assert config.name == "tiny_cpu"
 
 
+def test_seeker_block_is_optional(tmp_path: Path) -> None:
+    config_file = tmp_path / "no-seeker.toml"
+    config_file.write_text(
+        """
+name = "tiny_local"
+[recipe]
+[backend]
+kind = "local"
+[mlflow]
+[doctor]
+[smoke]
+[remote]
+""",
+        encoding="utf-8",
+    )
+
+    config = load_run_config(config_file)
+
+    assert config.seeker.targets == ()
+    assert config.seeker.poll_seconds == 30
+
+
+def test_seeker_target_order_is_preserved(tmp_path: Path) -> None:
+    config_file = tmp_path / "seeker.toml"
+    config_file.write_text(
+        """
+name = "seek-h100"
+[recipe]
+[backend]
+kind = "dstack"
+[mlflow]
+[doctor]
+[smoke]
+[remote]
+[seeker]
+poll_seconds = 15
+
+[[seeker.targets]]
+backend = "verda"
+gpu = "H100"
+count = 1
+mode = "spot"
+regions = ["us-central1"]
+max_price = 1.5
+
+[[seeker.targets]]
+backend = "runpod"
+gpu = "H200"
+count = 2
+mode = "on-demand"
+regions = ["US-KS-1"]
+max_price = 4.0
+""",
+        encoding="utf-8",
+    )
+
+    config = load_run_config(config_file)
+
+    assert [target.backend for target in config.seeker.targets] == ["verda", "runpod"]
+    assert config.seeker.targets[0].regions == ("us-central1",)
+    assert config.seeker.targets[1].mode == "on-demand"
+
+
+def test_backend_aliases_normalize_vast_ai_in_remote_and_seeker_config(tmp_path: Path) -> None:
+    config_file = tmp_path / "vast-seeker.toml"
+    config_file.write_text(
+        """
+name = "seek-vast"
+[recipe]
+[backend]
+kind = "dstack"
+[mlflow]
+[doctor]
+[smoke]
+[remote]
+backends = ["Vast AI", "Run Pod"]
+[seeker]
+
+[[seeker.targets]]
+backend = "vast.ai"
+gpu = "H100"
+count = 1
+mode = "on-demand"
+""",
+        encoding="utf-8",
+    )
+
+    config = load_run_config(config_file)
+
+    assert config.remote.backends == ("vastai", "runpod")
+    assert config.seeker.targets[0].backend == "vastai"
+
+
+def test_seeker_rejects_non_table_targets(tmp_path: Path) -> None:
+    config_file = tmp_path / "bad-seeker.toml"
+    config_file.write_text(
+        """
+name = "seek-h100"
+[recipe]
+[backend]
+kind = "dstack"
+[mlflow]
+[doctor]
+[smoke]
+[remote]
+[seeker]
+targets = ["bad"]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="seeker.targets\\[0\\] must be a table"):
+        load_run_config(config_file)
+
+
 def _make_fake_root(path: Path, *, name: str = "gpupoor") -> None:
     (path / "src" / "gpupoor").mkdir(parents=True)
     (path / "pyproject.toml").write_text(f'[project]\nname = "{name}"\n', encoding="utf-8")

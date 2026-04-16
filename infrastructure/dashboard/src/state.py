@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -40,14 +41,51 @@ class DstackRun:
 
 
 @dataclass(slots=True)
-class VerdaOffer:
+class SeekerOffer:
     gpu_name: str = ""
     price_per_hour: float = 0.0
     region: str = ""
     backend: str = ""
     instance_type: str = ""
     availability: str = ""
+    count: int = 0
+    mode: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class OfferSnapshot:
+    timestamp: datetime
+    available: bool = False
+    price_per_hour: float = 0.0
+    count: int = 0
+
+
+@dataclass(slots=True)
+class SeekerJob:
+    job_id: str = ""
+    config_name: str = ""
+    submitted_run_name: str = ""
+    submit_retries: int = 0
+    last_status: str = ""
+    last_reason: str = ""
+    enqueued_at: str = ""
+
+
+@dataclass(slots=True)
+class SeekerAttempt:
+    job_id: str = ""
+    attempt_id: str = ""
+    backend: str = ""
+    region: str = ""
+    gpu: str = ""
+    count: int = 0
+    mode: str = ""
+    price_per_hour: float = 0.0
+    status: str = ""
+    reason: str = ""
+    started_at: str = ""
+    ended_at: str = ""
 
 
 @dataclass(slots=True)
@@ -104,8 +142,15 @@ class AppState:
     # dstack runs
     dstack_runs: list[DstackRun] = field(default_factory=list)
 
-    # Verda GPU offers
-    verda_offers: list[VerdaOffer] = field(default_factory=list)
+    # Seeker explorer state
+    seeker_offers: list[SeekerOffer] = field(default_factory=list)
+
+    # dstack get_plan probe offers (all configured backends, independent of seeker)
+    dstack_probe_offers: list[SeekerOffer] = field(default_factory=list)
+    offer_history: dict[tuple[str, str], deque[OfferSnapshot]] = field(default_factory=dict)
+    seeker_active: SeekerJob | None = None
+    seeker_pending: list[SeekerJob] = field(default_factory=list)
+    seeker_attempts: list[SeekerAttempt] = field(default_factory=list)
 
     # MLflow recent runs
     mlflow_runs: list[MLflowRun] = field(default_factory=list)

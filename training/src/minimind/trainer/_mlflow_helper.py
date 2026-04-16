@@ -23,6 +23,20 @@ _dropped_metric_events = 0
 _METRIC_QUEUE_MAXSIZE = 256
 _METRIC_QUEUE_POLL_SECONDS = 0.2
 _METRIC_FLUSH_TIMEOUT_SECONDS = 5.0
+_DEFAULT_SCRIPT_NAME = "train_pretrain"
+_DEFAULT_EXPERIMENT_NAME = "minimind-pretrain"
+_DEFAULT_TRACKING_URI = ""
+_DEFAULT_START_TIMEOUT_SECONDS = "180"
+_DEFAULT_START_RETRY_SECONDS = "5"
+_DEFAULT_SYSTEM_METRICS_SAMPLING_INTERVAL = "5"
+_DEFAULT_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING = "1"
+_DEFAULT_HTTP_REQUEST_MAX_RETRIES = "7"
+_DEFAULT_HTTP_REQUEST_TIMEOUT_SECONDS = "120"
+_DEFAULT_PEAK_TFLOPS_PER_GPU = "0.0"
+_DEFAULT_TIME_TO_TARGET_METRIC = "none"
+_DEFAULT_TIME_TO_TARGET_VALUE = "0.0"
+_DEFAULT_RECIPE_KIND = "minimind_pretrain"
+_DEFAULT_RECIPE_PREPARE_DATA = False
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -34,8 +48,8 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 def _recipe_config_from_runtime(args) -> dict[str, object]:
     return {
-        "kind": os.environ.get("RECIPE_KIND", "minimind_pretrain"),
-        "prepare_data": _env_flag("RECIPE_PREPARE_DATA", default=False),
+        "kind": os.environ.get("RECIPE_KIND", _DEFAULT_RECIPE_KIND),
+        "prepare_data": _env_flag("RECIPE_PREPARE_DATA", default=_DEFAULT_RECIPE_PREPARE_DATA),
         "dataset_path": os.environ.get("RECIPE_DATASET_PATH_RAW", getattr(args, "data_path", None)),
         "output_dir": os.environ.get("RECIPE_OUTPUT_DIR_RAW", getattr(args, "save_dir", None)),
         "runtime_dataset_path": getattr(args, "data_path", None),
@@ -49,19 +63,34 @@ def _recipe_config_from_runtime(args) -> dict[str, object]:
 
 def _mlflow_runtime_config() -> dict[str, object]:
     return {
-        "tracking_uri": os.environ.get("MLFLOW_TRACKING_URI", ""),
-        "experiment_name": os.environ.get("MLFLOW_EXPERIMENT_NAME", "minimind-pretrain"),
+        "tracking_uri": os.environ.get("MLFLOW_TRACKING_URI", _DEFAULT_TRACKING_URI),
+        "experiment_name": os.environ.get("MLFLOW_EXPERIMENT_NAME", _DEFAULT_EXPERIMENT_NAME),
         "artifact_upload": _env_flag("MLFLOW_ARTIFACT_UPLOAD", default=False),
         "enable_system_metrics_logging": _env_flag("MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING", default=True),
-        "system_metrics_sampling_interval": os.environ.get("MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL", "5"),
-        "system_metrics_samples_before_logging": os.environ.get("MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING", "1"),
-        "http_request_max_retries": os.environ.get("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "7"),
-        "http_request_timeout_seconds": os.environ.get("MLFLOW_HTTP_REQUEST_TIMEOUT", "120"),
-        "start_timeout_seconds": os.environ.get("MLFLOW_START_TIMEOUT_SECONDS", "180"),
-        "start_retry_seconds": os.environ.get("MLFLOW_START_RETRY_SECONDS", "5"),
-        "peak_tflops_per_gpu": os.environ.get("MLFLOW_PEAK_TFLOPS_PER_GPU", "0.0"),
-        "time_to_target_metric": os.environ.get("MLFLOW_TIME_TO_TARGET_METRIC", "none"),
-        "time_to_target_value": os.environ.get("MLFLOW_TIME_TO_TARGET_VALUE", "0.0"),
+        "system_metrics_sampling_interval": os.environ.get(
+            "MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL",
+            _DEFAULT_SYSTEM_METRICS_SAMPLING_INTERVAL,
+        ),
+        "system_metrics_samples_before_logging": os.environ.get(
+            "MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING",
+            _DEFAULT_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING,
+        ),
+        "http_request_max_retries": os.environ.get(
+            "MLFLOW_HTTP_REQUEST_MAX_RETRIES",
+            _DEFAULT_HTTP_REQUEST_MAX_RETRIES,
+        ),
+        "http_request_timeout_seconds": os.environ.get(
+            "MLFLOW_HTTP_REQUEST_TIMEOUT",
+            _DEFAULT_HTTP_REQUEST_TIMEOUT_SECONDS,
+        ),
+        "start_timeout_seconds": os.environ.get("MLFLOW_START_TIMEOUT_SECONDS", _DEFAULT_START_TIMEOUT_SECONDS),
+        "start_retry_seconds": os.environ.get("MLFLOW_START_RETRY_SECONDS", _DEFAULT_START_RETRY_SECONDS),
+        "peak_tflops_per_gpu": os.environ.get("MLFLOW_PEAK_TFLOPS_PER_GPU", _DEFAULT_PEAK_TFLOPS_PER_GPU),
+        "time_to_target_metric": os.environ.get(
+            "MLFLOW_TIME_TO_TARGET_METRIC",
+            _DEFAULT_TIME_TO_TARGET_METRIC,
+        ),
+        "time_to_target_value": os.environ.get("MLFLOW_TIME_TO_TARGET_VALUE", _DEFAULT_TIME_TO_TARGET_VALUE),
     }
 
 
@@ -189,10 +218,10 @@ def _drain_metrics() -> None:
 
 
 # doc-anchor: mlflow-helper-start
-def start(args, model_config, script_name="train_pretrain"):
+def start(args, model_config, script_name=_DEFAULT_SCRIPT_NAME):
     global _active, _start_time, _mlflow_module
 
-    uri = os.environ.get("MLFLOW_TRACKING_URI", "").strip()
+    uri = os.environ.get("MLFLOW_TRACKING_URI", _DEFAULT_TRACKING_URI).strip()
     if not uri:
         print("[mlflow] MLFLOW_TRACKING_URI not set — skipping integration", flush=True)
         return
@@ -201,15 +230,15 @@ def start(args, model_config, script_name="train_pretrain"):
         print("[mlflow] mlflow python package not installed — skipping", flush=True)
         return
 
-    timeout_seconds = int(os.environ.get("MLFLOW_START_TIMEOUT_SECONDS", "180"))
-    retry_seconds = float(os.environ.get("MLFLOW_START_RETRY_SECONDS", "5"))
+    timeout_seconds = int(os.environ.get("MLFLOW_START_TIMEOUT_SECONDS", _DEFAULT_START_TIMEOUT_SECONDS))
+    retry_seconds = float(os.environ.get("MLFLOW_START_RETRY_SECONDS", _DEFAULT_START_RETRY_SECONDS))
     deadline = time.time() + timeout_seconds
     attempt = 0
     while True:
         attempt += 1
         try:
             mlflow.set_tracking_uri(uri)
-            exp_name = os.environ.get("MLFLOW_EXPERIMENT_NAME", "minimind-pretrain")
+            exp_name = os.environ.get("MLFLOW_EXPERIMENT_NAME", _DEFAULT_EXPERIMENT_NAME)
             mlflow.set_experiment(exp_name)
             run_name = (
                 f"{script_name}-h{args.hidden_size}-L{args.num_hidden_layers}"
@@ -223,7 +252,7 @@ def start(args, model_config, script_name="train_pretrain"):
                 "num_hidden_layers": str(args.num_hidden_layers),
                 "use_moe": str(bool(args.use_moe)),
                 "dtype": args.dtype,
-                "recipe.kind": os.environ.get("RECIPE_KIND", "minimind_pretrain"),
+                "recipe.kind": os.environ.get("RECIPE_KIND", _DEFAULT_RECIPE_KIND),
                 "verda.profile": os.environ.get("VERDA_PROFILE", ""),
                 "verda.emulation": os.environ.get("VERDA_EMULATION", "true"),
                 "verda.run_name": os.environ.get("DSTACK_RUN_NAME", ""),
@@ -290,6 +319,8 @@ def log_step(step, epoch, loss, logits_loss, aux_loss, lr, tokens_seen=None, upd
 
 def log_checkpoint(path, step):
     if not _active or _mlflow_module is None:
+        return
+    if not bool(_mlflow_runtime_config()["artifact_upload"]):
         return
     try:
         if path and os.path.exists(path):

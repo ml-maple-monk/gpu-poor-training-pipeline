@@ -17,16 +17,24 @@ from .bootstrap import choose_access_path
 from .collector_workers import start_all_collectors
 from .config import GRADIO_PORT, GRADIO_QUEUE_MAX_SIZE, TRAINER_CONTAINER
 from .log_tailer import LogTailer
-from .panels.dstack_runs import format_dstack_table, get_active_run_name
-from .panels.footer import format_footer_md
-from .panels.live_metrics import format_metrics_md
+from .panels.footer import format_footer_html
 from .panels.local_logs import get_log_snapshot
-from .panels.mlflow_summary import format_mlflow_md, format_mlflow_table
-from .panels.system_panel import format_system_md
-from .panels.topbar import format_topbar_md
-from .panels.training import format_training_md
-from .panels.verda_inventory import format_verda_table
+from .panels.mlflow_summary import format_mlflow_table
+from .panels.overview import (
+    format_alert_feed_html,
+    format_hero_html,
+    format_market_grid_html,
+    format_metrics_html,
+    format_mlflow_feed_html,
+    format_resource_gauges_html,
+    format_runs_feed_html,
+    format_seeker_attempt_table,
+    format_seeker_offer_table,
+    format_statusbar_html,
+    get_active_run_name,
+)
 from .state import AppState, get_state
+from .theme import DASHBOARD_CSS, build_theme
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -42,15 +50,16 @@ _state: AppState | None = None
 _docker_tailer: LogTailer | None = None
 _dstack_tailer: LogTailer | None = None
 _workers: list = []
+_MIN_WORKER_JOIN_TIMEOUT_SECONDS = 1.0
 
 # Grace budget derivation:
-#   max collector cadence today is 30s (offers-30s).
+#   max in-flight collector today is the 60s dstack offer probe, which may
+#   spend up to ~75s in sequential HTTP requests (5 GPU families x 15s timeout).
 #   Workers sleep via shutdown_event.wait(cadence), which returns immediately
-#   once the event is set — so the bulk of the grace window only covers a
-#   single in-flight collect() call that might be mid-HTTP. 5s slack on top of
-#   the 30s cadence is enough headroom without making operator-visible
-#   shutdown feel frozen.
-_DEFAULT_SHUTDOWN_GRACE_SECONDS = 35.0
+#   once the event is set, so the grace window primarily covers one in-flight
+#   collect() call that may already be mid-probe. Keep a small buffer above the
+#   worst-case probe path to avoid routine shutdown warnings during normal ops.
+_DEFAULT_SHUTDOWN_GRACE_SECONDS = 80.0
 
 
 def _shutdown_sequence(
@@ -96,7 +105,7 @@ def _shutdown_sequence(
     # slow worker can't starve the rest. Floor at 1s to avoid zero-timeout
     # spin-polling when the worker list is long.
     if workers:
-        per_worker_timeout = max(1.0, grace_seconds / len(workers))
+        per_worker_timeout = max(_MIN_WORKER_JOIN_TIMEOUT_SECONDS, grace_seconds / len(workers))
     else:
         per_worker_timeout = grace_seconds
 
@@ -186,115 +195,122 @@ def build_app() -> gr.Blocks:
     _setup_signal_handler(state, tailers=[docker_tailer, dstack_tailer], workers=workers)
 
     # ── Build Gradio UI ──────────────────────────────────────────────────────
-    with gr.Blocks(
-        title="Verda Dashboard",
-    ) as demo:
-        gr.Markdown("# Verda Dashboard")
+    with gr.Blocks(title="Verda Dashboard") as demo:
+        with gr.Column(elem_id="dashboard-shell"):
+            statusbar_html = gr.HTML(value=format_statusbar_html(state))
+            hero_html = gr.HTML(value=format_hero_html(state))
+            gauges_html = gr.HTML(value=format_resource_gauges_html(state))
 
-        # ── Topbar ───────────────────────────────────────────────────────────
-        with gr.Row():
-            topbar_md = gr.Markdown(value=format_topbar_md(state))
+            # ── Metrics row ──────────────────────────────────────────────
+            gr.HTML('<div class="vd-section-hdr">LIVE METRICS</div>')
+            metrics_html = gr.HTML(value=format_metrics_html(state))
 
-        # ── Row 1: Training + System ─────────────────────────────────────────
-        with gr.Row():
-            with gr.Column(scale=1):
-                gr.Markdown("### Training Container")
-                training_md = gr.Markdown(value=format_training_md(state))
+            # ── Market ──────────────────────────────────────────────────
+            gr.HTML('<div class="vd-section-hdr">GPU MARKET</div>')
+            market_html = gr.HTML(value=format_market_grid_html(state))
 
-            with gr.Column(scale=1):
-                gr.Markdown("### System Resources")
-                system_md = gr.Markdown(value=format_system_md(state))
+            # ── Alerts ──────────────────────────────────────────────────
+            gr.HTML('<div class="vd-section-hdr">ALERTS &amp; ACTIVITY</div>')
+            alert_html = gr.HTML(value=format_alert_feed_html(state))
 
-        # ── Row 2: Live Metrics ──────────────────────────────────────────────
-        with gr.Row(), gr.Column():
-            gr.Markdown("### Live Metrics")
-            metrics_md = gr.Markdown(value=format_metrics_md(state))
+            # ── MLflow + dstack feeds ───────────────────────────────────
+            with gr.Row():
+                with gr.Column(scale=6):
+                    gr.HTML('<div class="vd-section-hdr">MLFLOW RUNS</div>')
+                    mlflow_html = gr.HTML(value=format_mlflow_feed_html(state))
+                with gr.Column(scale=6):
+                    gr.HTML('<div class="vd-section-hdr">DSTACK FLEET</div>')
+                    runs_html = gr.HTML(value=format_runs_feed_html(state))
 
-        # ── Row 3: MLflow Summary ────────────────────────────────────────────
-        with gr.Row(), gr.Column():
-            gr.Markdown("### MLflow Recent Runs")
-            mlflow_summary_md = gr.Markdown(value=format_mlflow_md(state))
-            mlflow_table = gr.DataFrame(
-                value=format_mlflow_table(state),
-                headers=["Name", "Status", "Started", "Experiment", "Metrics"],
-                label="MLflow Runs",
-            )
+            with gr.Accordion("Logs", open=False), gr.Row():
+                with gr.Column(scale=6):
+                    local_log_box = gr.Textbox(
+                        value=get_log_snapshot(docker_tailer),
+                        label=f"Container: {TRAINER_CONTAINER}",
+                        lines=14,
+                        max_lines=22,
+                        autoscroll=True,
+                        interactive=False,
+                        elem_id="vd-docker-log",
+                    )
+                    local_log_seq = gr.State(value=[0])
+                with gr.Column(scale=6):
+                    dstack_log_box = gr.Textbox(
+                        value="",
+                        label="dstack active run",
+                        lines=14,
+                        max_lines=22,
+                        autoscroll=True,
+                        interactive=False,
+                        elem_id="vd-dstack-log",
+                    )
+                    dstack_log_seq = gr.State(value=[0])
 
-        # ── Row 4: dstack Runs ───────────────────────────────────────────────
-        with gr.Row(), gr.Column():
-            gr.Markdown("### dstack Runs")
-            dstack_active_md = gr.Markdown(value=f"**Active run:** {get_active_run_name(state)}")
-            dstack_table = gr.DataFrame(
-                value=format_dstack_table(state),
-                headers=["Run Name", "Status", "Backend", "Instance", "Region", "Cost"],
-                label="dstack Runs",
-            )
+            with gr.Accordion("Diagnostics", open=False):
+                mlflow_detail = gr.DataFrame(
+                    value=format_mlflow_table(state),
+                    headers=["Name", "Status", "Started", "Experiment", "Metrics"],
+                    label="MLflow Runs (Detailed)",
+                )
+                seeker_offer_detail = gr.DataFrame(
+                    value=format_seeker_offer_table(state),
+                    headers=["Backend", "Region", "GPU", "Count", "Mode", "Price", "Instance"],
+                    label="Current Ranked Offers (Detailed)",
+                )
+                seeker_attempt_detail = gr.DataFrame(
+                    value=format_seeker_attempt_table(state),
+                    headers=["Status", "Job", "Backend", "Region", "GPU", "Price", "Reason"],
+                    label="Recent Attempts (Detailed)",
+                )
 
-        # ── Row 5: Verda GPU Inventory ───────────────────────────────────────
-        with gr.Row(), gr.Column():
-            gr.Markdown("### Verda GPU Inventory")
-            verda_table = gr.DataFrame(
-                value=format_verda_table(state),
-                headers=["GPU", "Price", "Backend", "Region", "Instance"],
-                label="Verda Offers",
-            )
-
-        # ── Row 6: Local Container Logs ──────────────────────────────────────
-        with gr.Row(), gr.Column():
-            gr.Markdown(f"### Container Logs: `{TRAINER_CONTAINER}`")
-            local_log_box = gr.Textbox(
-                value=get_log_snapshot(docker_tailer),
-                label="Container Logs (live)",
-                lines=20,
-                max_lines=30,
-                autoscroll=True,
-                interactive=False,
-            )
-            # Session state to track per-session log sequence
-            local_log_seq = gr.State(value=[0])
-
-        # ── Row 7: dstack Run Logs ───────────────────────────────────────────
-        with gr.Row(), gr.Column():
-            gr.Markdown("### dstack Run Logs (active run)")
-            dstack_log_box = gr.Textbox(
-                value="",
-                label="dstack Logs (live)",
-                lines=20,
-                max_lines=30,
-                autoscroll=True,
-                interactive=False,
-            )
-            dstack_log_seq = gr.State(value=[0])
-
-        # ── Footer ───────────────────────────────────────────────────────────
-        with gr.Row():
-            footer_md = gr.Markdown(value=format_footer_md(state))
+            # ── Footer ──────────────────────────────────────────────────
+            footer_html = gr.HTML(value=format_footer_html(state))
 
         # ── Timer callbacks (pure readers) ───────────────────────────────────
 
         def read_fast_state():
             return (
-                gr.update(value=format_topbar_md(state)),
-                gr.update(value=format_training_md(state)),
-                gr.update(value=format_metrics_md(state)),
-                gr.update(value=format_footer_md(state)),
+                gr.update(value=format_statusbar_html(state)),
+                gr.update(value=format_hero_html(state)),
+                gr.update(value=format_resource_gauges_html(state)),
             )
 
         def read_medium_state():
+            active = get_active_run_name(state)
+            if path == "C2.2" and active != "(none)" and dstack_tailer is not None:
+                current = getattr(dstack_tailer, "target", "")
+                if current != active:
+                    try:
+                        dstack_tailer.swap(active)
+                    except Exception as exc:
+                        log.debug("Could not sync dstack log target to %s: %s", active, exc)
+
             return (
-                gr.update(value=format_dstack_table(state)),
-                gr.update(value=f"**Active run:** {get_active_run_name(state)}"),
-                gr.update(value=format_system_md(state)),
+                gr.update(value=format_market_grid_html(state)),
+                gr.update(value=format_alert_feed_html(state)),
+                gr.update(value=format_runs_feed_html(state)),
+                gr.update(value=format_footer_html(state)),
             )
 
         def read_slow_state():
             return (
-                gr.update(value=format_mlflow_table(state)),
-                gr.update(value=format_mlflow_md(state)),
+                gr.update(value=format_metrics_html(state)),
+                gr.update(value=format_mlflow_feed_html(state)),
             )
 
-        def read_verda_offers():
-            return gr.update(value=format_verda_table(state))
+        def read_seeker_state():
+            return (
+                gr.update(value=format_hero_html(state)),
+                gr.update(value=format_market_grid_html(state)),
+                gr.update(value=format_alert_feed_html(state)),
+            )
+
+        def read_detail_state():
+            return (
+                gr.update(value=format_mlflow_table(state)),
+                gr.update(value=format_seeker_offer_table(state)),
+                gr.update(value=format_seeker_attempt_table(state)),
+            )
 
         # Log streaming — uses per-session seq state for line-delta pushes
         def stream_local_log(seq_state):
@@ -316,28 +332,35 @@ def build_app() -> gr.Blocks:
         fast_timer.tick(
             read_fast_state,
             inputs=None,
-            outputs=[topbar_md, training_md, metrics_md, footer_md],
+            outputs=[statusbar_html, hero_html, gauges_html],
         )
 
         medium_timer = gr.Timer(value=5.0)
         medium_timer.tick(
             read_medium_state,
             inputs=None,
-            outputs=[dstack_table, dstack_active_md, system_md],
+            outputs=[market_html, alert_html, runs_html, footer_html],
         )
 
         slow_timer = gr.Timer(value=10.0)
         slow_timer.tick(
             read_slow_state,
             inputs=None,
-            outputs=[mlflow_table, mlflow_summary_md],
+            outputs=[metrics_html, mlflow_html],
         )
 
-        verda_timer = gr.Timer(value=30.0)
-        verda_timer.tick(
-            read_verda_offers,
+        seeker_timer = gr.Timer(value=10.0)
+        seeker_timer.tick(
+            read_seeker_state,
             inputs=None,
-            outputs=[verda_table],
+            outputs=[hero_html, market_html, alert_html],
+        )
+
+        detail_timer = gr.Timer(value=30.0)
+        detail_timer.tick(
+            read_detail_state,
+            inputs=None,
+            outputs=[mlflow_detail, seeker_offer_detail, seeker_attempt_detail],
         )
 
         # Log timers — 2s cadence with per-session delta
@@ -367,6 +390,8 @@ def main() -> None:
         server_port=GRADIO_PORT,
         share=False,
         prevent_thread_lock=False,
+        theme=build_theme(),
+        css=DASHBOARD_CSS,
     )
 
 

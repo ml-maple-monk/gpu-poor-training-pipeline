@@ -112,6 +112,7 @@ def test_whitelisted_mounts_only():
         os.path.join(home, ".dstack-cli-venv"),
         os.path.join(home, ".local", "share", "uv", "python"),
         os.path.join(repo_root, "artifacts-pull"),
+        os.path.join(repo_root, "data", "seeker"),
         os.path.join(repo_root, ".cf-tunnel.url"),
     )
 

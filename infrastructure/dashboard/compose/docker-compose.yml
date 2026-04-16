@@ -26,7 +26,7 @@ services:
       # When set (and local TRAINER_CONTAINER is absent), log panel streams
       # `dstack logs -f <REMOTE_RUN_NAME>` via the mounted dstack CLI.
       REMOTE_RUN_NAME: "${REMOTE_RUN_NAME:-verda-minimind-pretrain}"
-      DSTACK_PROJECT: "${DSTACK_PROJECT:-dashboard}"
+      DSTACK_PROJECT: "${DSTACK_PROJECT:-main}"
       DSTACK_SERVER: "http://host.docker.internal:3000"
       DSTACK_TOKEN: "${DSTACK_SERVER_ADMIN_TOKEN}"
       # Absolute path to the dstack CLI inside the container. Must match the
@@ -36,6 +36,7 @@ services:
       # dstack imports GitPython which probes for `git` on PATH; suppress noise
       # since the dashboard doesn't need git operations.
       GIT_PYTHON_REFRESH: "quiet"
+      SEEKER_DATA_DIR: "/seeker-data"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /usr/bin/docker:/usr/bin/docker:ro
@@ -46,6 +47,7 @@ services:
       # Python interpreter (uv-managed, symlinked from the venv).
       - /home/geeyang/.local/share/uv/python:/home/geeyang/.local/share/uv/python:ro
       - ../../../artifacts-pull:/artifacts-pull:ro
+      - ../../../data/seeker:/seeker-data:ro
       - ../../../.cf-tunnel.url:/tunnel/.cf-tunnel.url:ro
     ports:
       - "7860:7860"

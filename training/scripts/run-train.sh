@@ -1,10 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
+RUNTIME_DEFAULTS_FILE=/workspace/runtime-defaults.sh
+# shellcheck source=/dev/null
+source "$RUNTIME_DEFAULTS_FILE"
+
 SOURCE_ROOT=/workspace/minimind
-DATASET=${DATASET_PATH:-/data/datasets/pretrain_t2t_mini}
-OUT=${OUTPUT_DIR:-/data/minimind-out}
-TIME_CAP_SECONDS=${TIME_CAP_SECONDS:-600}
+DATASET=${DATASET_PATH:-$GPUPOOR_DEFAULT_RUNTIME_DATASET_PATH}
+OUT=${OUTPUT_DIR:-$GPUPOOR_DEFAULT_RUNTIME_OUTPUT_DIR}
+TIME_CAP_SECONDS=${TIME_CAP_SECONDS:-$GPUPOOR_DEFAULT_RUNTIME_TIME_CAP_SECONDS}
 TRAIN_ARGS_FILE=/workspace/train-pretrain-args.sh
 RUN_CONFIG_FILE="${1:-${GPUPOOR_RUN_CONFIG:-}}"
 RUN_CONFIG_LOADER=/workspace/load-run-config-env.py
@@ -55,7 +59,7 @@ if [ -n "$RUN_CONFIG_FILE" ]; then
     require_loaded_runtime_env
     DATASET=${DATASET_PATH:-$DATASET}
     OUT=${OUTPUT_DIR:-$OUT}
-    TIME_CAP_SECONDS=${TIME_CAP_SECONDS:-600}
+    TIME_CAP_SECONDS=${TIME_CAP_SECONDS:-$GPUPOOR_DEFAULT_RUNTIME_TIME_CAP_SECONDS}
 fi
 
 # shellcheck source=/dev/null

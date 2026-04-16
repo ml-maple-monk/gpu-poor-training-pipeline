@@ -9,6 +9,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 try:
     import fcntl
@@ -29,12 +30,35 @@ from gpupoor.utils import repo_path
 from gpupoor.utils.http import http_ok
 from gpupoor.utils.logging import get_logger
 
+if TYPE_CHECKING:
+    from gpupoor.connector import ConnectionBundle
+
 log = get_logger(__name__)
 
 _TUNNEL_JOIN_TIMEOUT = 180
+_MIN_RESTART_WAIT_SECONDS = 5
+_HEALTH_RECHECK_TIMEOUT_SECONDS = 1
+_DEFAULT_REMOTE_IMAGE_TAG = "latest"
+_TASK_SIGTERM_GRACE_SECONDS = 30
+_TASK_DURATION_BUFFER_MINUTES = 2
+_DEFAULT_OFFER_TIMEOUT_SECONDS = 60
+_OFFER_QUERY_TIMEOUT_SECONDS = 30
+_DEFAULT_PROVIDER_MAX_OFFERS = 200
+_DEFAULT_TARGETED_MAX_OFFERS = 400
+_RUN_START_POLL_INTERVAL_SECONDS = 10
+_DEFAULT_RUN_START_TIMEOUT_SECONDS = 480
+_DRY_RUN_MLFLOW_URL = "https://dry-run-example.trycloudflare.com"
+_CONTAINER_REMOTE_DATASET_PATH = "/workspace/data/datasets/pretrain_t2t_mini"
+_DEFAULT_REMOTE_OUTPUT_DIR = "/workspace/out"
+_DEFAULT_HF_DATASET_REPO = "jingyaogong/minimind_dataset"
+_DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME = "pretokenized/pretrain_t2t_mini.tar.gz"
+_DSTACK_APPLY_TIMEOUT_BUFFER_SECONDS = 60
+_FINAL_TUNNEL_JOIN_TIMEOUT_SECONDS = 5
 
 __all__ = [
     "ensure_dstack_server",
+    "fetch_offers",
+    "fetch_targeted_offers",
     "http_ok",
     "launch_remote",
     "teardown_remote_state",
@@ -47,6 +71,82 @@ def cached_remote_image_metadata_path() -> Path:
 
 def expected_training_base_image_base(settings: dict[str, str]) -> str:
     return settings.get("TRAINING_BASE_IMAGE_BASE", f"{settings['VCR_IMAGE_BASE']}-base")
+
+
+def dstack_server_restart_marker() -> Path:
+    return Path.home() / ".dstack" / "server" / ".restart-required"
+
+
+def configured_backends() -> tuple[str, ...]:
+    config_path = Path.home() / ".dstack" / "server" / "config.yml"
+    if not config_path.is_file():
+        return ()
+
+    backends: list[str] = []
+    for raw_line in config_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line.startswith("- type:"):
+            continue
+        backend = line.split(":", 1)[1].strip()
+        if backend and backend not in backends:
+            backends.append(backend)
+    return tuple(backends)
+
+
+def stop_dstack_server(dstack_bin: str) -> bool:
+    proc = subprocess.run(
+        ["pgrep", "-f", f"{dstack_bin} server"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode not in (0, 1):
+        raise RuntimeError("Failed to enumerate dstack server processes")
+
+    stopped = False
+    for line in proc.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            pid = int(line)
+        except ValueError:
+            continue
+        if pid == os.getpid():
+            continue
+        os.kill(pid, 15)
+        stopped = True
+    return stopped
+
+
+def restart_dstack_server_if_needed(
+    dstack_bin: str,
+    *,
+    health_url: str,
+    health_timeout_seconds: int,
+    start_timeout_seconds: int,
+    dry_run: bool,
+) -> None:
+    marker = dstack_server_restart_marker()
+    if not marker.exists():
+        return
+    if dry_run:
+        print(f"[DRY-RUN] Would restart dstack server because {marker} exists")
+        return
+    if http_ok(health_url, timeout_seconds=health_timeout_seconds) and stop_dstack_server(dstack_bin):
+        deadline = time.monotonic() + max(_MIN_RESTART_WAIT_SECONDS, health_timeout_seconds)
+        while time.monotonic() < deadline:
+            if not http_ok(health_url, timeout_seconds=_HEALTH_RECHECK_TIMEOUT_SECONDS):
+                break
+            time.sleep(0.25)
+    marker.unlink(missing_ok=True)
+    ensure_dstack_server(
+        dstack_bin,
+        health_url=health_url,
+        health_timeout_seconds=health_timeout_seconds,
+        start_timeout_seconds=start_timeout_seconds,
+        dry_run=dry_run,
+    )
 
 
 def ensure_dstack_server(
@@ -168,19 +268,19 @@ def remote_image_tag(
     if dry_run and not skip_build:
         return "dryrun0"
     if skip_build:
-        return backend.remote_image_tag or cached_tag or settings.get("REMOTE_IMAGE_TAG", "latest")
+        return backend.remote_image_tag or cached_tag or settings.get("REMOTE_IMAGE_TAG", _DEFAULT_REMOTE_IMAGE_TAG)
     return git_short_sha()
 
 
 def task_max_duration(time_cap_seconds: int) -> str:
     if time_cap_seconds <= 0:
         raise ValueError("time_cap_seconds must be positive")
-    # Give the in-container `timeout --signal=SIGTERM --kill-after=30` a clean
+    # Give the in-container timeout a clean
     # head start so the SIGTERM handler in train_pretrain.py can call
     # _mlflow_helper.finish(status='KILLED') before dstack's max_duration fires
     # as last-resort safety. 2-minute buffer covers SIGTERM grace (30s) plus
     # MLflow finalize over a slow Cloudflare tunnel.
-    minutes = max(2, (time_cap_seconds + 59) // 60 + 2)
+    minutes = max(_TASK_DURATION_BUFFER_MINUTES, (time_cap_seconds + 59) // 60 + _TASK_DURATION_BUFFER_MINUTES)
     return f"{minutes}m"
 
 
@@ -190,6 +290,9 @@ def render_task(settings: dict[str, str], config: RunConfig, image_sha: str) -> 
     render_env = dict(settings)
     render_env["IMAGE_SHA"] = image_sha
     render_env["TASK_NAME"] = config.name
+    # TOML vcr_image_base overrides .env.remote when explicitly set in config.
+    if config.remote.vcr_image_base:
+        render_env["VCR_IMAGE_BASE"] = config.remote.vcr_image_base
     render_env["TASK_MAX_DURATION"] = task_max_duration(config.recipe.time_cap_seconds)
     # Task/GPU overrides: unset fields fall back to shell defaults so the
     # baseline example stays unchanged while targeted runs (e.g. B300) can
@@ -201,6 +304,121 @@ def render_task(settings: dict[str, str], config: RunConfig, image_sha: str) -> 
         env=render_env,
     )
     return rendered_task
+
+
+def _offer_command(
+    dstack_bin: str,
+    *,
+    max_offers: int,
+    backend: str | None = None,
+    spot_policy: str | None = "auto",
+) -> list[str]:
+    command = [
+        dstack_bin,
+        "offer",
+        "--json",
+        "--max-offers",
+        str(max_offers),
+    ]
+    if spot_policy == "auto":
+        command.append("--spot-auto")
+    elif spot_policy == "spot":
+        command.append("--spot")
+    elif spot_policy == "on-demand":
+        command.append("--on-demand")
+    elif spot_policy:
+        command.extend(["--spot-policy", spot_policy])
+    if backend:
+        command.extend(["--backend", backend])
+    return command
+
+
+def _load_offer_payload(command: list[str], *, timeout: int = _DEFAULT_OFFER_TIMEOUT_SECONDS) -> dict[str, object]:
+    output = run_command(command, capture_output=True, quiet=True, timeout=timeout).stdout
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("dstack offer returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("dstack offer JSON must be an object")
+    return payload
+
+
+def provider_offer_diagnostics(
+    dstack_bin: str,
+    *,
+    max_offers: int = _DEFAULT_PROVIDER_MAX_OFFERS,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    offers: list[dict[str, object]] = []
+    diagnostics: list[dict[str, object]] = []
+    for backend in configured_backends():
+        try:
+            payload = _load_offer_payload(
+                _offer_command(dstack_bin, max_offers=max_offers, backend=backend),
+                timeout=_OFFER_QUERY_TIMEOUT_SECONDS,
+            )
+            offers.extend(offer for offer in payload.get("offers", []) if isinstance(offer, dict))
+            diagnostics.append(
+                {
+                    "backend": backend,
+                    "status": "ok",
+                    "total_offers": payload.get("total_offers", 0),
+                    "visible_offers": len(payload.get("offers", [])),
+                }
+            )
+        except subprocess.TimeoutExpired:
+            diagnostics.append({"backend": backend, "status": "timeout"})
+        except Exception as exc:
+            diagnostics.append({"backend": backend, "status": "error", "reason": str(exc)})
+    return offers, diagnostics
+
+
+def fetch_offers(dstack_bin: str, *, max_offers: int = _DEFAULT_PROVIDER_MAX_OFFERS) -> dict[str, object]:
+    payload = _load_offer_payload(_offer_command(dstack_bin, max_offers=max_offers))
+    provider_offers, diagnostics = provider_offer_diagnostics(dstack_bin, max_offers=max_offers)
+    if provider_offers:
+        payload["offers"] = provider_offers
+        payload["total_offers"] = sum(
+            int(item.get("total_offers", 0)) for item in diagnostics if item.get("status") == "ok"
+        )
+    payload["provider_diagnostics"] = diagnostics
+    return payload
+
+
+def fetch_targeted_offers(
+    dstack_bin: str,
+    *,
+    backend: str,
+    gpu: str,
+    count: int,
+    mode: str,
+    regions: tuple[str, ...] = (),
+    max_price: float | None = None,
+    max_offers: int = _DEFAULT_TARGETED_MAX_OFFERS,
+) -> dict[str, object]:
+    command = _offer_command(
+        dstack_bin,
+        max_offers=max_offers,
+        backend=backend or None,
+        spot_policy=None,
+    )
+    # NOTE:
+    # dstack 0.20.16 advertises `--gpu`, but the installed CLI currently
+    # rejects real GPU-name filters such as `H100`, `H100:1..`, and
+    # `RTX5090`. Query the backend/region/price/mode slice and let the seeker
+    # apply GPU/count matching client-side over the returned offers.
+    _ = (gpu, count)
+    if mode == "spot":
+        command.append("--spot")
+    elif mode == "on-demand":
+        command.append("--on-demand")
+    elif mode:
+        command.extend(["--spot-policy", mode])
+    if max_price is not None:
+        command.extend(["--max-price", str(max_price)])
+    for region in regions:
+        command.extend(["--region", region])
+    return _load_offer_payload(command, timeout=_OFFER_QUERY_TIMEOUT_SECONDS)
 
 
 def dstack_has_run(dstack_bin: str, run_name: str) -> bool:
@@ -248,7 +466,12 @@ def dstack_run_status_triplet(dstack_bin: str, run_name: str) -> tuple[str, str,
     return ("", "", "")
 
 
-def wait_for_run_start(dstack_bin: str, run_name: str, *, max_wait: int = 480) -> None:
+def wait_for_run_start(
+    dstack_bin: str,
+    run_name: str,
+    *,
+    max_wait: int = _DEFAULT_RUN_START_TIMEOUT_SECONDS,
+) -> None:
     log.info("Waiting for run '%s' to leave startup states", run_name)
     elapsed = 0
     while elapsed < max_wait:
@@ -261,8 +484,8 @@ def wait_for_run_start(dstack_bin: str, run_name: str, *, max_wait: int = 480) -
                 "Run '%s' is retrying after a no-capacity offer; waiting for the next submission",
                 run_name,
             )
-            time.sleep(10)
-            elapsed += 10
+            time.sleep(_RUN_START_POLL_INTERVAL_SECONDS)
+            elapsed += _RUN_START_POLL_INTERVAL_SECONDS
             continue
         if run_status in {"terminated", "failed", "stopped", "completed"} or job_status in {
             "terminated",
@@ -274,8 +497,8 @@ def wait_for_run_start(dstack_bin: str, run_name: str, *, max_wait: int = 480) -
                 f"Run '{run_name}' reached terminal job status '{job_status}' "
                 f"before steady-state attach ({termination_reason or 'none'})"
             )
-        time.sleep(10)
-        elapsed += 10
+        time.sleep(_RUN_START_POLL_INTERVAL_SECONDS)
+        elapsed += _RUN_START_POLL_INTERVAL_SECONDS
     raise RuntimeError(f"Run '{run_name}' did not reach RUNNING within {max_wait}s")
 
 
@@ -359,6 +582,7 @@ def launch_remote(
     skip_build: bool | None = None,
     dry_run: bool = False,
     configure_server: bool = True,
+    connection_bundle: ConnectionBundle | None = None,
 ) -> None:
     if config.backend.kind != "dstack":
         raise ValueError("launch_remote requires backend.kind='dstack'")
@@ -370,6 +594,13 @@ def launch_remote(
     ops.run_preflight(remote=True, doctor=config.doctor, remote_config=config.remote)
     if configure_server:
         bash_script(repo_path("dstack", "scripts", "setup-config.sh"))
+    restart_dstack_server_if_needed(
+        dstack_bin,
+        health_url=config.remote.dstack_server_health_url,
+        health_timeout_seconds=config.remote.health_timeout_seconds,
+        start_timeout_seconds=config.remote.dstack_server_start_timeout_seconds,
+        dry_run=dry_run,
+    )
     verify_mlflow(config.remote.mlflow_health_url, timeout_seconds=config.remote.health_timeout_seconds)
     ensure_dstack_server(
         dstack_bin,
@@ -379,10 +610,6 @@ def launch_remote(
         dry_run=dry_run,
     )
 
-    # --- Tunnel startup (background) ---
-    # Start the tunnel early so health validation overlaps with data prep and
-    # image build.  daemon=True guards the *Python thread* (prevents process
-    # hang on exit); cloudflared cleanup depends on kill_tunnel() via PID file.
     tunnel_thread: threading.Thread | None = None
     tunnel_exception: BaseException | None = None
     started_tunnel = False
@@ -390,25 +617,26 @@ def launch_remote(
     rendered_task = None
     launched_remote_run = False
     try:
-        existing_tunnel_url = repo_path(".cf-tunnel.url")
-        existing_tunnel_pid = repo_path(".cf-tunnel.pid")
-        if not dry_run and existing_tunnel_url.exists() and existing_tunnel_pid.exists():
-            log.info("Reusing existing Cloudflare tunnel (found .cf-tunnel.url and .cf-tunnel.pid)")
-            started_tunnel = True
-        elif not dry_run:
-
-            def _run_tunnel() -> None:
-                nonlocal tunnel_exception
-                try:
-                    bash_script(repo_path("infrastructure", "mlflow", "scripts", "run-tunnel.sh"))
-                except Exception as exc:
-                    tunnel_exception = exc
-
-            tunnel_thread = threading.Thread(target=_run_tunnel, daemon=True)
-            tunnel_thread.start()
-            started_tunnel = True
-        else:
+        if dry_run:
             print("[DRY-RUN] Would start the MLflow Cloudflare tunnel")
+        elif connection_bundle is None:
+            existing_tunnel_url = repo_path(".cf-tunnel.url")
+            existing_tunnel_pid = repo_path(".cf-tunnel.pid")
+            if existing_tunnel_url.exists() and existing_tunnel_pid.exists():
+                log.info("Reusing existing Cloudflare tunnel (found .cf-tunnel.url and .cf-tunnel.pid)")
+                started_tunnel = True
+            else:
+
+                def _run_tunnel() -> None:
+                    nonlocal tunnel_exception
+                    try:
+                        bash_script(repo_path("infrastructure", "mlflow", "scripts", "run-tunnel.sh"))
+                    except Exception as exc:
+                        tunnel_exception = exc
+
+                tunnel_thread = threading.Thread(target=_run_tunnel, daemon=True)
+                tunnel_thread.start()
+                started_tunnel = True
 
         use_skip_build = config.backend.skip_build if skip_build is None else skip_build
         cached_image_tag = None
@@ -453,11 +681,12 @@ def launch_remote(
             settings=settings,
             cached_tag=cached_image_tag,
         )
-        mlflow_url = (
-            "https://dry-run-example.trycloudflare.com"
-            if dry_run
-            else repo_path(".cf-tunnel.url").read_text(encoding="utf-8").strip()
-        )
+        if dry_run:
+            mlflow_url = _DRY_RUN_MLFLOW_URL
+        elif connection_bundle is not None:
+            mlflow_url = connection_bundle.mlflow_tracking_uri
+        else:
+            mlflow_url = repo_path(".cf-tunnel.url").read_text(encoding="utf-8").strip()
 
         log.info("Config: %s", config.source)
         log.info("Backend: %s", config.backend.kind)
@@ -473,23 +702,24 @@ def launch_remote(
         rendered_task = render_task(settings, config, image_sha)
         runtime_env = build_training_runtime_env(
             config,
-            dataset_path="/workspace/data/datasets/pretrain_t2t_mini",
-            output_dir=settings.get("OUT_DIR", "/workspace/out"),
+            dataset_path=_CONTAINER_REMOTE_DATASET_PATH,
+            output_dir=settings.get("OUT_DIR", _DEFAULT_REMOTE_OUTPUT_DIR),
             mlflow_tracking_uri=mlflow_url,
             extra_env={
                 "VERDA_PROFILE": "remote",
                 "DSTACK_RUN_NAME": config.name,
-                "OUT_DIR": settings.get("OUT_DIR", "/workspace/out"),
-                "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", "jingyaogong/minimind_dataset"),
+                "OUT_DIR": settings.get("OUT_DIR", _DEFAULT_REMOTE_OUTPUT_DIR),
+                "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", _DEFAULT_HF_DATASET_REPO),
                 "HF_DATASET_FILENAME": settings.get("HF_DATASET_FILENAME", Path(config.recipe.dataset_path).name),
                 "HF_PRETOKENIZED_DATASET_REPO": settings.get(
                     "HF_PRETOKENIZED_DATASET_REPO",
-                    settings.get("HF_DATASET_REPO", "jingyaogong/minimind_dataset"),
+                    settings.get("HF_DATASET_REPO", _DEFAULT_HF_DATASET_REPO),
                 ),
                 "HF_PRETOKENIZED_DATASET_FILENAME": settings.get(
                     "HF_PRETOKENIZED_DATASET_FILENAME",
-                    "pretokenized/pretrain_t2t_mini.tar.gz",
+                    _DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME,
                 ),
+                **(connection_bundle.to_runtime_env() if connection_bundle is not None else {}),
             },
         )
         apply_env = {
@@ -502,7 +732,7 @@ def launch_remote(
         # 60s buffer covers dstack's own internal retries without
         # inventing a new knob.
         apply_cmd = [dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"]
-        apply_timeout = config.remote.run_start_timeout_seconds + 60
+        apply_timeout = config.remote.run_start_timeout_seconds + _DSTACK_APPLY_TIMEOUT_BUFFER_SECONDS
         run_command(apply_cmd, env=apply_env, timeout=apply_timeout)
 
         run_name = config.name
@@ -521,7 +751,7 @@ def launch_remote(
         if rendered_task and rendered_task.exists():
             rendered_task.unlink()
         if tunnel_thread is not None and tunnel_thread.is_alive():
-            tunnel_thread.join(timeout=5)
+            tunnel_thread.join(timeout=_FINAL_TUNNEL_JOIN_TIMEOUT_SECONDS)
         if started_tunnel:
             if launched_remote_run:
                 log.info("Keeping Cloudflare tunnel alive until teardown so remote MLflow stays reachable")

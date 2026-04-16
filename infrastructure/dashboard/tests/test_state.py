@@ -8,8 +8,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import threading
+from datetime import UTC, datetime
 
-from src.state import DstackRun, TrainingSnapshot, get_state, reset_state
+from src.state import DstackRun, OfferSnapshot, TrainingSnapshot, get_state, reset_state
 
 
 def test_fresh_state_defaults(fresh_state):
@@ -20,7 +21,11 @@ def test_fresh_state_defaults(fresh_state):
     assert isinstance(s.shutdown_event, threading.Event)
     assert s.training.status == "unknown"
     assert s.dstack_runs == []
-    assert s.verda_offers == []
+    assert s.seeker_offers == []
+    assert s.seeker_active is None
+    assert s.seeker_pending == []
+    assert s.seeker_attempts == []
+    assert s.offer_history == {}
     assert s.mlflow_runs == []
     assert s.tunnel_url == ""
     assert s.collector_health == {}
@@ -74,3 +79,12 @@ def test_shutdown_event_exposes_stop_signal():
     assert not state.shutdown_event.is_set()
     state.shutdown_event.set()
     assert state.shutdown_event.is_set()
+
+
+def test_offer_snapshot_defaults_capture_archival_shape():
+    """Proves the offer history snapshot model carries stable defaults for
+    availability sparklines and archival metadata."""
+    snap = OfferSnapshot(timestamp=datetime.now(UTC))
+    assert snap.available is False
+    assert snap.price_per_hour == 0.0
+    assert snap.count == 0

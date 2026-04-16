@@ -1,0 +1,33 @@
+# Connector defaults — these values are used when .env.connector is not present.
+# Edit this file to change the base configuration.
+
+[connector]
+domain = "mlmonk96.net"
+tunnel_name = "capacity-seeker"
+# Bootstrap mode: when true, an active trycloudflare.com Quick Tunnel can be
+# used for the MLflow remote lane even if the stable public DNS hostnames are
+# not ready yet. This keeps remote debugging moving while the real zone is
+# still unavailable.
+allow_quick_tunnel = true
+# Zone ID from CF dashboard: mlmonk96.net > Overview > API > Zone ID
+# Required for DNS record management when token lacks Zone:Read permission.
+zone_id = ""
+
+[connector.hostnames]
+mlflow_api = "mlflow-api.mlmonk96.net"
+mlflow_ui = "mlflow-ui.mlmonk96.net"
+dashboard = "dashboard.mlmonk96.net"
+
+[connector.ports]
+mlflow = 5000
+dashboard = 7860
+
+[connector.health]
+mlflow_local_url = "http://127.0.0.1:5000/health"
+mlflow_local_timeout = 2
+
+[r2]
+endpoint_template = "https://{account_id}.r2.cloudflarestorage.com"
+default_region = "auto"
+artifact_path_suffix = "mlflow-artifacts"
+bucket_name = "gpu-poor"

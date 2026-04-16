@@ -10,7 +10,17 @@ import torch
 from datasets import Features, Value, load_dataset
 from torch.utils.data import Dataset
 
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
+TOKENIZERS_PARALLELISM_ENV = "TOKENIZERS_PARALLELISM"
+TOKENIZERS_PARALLELISM_DISABLED = "false"
+PRETOKENIZED_SAMPLE_ADD_SYSTEM_RATIO = 0.2
+PRETOKENIZED_EMPTY_THINK_RATIO = 0.2
+PRETOKENIZED_PROGRESS_INTERVAL = 50000
+PRETOKENIZED_TOKENS_DTYPE = np.int32
+PRETOKENIZED_INDEX_DTYPE = np.int64
+PRETOKENIZED_TOKENS_DTYPE_NAME = "int32"
+PRETOKENIZED_INDEX_DTYPE_NAME = "int64"
+
+os.environ[TOKENIZERS_PARALLELISM_ENV] = TOKENIZERS_PARALLELISM_DISABLED
 
 PRETOKENIZED_DATASET_VERSION = 1
 PRETOKENIZED_TOKENS_FILE = "tokens.bin"
@@ -18,7 +28,7 @@ PRETOKENIZED_INDEX_FILE = "index.bin"
 PRETOKENIZED_METADATA_FILE = "metadata.json"
 
 
-def pre_processing_chat(conversations, add_system_ratio=0.2):
+def pre_processing_chat(conversations, add_system_ratio=PRETOKENIZED_SAMPLE_ADD_SYSTEM_RATIO):
     # tool use 数据完整保留不做处理
     if any(conv.get("tools") for conv in conversations):
         return conversations
@@ -41,7 +51,7 @@ def pre_processing_chat(conversations, add_system_ratio=0.2):
     return conversations
 
 
-def post_processing_chat(prompt_content, empty_think_ratio=0.2):
+def post_processing_chat(prompt_content, empty_think_ratio=PRETOKENIZED_EMPTY_THINK_RATIO):
     # 以80%概率移除空思考标签
     if "<think>\n\n</think>\n\n" in prompt_content and random.random() > empty_think_ratio:
         prompt_content = prompt_content.replace("<think>\n\n</think>\n\n", "")
@@ -86,14 +96,14 @@ class PretrainDataset(Dataset):
         if self._tokens is None:
             self._tokens = np.memmap(
                 self.data_path / PRETOKENIZED_TOKENS_FILE,
-                dtype=np.int32,
+                dtype=PRETOKENIZED_TOKENS_DTYPE,
                 mode="r",
                 shape=(int(self.metadata["token_count"]),),
             )
         if self._index is None:
             self._index = np.memmap(
                 self.data_path / PRETOKENIZED_INDEX_FILE,
-                dtype=np.int64,
+                dtype=PRETOKENIZED_INDEX_DTYPE,
                 mode="r",
                 shape=(self.sample_count, 2),
             )
@@ -246,7 +256,7 @@ def build_pretokenized_corpus(
     max_length,
     *,
     overwrite=False,
-    progress_interval=50000,
+    progress_interval=PRETOKENIZED_PROGRESS_INTERVAL,
 ):
     if tokenizer is None:
         raise ValueError("tokenizer is required")
@@ -281,8 +291,8 @@ def build_pretokenized_corpus(
                 str(payload["text"]), add_special_tokens=False, max_length=max_length - 2, truncation=True
             ).input_ids
             token_ids = [tokenizer.bos_token_id] + token_ids + [tokenizer.eos_token_id]
-            np.asarray(token_ids, dtype=np.int32).tofile(tokens_fp)
-            np.asarray((token_count, len(token_ids)), dtype=np.int64).tofile(index_fp)
+            np.asarray(token_ids, dtype=PRETOKENIZED_TOKENS_DTYPE).tofile(tokens_fp)
+            np.asarray((token_count, len(token_ids)), dtype=PRETOKENIZED_INDEX_DTYPE).tofile(index_fp)
             token_count += len(token_ids)
             sample_count += 1
             if progress_interval > 0 and sample_count % progress_interval == 0:
@@ -296,8 +306,8 @@ def build_pretokenized_corpus(
         "max_length": int(max_length),
         "sample_count": int(sample_count),
         "token_count": int(token_count),
-        "tokens_dtype": "int32",
-        "index_dtype": "int64",
+        "tokens_dtype": PRETOKENIZED_TOKENS_DTYPE_NAME,
+        "index_dtype": PRETOKENIZED_INDEX_DTYPE_NAME,
         "bos_token_id": int(tokenizer.bos_token_id),
         "eos_token_id": int(tokenizer.eos_token_id),
         "pad_token_id": int(tokenizer.pad_token_id),

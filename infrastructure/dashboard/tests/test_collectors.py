@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -13,6 +14,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.errors import SourceStatus
+
+
+def _plan_response(offers):
+    resp = MagicMock()
+    resp.json.return_value = {"job_plans": [{"offers": offers}]}
+    return resp
 
 
 @pytest.mark.parametrize(
@@ -36,6 +43,79 @@ def test_collect_tunnel_url_reports_source_health(tmp_path, monkeypatch, content
     url, status = collect_tunnel_url()
     assert url == expected_url
     assert status == expected_status
+
+
+def test_collect_seeker_state_reads_queue_offer_and_attempt_files(tmp_path, monkeypatch):
+    seeker_dir = tmp_path / "seeker"
+    seeker_dir.mkdir()
+    (seeker_dir / "latest_offers.json").write_text(
+        json.dumps(
+            {
+                "offers": [
+                    {
+                        "backend": "runpod",
+                        "region": "US-KS-1",
+                        "gpu": "H100",
+                        "count": 1,
+                        "mode": "spot",
+                        "price_per_hour": 1.25,
+                        "instance_type": "h100x1",
+                        "availability": "available",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    (seeker_dir / "queue.json").write_text(
+        json.dumps(
+            {
+                "active": {
+                    "job_id": "job-1",
+                    "config_name": "debug-run",
+                    "submitted_run_name": "debug-run",
+                    "submit_retries": 1,
+                    "last_status": "submitted",
+                    "last_reason": "",
+                    "enqueued_at": "2026-04-16T00:00:00+00:00",
+                },
+                "pending": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (seeker_dir / "attempts.jsonl").write_text(
+        json.dumps(
+            {
+                "job_id": "job-1",
+                "attempt_id": "attempt-1",
+                "backend": "runpod",
+                "region": "US-KS-1",
+                "gpu": "H100",
+                "count": 1,
+                "mode": "spot",
+                "price_per_hour": 1.25,
+                "status": "submitted",
+                "reason": "launch ok",
+                "started_at": "2026-04-16T00:00:00+00:00",
+                "ended_at": "2026-04-16T00:00:05+00:00",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("src.collectors.seeker_state.SEEKER_DATA_DIR", str(seeker_dir))
+    from src.collectors.seeker_state import collect_seeker_state
+
+    offers, active, pending, attempts, status = collect_seeker_state()
+
+    assert status == SourceStatus.OK
+    assert len(offers) == 1
+    assert offers[0].backend == "runpod"
+    assert active is not None and active.job_id == "job-1"
+    assert pending == []
+    assert len(attempts) == 1
+    assert attempts[0].status == "submitted"
 
 
 @pytest.mark.parametrize(
@@ -136,6 +216,169 @@ def test_collect_artifacts_no_mount(monkeypatch):
     assert status == SourceStatus.STALE
 
 
+def test_collect_verda_offers_targets_five_gpu_specs_and_prefers_a100_80g(monkeypatch):
+    """Proves the offer probe only targets the intended five GPUs and rewrites
+    A100 results to the stable A100-80G display name when 80G capacity exists."""
+    from src.collectors import verda_offers
+
+    calls = []
+
+    def fake_rest(endpoint, *, method="GET", json=None, timeout=10.0):
+        calls.append((endpoint, method, timeout, json["run_spec"]["configuration"]["resources"]["gpu"]["name"]))
+        probe_name = json["run_spec"]["configuration"]["resources"]["gpu"]["name"]
+        if probe_name == "A100":
+            return _plan_response(
+                [
+                    {
+                        "price": 2.8,
+                        "backend": "runpod",
+                        "region": "US-KS-1",
+                        "instance": {
+                            "name": "a100-40g",
+                            "resources": {"spot": True, "gpus": [{"memory_mib": 40_960}]},
+                        },
+                    },
+                    {
+                        "price": 3.2,
+                        "backend": "runpod",
+                        "region": "US-KS-1",
+                        "instance": {
+                            "name": "a100-80g",
+                            "resources": {"spot": True, "gpus": [{"memory_mib": 81_920}]},
+                        },
+                    },
+                ]
+            )
+        return _plan_response([])
+
+    monkeypatch.setattr(verda_offers, "safe_dstack_rest", fake_rest)
+
+    offers, status = verda_offers.collect_verda_offers()
+
+    assert status == SourceStatus.OK
+    assert [spec[0] for spec in verda_offers.GPU_SPECS] == ["A100", "H100", "H200", "B200", "B300"]
+    assert [call[3] for call in calls] == ["A100", "H100", "H200", "B200", "B300"]
+    assert all(call[2] == 15.0 for call in calls)
+    assert len(offers) == 1
+    assert offers[0].gpu_name == "A100-80G"
+    assert offers[0].instance_type == "a100-80g"
+
+
+def test_collect_verda_offers_falls_back_when_no_a100_80g_exists(monkeypatch):
+    """Proves the A100 memory preference is non-destructive when only smaller
+    A100 variants are returned by the API."""
+    from src.collectors import verda_offers
+
+    def fake_rest(endpoint, *, method="GET", json=None, timeout=10.0):
+        probe_name = json["run_spec"]["configuration"]["resources"]["gpu"]["name"]
+        if probe_name == "A100":
+            return _plan_response(
+                [
+                    {
+                        "price": 2.5,
+                        "backend": "vastai",
+                        "region": "CA-ON",
+                        "instance": {
+                            "name": "a100-40g",
+                            "resources": {"spot": False, "gpus": [{"memory_mib": 40_960}]},
+                        },
+                    }
+                ]
+            )
+        return _plan_response([])
+
+    monkeypatch.setattr(verda_offers, "safe_dstack_rest", fake_rest)
+
+    offers, status = verda_offers.collect_verda_offers()
+
+    assert status == SourceStatus.OK
+    assert len(offers) == 1
+    assert offers[0].gpu_name == "A100-80G"
+    assert offers[0].instance_type == "a100-40g"
+
+
+def test_archive_offer_snapshots_uses_cheapest_offer_and_tracks_unavailable_pairs():
+    """Proves snapshot archival is bounded, keeps the cheapest current offer
+    per GPU/backend pair, and still records unavailable GPU/backend pairs."""
+    from src.collector_workers import _archive_offer_snapshots
+    from src.state import SeekerOffer, reset_state
+
+    state = reset_state()
+    now = datetime.now(UTC)
+    offers = [
+        SeekerOffer(
+            gpu_name="H100",
+            backend="runpod",
+            region="US-KS-1",
+            price_per_hour=2.5,
+            count=1,
+            mode="spot",
+            availability="available",
+            instance_type="h100-a",
+        ),
+        SeekerOffer(
+            gpu_name="H100",
+            backend="runpod",
+            region="US-KS-2",
+            price_per_hour=1.9,
+            count=1,
+            mode="spot",
+            availability="available",
+            instance_type="h100-b",
+        ),
+        SeekerOffer(
+            gpu_name="H200",
+            backend="vastai",
+            region="CA-ON",
+            price_per_hour=3.1,
+            count=2,
+            mode="on-demand",
+            availability="available",
+            instance_type="h200-x2",
+        ),
+    ]
+
+    for idx in range(61):
+        _archive_offer_snapshots(state, offers, now + timedelta(minutes=idx))
+
+    runpod_h100 = state.offer_history[("H100", "runpod")]
+    assert len(runpod_h100) == 60
+    assert runpod_h100[-1].available is True
+    assert runpod_h100[-1].price_per_hour == 1.9
+    assert runpod_h100[-1].count == 1
+
+    unavailable = state.offer_history[("B300", "runpod")]
+    assert len(unavailable) == 60
+    assert unavailable[-1].available is False
+    assert unavailable[-1].price_per_hour == 0.0
+    assert unavailable[-1].count == 0
+
+
+def test_start_all_collectors_exposes_dstack_offer_worker_at_sixty_seconds(monkeypatch):
+    """Proves the dstack offer worker cadence was widened to avoid overlapping
+    the slower multi-GPU probe sequence."""
+    from src import collector_workers
+    from src.state import reset_state
+
+    state = reset_state()
+    monkeypatch.setattr(collector_workers, "collect_training_snapshot", lambda target: (MagicMock(), SourceStatus.OK))
+    monkeypatch.setattr(collector_workers, "collect_live_metrics", lambda: ({}, SourceStatus.OK))
+    monkeypatch.setattr(collector_workers, "collect_dstack_runs", lambda: ([], SourceStatus.OK))
+    monkeypatch.setattr(collector_workers, "collect_system", lambda: (MagicMock(), SourceStatus.OK))
+    monkeypatch.setattr(collector_workers, "collect_mlflow_recent", lambda: ([], SourceStatus.OK))
+    monkeypatch.setattr(collector_workers, "collect_tunnel_url", lambda: ("", SourceStatus.STALE))
+    monkeypatch.setattr(collector_workers, "collect_seeker_state", lambda: ([], None, [], [], SourceStatus.OK))
+    monkeypatch.setattr(collector_workers, "collect_verda_offers", lambda: ([], SourceStatus.OK))
+
+    workers = collector_workers.start_all_collectors(state)
+    state.shutdown_event.set()
+    for worker in workers:
+        worker.join(timeout=1.0)
+
+    cadence_by_name = {worker.name: worker.cadence for worker in workers}
+    assert cadence_by_name["dstack-offers-60s"] == 60.0
+
+
 # ── F6 Test 5: collector timestamps must be timezone-aware UTC ────────────────
 
 
@@ -157,6 +400,13 @@ def test_collector_uses_timezone_aware_datetime(monkeypatch):
         "collect_training_snapshot",
         lambda target: (fake_snap, SourceStatus.OK),
     )
+    monkeypatch.setattr(collector_workers, "collect_live_metrics", lambda: ({}, SourceStatus.OK))
+    monkeypatch.setattr(collector_workers, "collect_dstack_runs", lambda: ([], SourceStatus.OK))
+    monkeypatch.setattr(collector_workers, "collect_system", lambda: (MagicMock(), SourceStatus.OK))
+    monkeypatch.setattr(collector_workers, "collect_mlflow_recent", lambda: ([], SourceStatus.OK))
+    monkeypatch.setattr(collector_workers, "collect_tunnel_url", lambda: ("", SourceStatus.STALE))
+    monkeypatch.setattr(collector_workers, "collect_seeker_state", lambda: ([], None, [], [], SourceStatus.OK))
+    monkeypatch.setattr(collector_workers, "collect_verda_offers", lambda: ([], SourceStatus.OK))
 
     # Build the collector list but don't start threads — just invoke the 2s
     # training closure directly.

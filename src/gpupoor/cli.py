@@ -7,6 +7,8 @@ import sys
 from dataclasses import replace
 
 from gpupoor import __version__, ops
+from gpupoor import connector as connector_module
+from gpupoor import deployer as deployer_module
 from gpupoor.backends import dstack as dstack_backend
 from gpupoor.backends.local import run_training as run_local_training
 from gpupoor.config import (
@@ -19,6 +21,7 @@ from gpupoor.config import (
 from gpupoor.services import dashboard as dashboard_service
 from gpupoor.services import emulator as emulator_service
 from gpupoor.services import mlflow as mlflow_service
+from gpupoor.services import seeker as seeker_service
 from gpupoor.subprocess_utils import CommandError, bash_script, run_command
 from gpupoor.utils import repo_path
 from gpupoor.utils.logging import configure_root
@@ -76,6 +79,25 @@ def build_parser() -> argparse.ArgumentParser:
     dstack_parser.add_argument("config", help="Path to a TOML run config")
     dstack_parser.add_argument("--skip-build", action="store_true", default=None, help="Skip image build and push")
     dstack_parser.add_argument("--dry-run", action="store_true", help="Print the remote plan without mutating")
+
+    seeker_parser = subparsers.add_parser("seeker", help="Manage remote GPU seeker jobs")
+    seeker_subparsers = seeker_parser.add_subparsers(dest="seeker_action", required=True)
+    seeker_enqueue = seeker_subparsers.add_parser("enqueue", help="Add a config to the seeker queue")
+    seeker_enqueue.add_argument("config", help="Path to a TOML run config")
+    seeker_subparsers.add_parser("daemon", help="Run the single-worker seeker loop")
+    seeker_subparsers.add_parser("status", help="Show seeker queue and offer state")
+
+    deploy_parser = subparsers.add_parser("deploy", help="Deploy training containers")
+    deploy_subparsers = deploy_parser.add_subparsers(dest="deploy_target", required=True)
+    deploy_remote = deploy_subparsers.add_parser("remote", help="Deploy a remote dstack task")
+    deploy_remote.add_argument("config", help="Path to a TOML run config")
+    deploy_remote.add_argument("--skip-build", action="store_true", default=None, help="Skip image build and push")
+    deploy_remote.add_argument("--dry-run", action="store_true", help="Print the remote plan without mutating")
+    deploy_local = deploy_subparsers.add_parser("local-emulator", help="Deploy a fast local debug run")
+    deploy_local.add_argument("config", help="Path to a TOML run config")
+
+    connector_parser = subparsers.add_parser("connector", help="Manage shared MLflow/tunnel/storage wiring")
+    connector_parser.add_argument("action", choices=("setup", "doctor", "status"))
 
     dstack_admin_parser = subparsers.add_parser("dstack", help="Manage repo-owned dstack helper flows")
     dstack_admin_subparsers = dstack_admin_parser.add_subparsers(dest="dstack_action", required=True)
@@ -216,13 +238,46 @@ def dispatch(args: argparse.Namespace) -> None:
     if args.command == "launch":
         if args.launch_target != "dstack":
             raise ValueError(f"Unsupported launch target: {args.launch_target}")
-        config = load_run_config(args.config)
-        dstack_backend.launch_remote(
-            config,
+        deployer_module.deploy_remote_config(
+            args.config,
             skip_build=args.skip_build,
             dry_run=args.dry_run,
         )
         return
+
+    if args.command == "seeker":
+        if args.seeker_action == "enqueue":
+            seeker_service.enqueue(args.config)
+            return
+        if args.seeker_action == "daemon":
+            seeker_service.daemon()
+            return
+        if args.seeker_action == "status":
+            seeker_service.status()
+            return
+
+    if args.command == "deploy":
+        if args.deploy_target == "remote":
+            deployer_module.deploy_remote_config(
+                args.config,
+                skip_build=args.skip_build,
+                dry_run=args.dry_run,
+            )
+            return
+        if args.deploy_target == "local-emulator":
+            deployer_module.deploy_local_emulator(args.config)
+            return
+
+    if args.command == "connector":
+        if args.action == "setup":
+            connector_module.setup()
+            return
+        if args.action == "doctor":
+            connector_module.doctor()
+            return
+        if args.action == "status":
+            connector_module.status()
+            return
 
     if args.command == "dstack":
         if args.dstack_action == "setup":

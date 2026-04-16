@@ -149,19 +149,37 @@ def test_dstack_setup_runs_repo_script(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_launch_dstack_leaves_config_defaults_in_control_when_flags_omitted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
     calls: list[tuple[object, bool]] = []
 
-    monkeypatch.setattr(cli, "load_run_config", lambda path: config)
     monkeypatch.setattr(
-        cli.dstack_backend,
-        "launch_remote",
-        lambda config, *, skip_build=None, dry_run=False: calls.append((skip_build, dry_run)),
+        cli.deployer_module,
+        "deploy_remote_config",
+        lambda config_path, *, skip_build=None, dry_run=False: calls.append((skip_build, dry_run)),
     )
 
     cli.dispatch(cli.build_parser().parse_args(["launch", "dstack", "examples/verda_remote.toml"]))
 
     assert calls == [(None, False)]
+
+
+def test_deploy_local_emulator_delegates_to_deployer(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(cli.deployer_module, "deploy_local_emulator", lambda config: calls.append(config))
+
+    cli.dispatch(cli.build_parser().parse_args(["deploy", "local-emulator", "examples/tiny_local.toml"]))
+
+    assert calls == ["examples/tiny_local.toml"]
+
+
+def test_connector_status_delegates_to_connector_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(cli.connector_module, "status", lambda: calls.append("status"))
+
+    cli.dispatch(cli.build_parser().parse_args(["connector", "status"]))
+
+    assert calls == ["status"]
 
 
 def test_dstack_registry_login_runs_repo_script(monkeypatch: pytest.MonkeyPatch) -> None:
