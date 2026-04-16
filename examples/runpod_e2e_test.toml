@@ -87,8 +87,8 @@ max_price = 4.00
 
 [seeker]
 poll_seconds = 30
-max_offer_age_seconds = 60
-max_submit_retries = 3
+max_offer_age_seconds = 300
+max_submit_retries = 300
 
 [dashboard]
 # Container-specific URL overrides (Docker internal DNS)
