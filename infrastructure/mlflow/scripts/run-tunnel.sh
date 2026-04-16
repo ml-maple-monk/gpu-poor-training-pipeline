@@ -53,7 +53,11 @@ stop_tunnel() {
 start_tunnel() {
     stop_tunnel
     rm -f "$TUNNEL_LOG"
-    cloudflared tunnel --protocol http2 --url "$MLFLOW_LOCAL" >"$TUNNEL_LOG" 2>&1 &
+
+    # Launch cloudflared in a new session so the quick tunnel survives after
+    # run-tunnel.sh exits and remains available to remote jobs.
+    setsid nohup cloudflared tunnel --protocol http2 --url "$MLFLOW_LOCAL" \
+        >"$TUNNEL_LOG" 2>&1 </dev/null &
     CF_PID=$!
     echo "$CF_PID" > "$TUNNEL_PID_FILE"
     echo "[tunnel] cloudflared started (PID $CF_PID), polling log for URL..."

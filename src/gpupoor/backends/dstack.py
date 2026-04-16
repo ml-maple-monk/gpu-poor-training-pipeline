@@ -6,6 +6,7 @@ import json
 import os
 import platform
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -29,6 +30,8 @@ from gpupoor.utils.http import http_ok
 from gpupoor.utils.logging import get_logger
 
 log = get_logger(__name__)
+
+_TUNNEL_JOIN_TIMEOUT = 180
 
 __all__ = [
     "ensure_dstack_server",
@@ -376,65 +379,97 @@ def launch_remote(
         dry_run=dry_run,
     )
 
-    use_skip_build = config.backend.skip_build if skip_build is None else skip_build
-    cached_image_tag = None
-
-    if dry_run:
-        print("[DRY-RUN] Would prepare and upload the pretokenized dataset artifact")
-    else:
-        bash_script(
-            repo_path("training", "scripts", "prepare-data.sh"),
-            env={**settings, **os.environ, "UPLOAD_PRETOKENIZED_DATASET": "1"},
-        )
-
-    if not use_skip_build:
-        head_image_tag = git_short_sha()
-        if not dry_run and not git_has_tracked_changes():
-            cached_image_tag = read_cached_remote_image_tag(settings)
-            if cached_image_tag == head_image_tag:
-                use_skip_build = True
-                log.info("Reusing previously published remote image tag '%s'", cached_image_tag)
-        if dry_run:
-            print("[DRY-RUN] Would build and push the remote image")
-        elif not use_skip_build:
-            bash_script(repo_path("training", "scripts", "build-and-push.sh"))
-    else:
-        log.info("Skipping remote image build")
-
-    if dry_run:
-        print("[DRY-RUN] Would start the MLflow Cloudflare tunnel")
-    else:
-        bash_script(repo_path("infrastructure", "mlflow", "scripts", "run-tunnel.sh"))
-
-    image_sha = remote_image_tag(
-        config.backend,
-        skip_build=use_skip_build,
-        dry_run=dry_run,
-        settings=settings,
-        cached_tag=cached_image_tag,
-    )
-    mlflow_url = (
-        "https://dry-run-example.trycloudflare.com"
-        if dry_run
-        else repo_path(".cf-tunnel.url").read_text(encoding="utf-8").strip()
-    )
-
-    log.info("Config: %s", config.source)
-    log.info("Backend: %s", config.backend.kind)
-    log.info("MLFLOW_URL=%s", mlflow_url)
-    log.info("IMAGE_SHA=%s", image_sha)
-    log.info("VCR_IMAGE_BASE=%s", settings["VCR_IMAGE_BASE"])
+    # --- Tunnel startup (background) ---
+    # Start the tunnel early so health validation overlaps with data prep and
+    # image build.  daemon=True guards the *Python thread* (prevents process
+    # hang on exit); cloudflared cleanup depends on kill_tunnel() via PID file.
+    tunnel_thread: threading.Thread | None = None
+    tunnel_exception: BaseException | None = None
+    started_tunnel = False
 
     rendered_task = None
-    started_tunnel = False
     launched_remote_run = False
     try:
+        existing_tunnel_url = repo_path(".cf-tunnel.url")
+        existing_tunnel_pid = repo_path(".cf-tunnel.pid")
+        if not dry_run and existing_tunnel_url.exists() and existing_tunnel_pid.exists():
+            log.info("Reusing existing Cloudflare tunnel (found .cf-tunnel.url and .cf-tunnel.pid)")
+            started_tunnel = True
+        elif not dry_run:
+
+            def _run_tunnel() -> None:
+                nonlocal tunnel_exception
+                try:
+                    bash_script(repo_path("infrastructure", "mlflow", "scripts", "run-tunnel.sh"))
+                except Exception as exc:
+                    tunnel_exception = exc
+
+            tunnel_thread = threading.Thread(target=_run_tunnel, daemon=True)
+            tunnel_thread.start()
+            started_tunnel = True
+        else:
+            print("[DRY-RUN] Would start the MLflow Cloudflare tunnel")
+
+        use_skip_build = config.backend.skip_build if skip_build is None else skip_build
+        cached_image_tag = None
+
+        if config.recipe.prepare_data:
+            if dry_run:
+                print("[DRY-RUN] Would prepare and upload the pretokenized dataset artifact")
+            else:
+                bash_script(
+                    repo_path("training", "scripts", "prepare-data.sh"),
+                    env={**settings, **os.environ, "UPLOAD_PRETOKENIZED_DATASET": "1"},
+                )
+        else:
+            log.info("Skipping dataset preparation (prepare_data=false)")
+
+        if not use_skip_build:
+            head_image_tag = git_short_sha()
+            if not dry_run and not git_has_tracked_changes():
+                cached_image_tag = read_cached_remote_image_tag(settings)
+                if cached_image_tag == head_image_tag:
+                    use_skip_build = True
+                    log.info("Reusing previously published remote image tag '%s'", cached_image_tag)
+            if dry_run:
+                print("[DRY-RUN] Would build and push the remote image")
+            elif not use_skip_build:
+                bash_script(repo_path("training", "scripts", "build-and-push.sh"))
+        else:
+            log.info("Skipping remote image build")
+
+        # Wait for the background tunnel thread to finish before reading the URL.
+        if tunnel_thread is not None:
+            tunnel_thread.join(timeout=_TUNNEL_JOIN_TIMEOUT)
+            if tunnel_thread.is_alive():
+                raise RuntimeError("Tunnel startup timed out")
+            if tunnel_exception is not None:
+                raise tunnel_exception
+
+        image_sha = remote_image_tag(
+            config.backend,
+            skip_build=use_skip_build,
+            dry_run=dry_run,
+            settings=settings,
+            cached_tag=cached_image_tag,
+        )
+        mlflow_url = (
+            "https://dry-run-example.trycloudflare.com"
+            if dry_run
+            else repo_path(".cf-tunnel.url").read_text(encoding="utf-8").strip()
+        )
+
+        log.info("Config: %s", config.source)
+        log.info("Backend: %s", config.backend.kind)
+        log.info("MLFLOW_URL=%s", mlflow_url)
+        log.info("IMAGE_SHA=%s", image_sha)
+        log.info("VCR_IMAGE_BASE=%s", settings["VCR_IMAGE_BASE"])
+
         if dry_run:
             print(f"[DRY-RUN] Would render task with IMAGE_SHA={image_sha}")
             print("[DRY-RUN] Would call dstack apply with HF_TOKEN and MLflow env")
             return
 
-        started_tunnel = True
         rendered_task = render_task(settings, config, image_sha)
         runtime_env = build_training_runtime_env(
             config,
@@ -485,6 +520,8 @@ def launch_remote(
     finally:
         if rendered_task and rendered_task.exists():
             rendered_task.unlink()
+        if tunnel_thread is not None and tunnel_thread.is_alive():
+            tunnel_thread.join(timeout=5)
         if started_tunnel:
             if launched_remote_run:
                 log.info("Keeping Cloudflare tunnel alive until teardown so remote MLflow stays reachable")

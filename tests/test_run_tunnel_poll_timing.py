@@ -34,3 +34,16 @@ def test_url_poll_increments_elapsed_by_one() -> None:
         "URL-poll loop must advance ELAPSED by 1 per iteration so "
         "POLL_TIMEOUT maps one-to-one to seconds of real wait."
     )
+
+
+def test_cloudflared_launch_is_nohup_detached() -> None:
+    text = RUN_TUNNEL.read_text(encoding="utf-8")
+
+    assert "setsid nohup cloudflared tunnel" in text, (
+        "cloudflared must be launched in a new session under nohup so the quick tunnel stays up "
+        "after run-tunnel.sh exits and remote MLflow logging does not lose its origin."
+    )
+    assert "</dev/null &" in text, (
+        "cloudflared must be detached from stdin when backgrounded so the helper "
+        "shell can exit without tearing down the tunnel process."
+    )

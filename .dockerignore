@@ -1,6 +1,11 @@
 secrets
 .env*
-data/
+# Keep only the pretokenized training corpus available to Docker builds.
+data/*
+!data/datasets/
+data/datasets/*
+!data/datasets/pretrain_t2t_mini/
+!data/datasets/pretrain_t2t_mini/**
 .git/
 .omc/
 __pycache__

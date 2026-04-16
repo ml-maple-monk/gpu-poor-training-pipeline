@@ -639,6 +639,51 @@ def test_start_dstack_server_deadline_based(tmp_path: Path, monkeypatch: pytest.
     )
 
 
+def test_launch_remote_raises_on_tunnel_thread_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the tunnel thread exceeds the join timeout, launch_remote raises and cleans up."""
+    config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
+    (tmp_path / ".cf-tunnel.url").write_text("https://mlflow.example", encoding="utf-8")
+
+    def fake_repo_path(*parts: str) -> Path:
+        return tmp_path.joinpath(*parts)
+
+    block_event = threading.Event()
+
+    def selective_bash_script(script: Path, *args: object, **kwargs: object) -> None:
+        if "run-tunnel" in str(script):
+            block_event.wait()  # block only the tunnel call
+        # all other bash_script calls are no-ops
+
+    monkeypatch.setattr(dstack, "repo_path", fake_repo_path)
+    monkeypatch.setattr(
+        dstack,
+        "load_remote_settings",
+        lambda config=None: {
+            "VCR_IMAGE_BASE": "vccr.io/example",
+            "VCR_USERNAME": "user",
+            "VCR_PASSWORD": "pass",
+        },
+    )
+    monkeypatch.setattr(dstack, "require_remote_settings", lambda settings: None)
+    monkeypatch.setattr(dstack, "find_dstack_bin", lambda: "dstack")
+    monkeypatch.setattr(dstack.ops, "run_preflight", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack, "verify_mlflow", lambda url, **kwargs: None)
+    monkeypatch.setattr(dstack, "ensure_dstack_server", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack, "bash_script", selective_bash_script)
+    monkeypatch.setattr(dstack, "_TUNNEL_JOIN_TIMEOUT", 0.5)
+
+    kill_calls: list[None] = []
+    monkeypatch.setattr(dstack, "kill_tunnel", lambda: kill_calls.append(None))
+
+    try:
+        with pytest.raises(RuntimeError, match="Tunnel startup timed out"):
+            dstack.launch_remote(config, skip_build=True)
+
+        assert kill_calls == [None]
+    finally:
+        block_event.set()  # release the blocked thread to avoid leaks
+
+
 def test_track_run_concurrent_writes_do_not_interleave(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Concurrent track_run writes must not interleave or lose records.
 

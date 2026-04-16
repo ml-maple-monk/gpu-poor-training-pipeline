@@ -34,3 +34,21 @@ def test_prepare_data_can_trigger_pretokenized_dataset_upload() -> None:
     assert "Pretokenized dataset already present" in prepare_script
     assert "UPLOAD_PRETOKENIZED_DATASET" in prepare_script
     assert "upload-pretokenized-data.sh" in prepare_script
+
+
+def test_remote_image_build_context_only_admits_the_pretokenized_dataset() -> None:
+    dockerignore = _repo_text(".dockerignore")
+
+    assert "data/*" in dockerignore
+    assert "!data/datasets/pretrain_t2t_mini/" in dockerignore
+    assert "!data/datasets/pretrain_t2t_mini/**" in dockerignore
+
+
+def test_remote_image_bakes_runtime_loader_and_pretokenized_dataset() -> None:
+    dockerfile = _repo_text("training", "docker", "Dockerfile.remote")
+    build_script = _repo_text("training", "scripts", "build-and-push.sh")
+
+    assert "COPY data/datasets/pretrain_t2t_mini/" in dockerfile
+    assert "COPY training/scripts/lib/load-run-config-env.py" in dockerfile
+    assert "ensure_pretokenized_dataset()" in build_script
+    assert "PRETOKENIZED_DATASET_REQUIRED_FILES" in build_script

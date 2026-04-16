@@ -81,6 +81,14 @@ def test_remote_training_image_uses_the_shared_base(repo_text, repo_relpath):
     assert "--build-arg BASE_IMAGE=" in build_script
 
 
+def test_only_remote_training_image_bakes_the_pretokenized_dataset(repo_text):
+    remote_dockerfile = repo_text("training", "docker", "Dockerfile.remote")
+    base_dockerfile = repo_text("training", "docker", "Dockerfile.base")
+
+    assert "COPY data/datasets/pretrain_t2t_mini/" in remote_dockerfile
+    assert "data/datasets/pretrain_t2t_mini" not in base_dockerfile
+
+
 @pytest.mark.parametrize(
     ("parts", "should_exist"),
     [
