@@ -176,7 +176,6 @@ def lm_checkpoint(
     optimizer=None,
     epoch=0,
     step=0,
-    wandb=None,
     save_dir="../checkpoints",
     **kwargs,
 ):
@@ -193,13 +192,6 @@ def lm_checkpoint(
         ckp_tmp = ckp_path + ".tmp"
         torch.save(state_dict, ckp_tmp)
         os.replace(ckp_tmp, ckp_path)
-        wandb_id = None
-        if wandb:
-            if hasattr(wandb, "get_run"):
-                run = wandb.get_run()
-                wandb_id = getattr(run, "id", None) if run else None
-            else:
-                wandb_id = getattr(wandb, "id", None)
 
         resume_data = {
             "model": state_dict,
@@ -207,7 +199,6 @@ def lm_checkpoint(
             "epoch": epoch,
             "step": step,
             "world_size": dist.get_world_size() if dist.is_initialized() else 1,
-            "wandb_id": wandb_id,
         }
         for key, value in kwargs.items():
             if value is not None:

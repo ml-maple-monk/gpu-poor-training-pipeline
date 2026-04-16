@@ -74,8 +74,6 @@ class TrainingConfig:
     save_weight: str = "pretrain"
     from_weight: str = "none"
     from_resume: bool = False
-    use_wandb: bool = False
-    wandb_project: str = "MiniMind-Pretrain"
     lr_schedule: str = "cosine"
     lr_warmup_steps: int = 0
     lr_min_ratio: float = 0.1
@@ -114,8 +112,6 @@ class TrainingConfig:
             "TRAIN_SAVE_WEIGHT": self.save_weight,
             "TRAIN_FROM_WEIGHT": self.from_weight,
             "TRAIN_FROM_RESUME": "1" if self.from_resume else "0",
-            "TRAIN_USE_WANDB": "1" if self.use_wandb else "0",
-            "TRAIN_WANDB_PROJECT": self.wandb_project,
             "TRAIN_LR_SCHEDULE": self.lr_schedule,
             "TRAIN_LR_WARMUP_STEPS": str(self.lr_warmup_steps),
             "TRAIN_LR_MIN_RATIO": str(self.lr_min_ratio),
@@ -427,8 +423,6 @@ _KNOWN_TRAINING = {
     "save_weight",
     "from_weight",
     "from_resume",
-    "use_wandb",
-    "wandb_project",
     "lr_schedule",
     "lr_warmup_steps",
     "lr_min_ratio",
@@ -576,8 +570,6 @@ def load_run_config(path: str | Path) -> RunConfig:
         save_weight=_require_str(training_data, "save_weight", default="pretrain"),
         from_weight=_require_str(training_data, "from_weight", default="none"),
         from_resume=_require_bool(training_data, "from_resume", default=False),
-        use_wandb=_require_bool(training_data, "use_wandb", default=False),
-        wandb_project=_require_str(training_data, "wandb_project", default="MiniMind-Pretrain"),
         lr_schedule=_require_str(training_data, "lr_schedule", default="cosine"),
         lr_warmup_steps=_require_int(training_data, "lr_warmup_steps", default=0),
         lr_min_ratio=_require_float(training_data, "lr_min_ratio", default=0.1),

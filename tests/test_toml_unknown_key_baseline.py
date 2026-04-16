@@ -67,3 +67,16 @@ def test_rejects_legacy_backend_flags(tmp_path: Path) -> None:
     )
     with pytest.raises(ConfigError, match=r"\[backend\] has unknown key\(s\): keep_tunnel, pull_artifacts"):
         load_run_config(path)
+
+
+def test_rejects_removed_wandb_training_keys(tmp_path: Path) -> None:
+    path = write_toml(
+        tmp_path,
+        'name = "probe"\n'
+        "[recipe]\n"
+        '[training]\nuse_wandb = false\nwandb_project = "old-project"\n'
+        '[backend]\nkind = "local"\n'
+        "[mlflow]\n[doctor]\n[smoke]\n[remote]\n",
+    )
+    with pytest.raises(ConfigError, match=r"\[training\] has unknown key\(s\): use_wandb, wandb_project"):
+        load_run_config(path)

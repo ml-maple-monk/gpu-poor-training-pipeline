@@ -150,7 +150,7 @@ def _build_pretrain_datasets(tokenizer):
     return train_ds, val_ds
 
 
-def _save_checkpoint(epoch: int, step: int, wandb=None) -> None:
+def _save_checkpoint(epoch: int, step: int) -> None:
     model.eval()
     moe_suffix = "_moe" if lm_config.use_moe else ""
     ckp = f"{args.save_dir}/{args.save_weight}_{lm_config.hidden_size}{moe_suffix}.pth"
@@ -166,7 +166,6 @@ def _save_checkpoint(epoch: int, step: int, wandb=None) -> None:
         scaler=scaler,
         epoch=epoch,
         step=step,
-        wandb=wandb,
         optimizer_step=int(metric_state["optimizer_step"]),
         save_dir=args.save_dir,
     )
@@ -175,7 +174,7 @@ def _save_checkpoint(epoch: int, step: int, wandb=None) -> None:
     del state_dict
 
 
-def _log_train_window(epoch: int, step: int, iters: int, start_step: int, wandb=None) -> None:
+def _log_train_window(epoch: int, step: int, iters: int, start_step: int) -> None:
     if device_type == "cuda":
         torch.cuda.synchronize(args.device)
 
@@ -248,17 +247,6 @@ def _log_train_window(epoch: int, step: int, iters: int, start_step: int, wandb=
             extra_metrics["train/joules_per_token"] = total_energy_j / consumed_tokens
 
     Logger(", ".join(summary))
-    if wandb:
-        wandb.log(
-            {
-                "loss": current_loss,
-                "logits_loss": current_logits_loss,
-                "aux_loss": current_aux_loss,
-                "learning_rate": current_lr,
-                "epoch_time": eta_min,
-                "consumed_tokens": consumed_tokens,
-            }
-        )
     if is_main_process():
         _mlflow_log_step(
             step=_current_mlflow_step(epoch, step, iters),
@@ -348,7 +336,7 @@ def _maybe_run_validation(epoch: int, step: int, iters: int, val_loader, *, forc
     _run_validation(epoch, step, iters, val_loader)
 
 
-def train_epoch(epoch, loader, iters, start_step=0, wandb=None, val_loader=None):
+def train_epoch(epoch, loader, iters, start_step=0, val_loader=None):
     global epoch_start_time
 
     epoch_start_time = time.time()
@@ -402,10 +390,10 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None, val_loader=None)
             metric_state["window_optimizer_steps"] += 1
 
         if step % args.log_interval == 0 or step == iters:
-            _log_train_window(epoch, step, iters, start_step, wandb=wandb)
+            _log_train_window(epoch, step, iters, start_step)
 
         if (step % args.save_interval == 0 or step == iters) and is_main_process():
-            _save_checkpoint(epoch, step, wandb=wandb)
+            _save_checkpoint(epoch, step)
 
         if update_due:
             _maybe_run_validation(epoch, step, iters, val_loader, force=(step == iters))
@@ -538,19 +526,7 @@ def run_training(runtime_args):
 
     log_flash_attention_status(requested=bool(args.flash_attn), device_type_name=device_type, logger=Logger)
 
-    # ========== 4. 配wandb ==========
-    wandb = None
-    if args.use_wandb and is_main_process():
-        import swanlab as wandb
-
-        wandb_id = ckp_data.get("wandb_id") if ckp_data else None
-        resume = "must" if wandb_id else None
-        wandb_run_name = (
-            f"MiniMind-Pretrain-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LearningRate-{args.learning_rate}"
-        )
-        wandb.init(project=args.wandb_project, name=wandb_run_name, id=wandb_id, resume=resume)
-
-    # ========== 4b. MLflow (no-op unless MLFLOW_TRACKING_URI is set) ==========
+    # ========== 4. MLflow (no-op unless MLFLOW_TRACKING_URI is set) ==========
     if is_main_process():
         _mlflow_start(args, lm_config)
 
@@ -636,9 +612,9 @@ def run_training(runtime_args):
         )
         if skip > 0:
             Logger(f"Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始")
-            train_epoch(epoch, loader, len(loader) + skip, start_step, wandb, val_loader=val_loader)
+            train_epoch(epoch, loader, len(loader) + skip, start_step, val_loader=val_loader)
         else:
-            train_epoch(epoch, loader, len(loader), 0, wandb, val_loader=val_loader)
+            train_epoch(epoch, loader, len(loader), 0, val_loader=val_loader)
 
     # ========== 9. 清理分布进程 ==========
     if is_main_process():
@@ -760,8 +736,6 @@ def run_training(runtime_args):
 @click.option(
     "--from_resume", default=0, show_default=True, type=click.IntRange(0, 1), help="是否自动检测&续训（0=否，1=是）"
 )
-@click.option("--use_wandb", is_flag=True, help="是否使用wandb")
-@click.option("--wandb_project", default="MiniMind-Pretrain", show_default=True, type=str, help="wandb项目名")
 @click.option(
     "--use_compile",
     default=0,
