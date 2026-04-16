@@ -61,8 +61,8 @@ def test_local_training_compose_forwards_runtime_env(repo_text, expected_fragmen
     [
         'args.extend(["-e", f"{key}={value}"])',
         "*(_compose_run_env_args(env or {}))",
-        'f"{run_config_path}:/workspace/gpupoor-run-config.toml:ro"',
-        '"GPUPOOR_RUN_CONFIG": "/workspace/gpupoor-run-config.toml"',
+        "_CONTAINER_RUN_CONFIG_PATH",
+        '"GPUPOOR_RUN_CONFIG": _CONTAINER_RUN_CONFIG_PATH',
     ],
 )
 def test_local_backend_passes_dynamic_env_on_compose_run(repo_text, expected_fragment) -> None:

@@ -15,7 +15,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     HF_HOME=/workspace/hf_cache \
     HF_HUB_ENABLE_HF_TRANSFER=0 \
     TRANSFORMERS_OFFLINE=0 \
-    TOKENIZERS_PARALLELISM=false
+    TOKENIZERS_PARALLELISM=false \
+    PYTHONPATH=/opt/training/shared
 
 RUN mkdir -p /var/run/sshd /root/.ssh \
     && chmod 700 /root/.ssh
@@ -34,14 +35,16 @@ COPY data/datasets/pretrain_t2t_mini/ /workspace/data/datasets/pretrain_t2t_mini
 
 # Bake repo-owned training source (no runtime git clone)
 COPY training/src/minimind/ /opt/training/minimind/
+COPY src/gpupoor/ /opt/training/shared/gpupoor/
 
 # Bake training scripts
 COPY training/scripts/lib/train-pretrain-args.sh /opt/training/scripts/lib/train-pretrain-args.sh
 COPY training/scripts/lib/hf-dataset-bootstrap.sh /opt/training/scripts/lib/hf-dataset-bootstrap.sh
 COPY training/scripts/lib/load-run-config-env.py /opt/training/scripts/lib/load-run-config-env.py
+COPY training/scripts/lib/runtime-defaults.sh /opt/training/scripts/lib/runtime-defaults.sh
 COPY training/scripts/pretokenize-data.sh /opt/training/scripts/pretokenize-data.sh
 COPY training/scripts/remote-entrypoint.sh /opt/training/scripts/remote-entrypoint.sh
-RUN chmod +x /opt/training/scripts/remote-entrypoint.sh /opt/training/scripts/pretokenize-data.sh /opt/training/scripts/lib/train-pretrain-args.sh /opt/training/scripts/lib/hf-dataset-bootstrap.sh
+RUN chmod +x /opt/training/scripts/remote-entrypoint.sh /opt/training/scripts/pretokenize-data.sh /opt/training/scripts/lib/train-pretrain-args.sh /opt/training/scripts/lib/hf-dataset-bootstrap.sh /opt/training/scripts/lib/runtime-defaults.sh
 
 # Workspace layout expected by the entrypoint
 RUN mkdir -p /workspace/data/datasets /workspace/out /workspace/hf_cache

@@ -2,10 +2,14 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-RAW_DATASET="${1:-$REPO_ROOT/data/datasets/pretrain_t2t_mini.jsonl}"
-OUTPUT_DIR="${2:-$REPO_ROOT/data/datasets/pretrain_t2t_mini}"
-TOKENIZER_PATH="${TOKENIZER_PATH:-$REPO_ROOT/training/src/minimind/model}"
-MAX_SEQ_LEN="${MAX_SEQ_LEN:-340}"
+RUNTIME_DEFAULTS_FILE="$REPO_ROOT/training/scripts/lib/runtime-defaults.sh"
+# shellcheck source=/dev/null
+source "$RUNTIME_DEFAULTS_FILE"
+
+RAW_DATASET="${1:-$REPO_ROOT/${GPUPOOR_DEFAULT_RUNTIME_DATASET_PATH#/}.jsonl}"
+OUTPUT_DIR="${2:-$REPO_ROOT/${GPUPOOR_DEFAULT_RUNTIME_DATASET_PATH#/}}"
+TOKENIZER_PATH="${TOKENIZER_PATH:-$REPO_ROOT/$GPUPOOR_DEFAULT_TOKENIZER_PATH}"
+MAX_SEQ_LEN="${MAX_SEQ_LEN:-$GPUPOOR_DEFAULT_MAX_SEQ_LEN}"
 PYTHON_BIN="${PYTHON_BIN:-python}"
 VENV_DIR="${TRAINING_VENV_DIR:-$REPO_ROOT/training/.venv}"
 

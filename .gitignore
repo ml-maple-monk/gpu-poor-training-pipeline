@@ -8,6 +8,16 @@ artifacts-pull/
 .cf-tunnel.log
 .cf-tunnel.url
 .cf-tunnel.pid
+infrastructure/capacity-seeker/.connector.json
+infrastructure/capacity-seeker/.env.connector
+infrastructure/capacity-seeker/.env.r2
+infrastructure/capacity-seeker/cloudflare
+infrastructure/capacity-seeker/runpod_api_key
+infrastructure/capacity-seeker/vastai_api_key
+infrastructure/capacity-seeker/vast_ai_key
+infrastructure/capacity-seeker/vast_ai_api_key
+infrastructure/capacity-seeker/vast_api_key
+infrastructure/capacity-seeker/hf-write-token
 .run-ids
 /minimind/
 # Repo-owned MiniMind sources live under training/src/minimind; keep only generated

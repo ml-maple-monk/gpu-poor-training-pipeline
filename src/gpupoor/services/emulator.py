@@ -11,17 +11,26 @@ from gpupoor.utils.compose import build_compose_cmd
 from gpupoor.utils.env_files import load_hf_token
 from gpupoor.utils.http import wait_for_health
 
+_BASE_COMPOSE_PATH = ("infrastructure", "local-emulator", "compose", "docker-compose.yml")
+_CPU_COMPOSE_PATH = ("infrastructure", "local-emulator", "compose", "docker-compose.cpu.yml")
+_NVCR_COMPOSE_PATH = ("infrastructure", "local-emulator", "compose", "docker-compose.nvcr.yml")
+_LOG_TAIL_LINES = "200"
+_DEFAULT_HEALTH_PORT = 8000
+_DEFAULT_HEALTH_TIMEOUT_SECONDS = 300
+_PER_CHECK_HEALTH_TIMEOUT_SECONDS = 2
+_HEALTH_OK_MESSAGE = "Health: 200"
+
 
 def _base_compose() -> Path:
-    return repo_path("infrastructure", "local-emulator", "compose", "docker-compose.yml")
+    return repo_path(*_BASE_COMPOSE_PATH)
 
 
 def _cpu_compose() -> Path:
-    return repo_path("infrastructure", "local-emulator", "compose", "docker-compose.cpu.yml")
+    return repo_path(*_CPU_COMPOSE_PATH)
 
 
 def _nvcr_compose() -> Path:
-    return repo_path("infrastructure", "local-emulator", "compose", "docker-compose.nvcr.yml")
+    return repo_path(*_NVCR_COMPOSE_PATH)
 
 
 def _load_hf_token() -> dict[str, str]:
@@ -55,7 +64,7 @@ def down(extra_args: list[str] | None = None) -> None:
 
 
 def logs(extra_args: list[str] | None = None) -> None:
-    run_command([*_compose_command(), "logs", "-f", "--tail=200", *(extra_args or [])])
+    run_command([*_compose_command(), "logs", "-f", f"--tail={_LOG_TAIL_LINES}", *(extra_args or [])])
 
 
 def shell(extra_args: list[str] | None = None) -> None:
@@ -67,8 +76,8 @@ def shell(extra_args: list[str] | None = None) -> None:
 
 def _parse_health_args(extra_args: list[str] | None) -> tuple[int, int]:
     parser = argparse.ArgumentParser(prog="gpupoor infra emulator health", add_help=False)
-    parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--timeout-seconds", type=int, default=300)
+    parser.add_argument("--port", type=int, default=_DEFAULT_HEALTH_PORT)
+    parser.add_argument("--timeout-seconds", type=int, default=_DEFAULT_HEALTH_TIMEOUT_SECONDS)
     parsed = parser.parse_args(extra_args or [])
     return parsed.port, parsed.timeout_seconds
 
@@ -79,8 +88,8 @@ def health(extra_args: list[str] | None = None) -> None:
     if wait_for_health(
         url,
         total_timeout_seconds=timeout_seconds,
-        per_check_timeout_seconds=2,
+        per_check_timeout_seconds=_PER_CHECK_HEALTH_TIMEOUT_SECONDS,
     ):
-        print("Health: 200")
+        print(_HEALTH_OK_MESSAGE)
         return
     raise RuntimeError(f"/health did not return 200 within {timeout_seconds}s")

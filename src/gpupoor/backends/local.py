@@ -14,13 +14,19 @@ from gpupoor.utils.logging import get_logger
 
 log = get_logger(__name__)
 
+_TRAIN_COMPOSE_PATH = ("training", "compose", "docker-compose.train.yml")
+_MLFLOW_COMPOSE_PATH = ("training", "compose", "docker-compose.train.mlflow.yml")
+_CONTAINER_RUN_CONFIG_PATH = "/workspace/gpupoor-run-config.toml"
+_CONTAINER_TRAIN_SCRIPT = "/workspace/run-train.sh"
+_CONTAINER_DATA_ROOT = Path("/data")
+
 
 def _train_compose() -> Path:
-    return repo_path("training", "compose", "docker-compose.train.yml")
+    return repo_path(*_TRAIN_COMPOSE_PATH)
 
 
 def _mlflow_compose() -> Path:
-    return repo_path("training", "compose", "docker-compose.train.mlflow.yml")
+    return repo_path(*_MLFLOW_COMPOSE_PATH)
 
 
 def _compose_run_env_args(env: dict[str, str]) -> list[str]:
@@ -62,7 +68,7 @@ def local_training_command(
         run_args.extend(
             [
                 "--volume",
-                f"{run_config_path}:/workspace/gpupoor-run-config.toml:ro",
+                f"{run_config_path}:{_CONTAINER_RUN_CONFIG_PATH}:ro",
             ]
         )
     return build_compose_cmd(
@@ -73,7 +79,7 @@ def local_training_command(
         *run_args,
         *(_compose_run_env_args(env or {})),
         "minimind-trainer",
-        "/workspace/run-train.sh",
+        _CONTAINER_TRAIN_SCRIPT,
         *(extra_args or []),
         extra_files=[_mlflow_compose()],
     )
@@ -86,7 +92,7 @@ def _container_data_path(path: Path) -> str:
         relative = resolved.relative_to(data_root)
     except ValueError as exc:
         raise ValueError(f"Local training paths must live under {data_root}; got {resolved}") from exc
-    return str(Path("/data") / relative)
+    return str(_CONTAINER_DATA_ROOT / relative)
 
 
 def run_training(config: RunConfig) -> None:
@@ -95,6 +101,6 @@ def run_training(config: RunConfig) -> None:
     _log_local_training_config_summary(config)
     _container_data_path(dataset_path)
     _container_data_path(output_dir)
-    runtime_env = {"GPUPOOR_RUN_CONFIG": "/workspace/gpupoor-run-config.toml"}
+    runtime_env = {"GPUPOOR_RUN_CONFIG": _CONTAINER_RUN_CONFIG_PATH}
     _log_local_training_env(runtime_env)
     run_command(local_training_command(config.source, env=runtime_env))

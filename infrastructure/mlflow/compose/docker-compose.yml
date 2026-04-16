@@ -48,7 +48,7 @@ services:
         condition: service_healthy
     environment:
       MLFLOW_BACKEND_STORE_URI: postgresql+psycopg2://mlflow:mlflow@mlflow-postgres:5432/mlflow
-      MLFLOW_ARTIFACTS_DESTINATION: /mlflow/artifacts
+      MLFLOW_ARTIFACTS_DESTINATION: ${MLFLOW_ARTIFACTS_DESTINATION:-/mlflow/artifacts}
       MLFLOW_WORKERS: "4"
       MLFLOW_TIMEOUT: "300"
       # SQLAlchemy pool tuning (env honored by MLflow core)
@@ -57,6 +57,10 @@ services:
       MLFLOW_SQLALCHEMYSTORE_POOL_RECYCLE: "3600"
       MLFLOW_HTTP_REQUEST_MAX_RETRIES: "7"
       MLFLOW_HTTP_REQUEST_TIMEOUT: "120"
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-auto}
+      MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL:-}
     volumes:
       - mlflow-artifacts:/mlflow/artifacts
     ports:

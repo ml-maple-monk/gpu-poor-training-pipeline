@@ -43,7 +43,7 @@ def test_shutdown_joins_all_workers_before_exit() -> None:
     workers = [
         _fake_worker("training-2s"),
         _fake_worker("dstack-5s"),
-        _fake_worker("offers-30s"),
+        _fake_worker("seeker-10s"),
     ]
 
     rc = _shutdown_sequence(
@@ -75,7 +75,7 @@ def test_shutdown_exits_1_if_worker_wont_join(caplog) -> None:
     workers = [
         _fake_worker("training-2s"),
         stuck,
-        _fake_worker("offers-30s"),
+        _fake_worker("seeker-10s"),
     ]
 
     with caplog.at_level(logging.WARNING, logger="src.app"):

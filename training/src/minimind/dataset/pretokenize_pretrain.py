@@ -10,6 +10,12 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from dataset.lm_dataset import build_pretokenized_corpus
 
+DEFAULT_TOKENIZER_PATH = "../model"
+DEFAULT_PRETOKENIZE_MAX_LENGTH = 340
+DEFAULT_PROGRESS_INTERVAL = 50000
+TOKENIZERS_PARALLELISM_ENV = "TOKENIZERS_PARALLELISM"
+TOKENIZERS_PARALLELISM_DISABLED = "false"
+
 
 @click.command(context_settings={"help_option_names": ["-h", "--help"]})
 @click.option("--input_path", required=True, type=click.Path(path_type=str), help="Path to the source JSONL file")
@@ -21,18 +27,22 @@ from dataset.lm_dataset import build_pretokenized_corpus
 )
 @click.option(
     "--tokenizer_path",
-    default="../model",
+    default=DEFAULT_TOKENIZER_PATH,
     show_default=True,
     type=click.Path(path_type=str),
     help="Tokenizer directory passed to AutoTokenizer",
 )
 @click.option(
-    "--max_length", default=340, show_default=True, type=int, help="Sequence length used during pretokenization"
+    "--max_length",
+    default=DEFAULT_PRETOKENIZE_MAX_LENGTH,
+    show_default=True,
+    type=int,
+    help="Sequence length used during pretokenization",
 )
 @click.option("--overwrite", is_flag=True, help="Replace an existing output directory")
 @click.option(
     "--progress_interval",
-    default=50000,
+    default=DEFAULT_PROGRESS_INTERVAL,
     show_default=True,
     type=int,
     help="Samples between progress logs",
@@ -59,5 +69,5 @@ def main(input_path, output_dir, tokenizer_path, max_length, overwrite, progress
 
 
 if __name__ == "__main__":
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+    os.environ[TOKENIZERS_PARALLELISM_ENV] = TOKENIZERS_PARALLELISM_DISABLED
     main()

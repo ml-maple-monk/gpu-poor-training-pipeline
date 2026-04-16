@@ -4,7 +4,10 @@ Preflight OK
 Remote preflight OK (VCR_IMAGE_BASE=vccr.io/f53909d3-a071-4826-8635-a62417ffc867/verda-minimind)
 [gpupoor] $ bash <REPO_ROOT>/dstack/scripts/setup-config.sh
 [STEP 4] Configuring dstack server with Verda backend...
+[dstack-setup] Enabled optional backend: runpod
+[dstack-setup] Enabled optional backend: vastai
 [dstack-setup] Written: <HOME>/.dstack/server/config.yml (mode 600)
+[dstack-setup] Configured backends: verda runpod vastai
 [STEP 4] dstack server config ready
 [gpupoor] dstack server already running
 [DRY-RUN] Would start the MLflow Cloudflare tunnel

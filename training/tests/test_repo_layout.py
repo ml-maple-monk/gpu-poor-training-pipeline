@@ -21,7 +21,7 @@ def test_each_subsystem_has_one_top_level_start_script(repo_path, parts):
 
 def test_infrastructure_shape_is_explicit(repo_path):
     infra_dirs = {path.name for path in repo_path("infrastructure").iterdir() if path.is_dir()}
-    assert infra_dirs == {"dashboard", "local-emulator", "mlflow"}
+    assert infra_dirs == {"capacity-seeker", "dashboard", "local-emulator", "mlflow"}
 
 
 @pytest.mark.parametrize(

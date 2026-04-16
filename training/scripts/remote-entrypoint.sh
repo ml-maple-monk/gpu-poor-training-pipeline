@@ -11,6 +11,10 @@
 
 set -euo pipefail
 
+RUNTIME_DEFAULTS_FILE="/opt/training/scripts/lib/runtime-defaults.sh"
+# shellcheck source=/dev/null
+source "$RUNTIME_DEFAULTS_FILE"
+
 RUN_CONFIG_FILE="${1:-${GPUPOOR_RUN_CONFIG:-/tmp/gpupoor-run-config.json}}"
 DATA_DIR="/workspace/data/datasets"
 RAW_DATASET_FILE="$DATA_DIR/pretrain_t2t_mini.jsonl"
@@ -24,7 +28,7 @@ HF_DATASET_FILENAME="${HF_DATASET_FILENAME:-pretrain_t2t_mini.jsonl}"
 HF_PRETOKENIZED_DATASET_REPO="${HF_PRETOKENIZED_DATASET_REPO:-$HF_DATASET_REPO}"
 HF_PRETOKENIZED_DATASET_FILENAME="${HF_PRETOKENIZED_DATASET_FILENAME:-pretokenized/pretrain_t2t_mini.tar.gz}"
 HF_PRETOKENIZED_DATASET_MIN_BYTES="${HF_PRETOKENIZED_DATASET_MIN_BYTES:-1048576}"
-TIME_CAP_SECONDS="${TIME_CAP_SECONDS:-600}"
+TIME_CAP_SECONDS="${TIME_CAP_SECONDS:-$GPUPOOR_DEFAULT_RUNTIME_TIME_CAP_SECONDS}"
 TRAIN_ARGS_FILE="/opt/training/scripts/lib/train-pretrain-args.sh"
 RUN_CONFIG_LOADER="/opt/training/scripts/lib/load-run-config-env.py"
 HF_BOOTSTRAP_HELPER="/opt/training/scripts/lib/hf-dataset-bootstrap.sh"

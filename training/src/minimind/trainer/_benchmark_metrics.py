@@ -14,6 +14,8 @@ import torch.distributed as dist
 _PYNVML_UNSET = object()
 pynvml: Any = _PYNVML_UNSET
 
+DEFAULT_VALIDATION_SPLIT_SEED = 42
+
 
 def _load_pynvml() -> Any | None:
     global pynvml
@@ -186,7 +188,10 @@ def should_log_dense_flops(*, use_moe: bool, peak_tflops_per_gpu: float | None) 
 
 
 def split_validation_indices(
-    sample_count: int, validation_split_ratio: float, *, seed: int = 42
+    sample_count: int,
+    validation_split_ratio: float,
+    *,
+    seed: int = DEFAULT_VALIDATION_SPLIT_SEED,
 ) -> tuple[list[int], list[int]]:
     if sample_count < 2 or validation_split_ratio <= 0.0:
         return list(range(sample_count)), []

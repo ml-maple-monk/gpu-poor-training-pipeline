@@ -3,27 +3,58 @@
 Four cadences:
   2s  -> training snapshot + live_metrics
   5s  -> dstack_runs + system
-  10s -> mlflow_recent + tunnel
-  30s -> verda_offers
+  10s -> mlflow_recent + tunnel + seeker_state
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+from collections import deque
 from collections.abc import Callable
 from datetime import UTC, datetime
 
 from .collectors.docker_logs import collect_training_snapshot
 from .collectors.dstack_rest import collect_dstack_runs
 from .collectors.mlflow_client import collect_live_metrics, collect_mlflow_recent
+from .collectors.seeker_state import collect_seeker_state
 from .collectors.system import collect_system
 from .collectors.tunnel import collect_tunnel_url
-from .collectors.verda_offers import collect_verda_offers
+from .collectors.verda_offers import GPU_SPECS, collect_verda_offers
 from .config import TRAINER_CONTAINER
-from .state import AppState
+from .state import AppState, OfferSnapshot, SeekerOffer
 
 log = logging.getLogger(__name__)
+
+
+def _archive_offer_snapshots(state: AppState, offers: list[SeekerOffer], now: datetime) -> None:
+    """Archive one representative availability snapshot per GPU/backend pair."""
+    grouped: dict[tuple[str, str], list[SeekerOffer]] = {}
+    for offer in offers:
+        if not offer.gpu_name or not offer.backend:
+            continue
+        grouped.setdefault((offer.gpu_name, offer.backend), []).append(offer)
+
+    backends = sorted({offer.backend for offer in offers if offer.backend})
+    tracked_pairs = {
+        (gpu_display_name, backend)
+        for _, gpu_display_name, _ in GPU_SPECS
+        for backend in backends
+    }
+    tracked_pairs.update(grouped)
+
+    for gpu_name, backend in sorted(tracked_pairs):
+        history = state.offer_history.setdefault((gpu_name, backend), deque(maxlen=60))
+        candidates = grouped.get((gpu_name, backend), [])
+        best_offer = min(candidates, key=lambda offer: offer.price_per_hour) if candidates else None
+        history.append(
+            OfferSnapshot(
+                timestamp=now,
+                available=best_offer is not None and best_offer.availability == "available",
+                price_per_hour=best_offer.price_per_hour if best_offer is not None else 0.0,
+                count=best_offer.count if best_offer is not None else 0,
+            )
+        )
 
 
 class CollectorWorker:
@@ -142,15 +173,30 @@ def start_all_collectors(state: AppState) -> list[CollectorWorker]:
 
     workers.append(CollectorWorker("tunnel-10s", 10.0, _collect_tunnel, ev))
 
-    # ── 30s: verda offers ────────────────────────────────────────────────────
-    def _collect_offers() -> None:
-        offers, status = collect_verda_offers()
+    # ── 10s: seeker state ────────────────────────────────────────────────────
+    def _collect_seeker() -> None:
+        offers, active, pending, attempts, status = collect_seeker_state()
         with state.lock:
-            state.verda_offers = offers
-            state.last_refreshed_at["verda_offers"] = datetime.now(UTC)
-            state.collector_health["verda_offers"] = status.value
+            state.seeker_offers = offers
+            state.seeker_active = active
+            state.seeker_pending = pending
+            state.seeker_attempts = attempts
+            state.last_refreshed_at["seeker_state"] = datetime.now(UTC)
+            state.collector_health["seeker_state"] = status.value
 
-    workers.append(CollectorWorker("offers-30s", 30.0, _collect_offers, ev))
+    workers.append(CollectorWorker("seeker-10s", 10.0, _collect_seeker, ev))
+
+    # ── 60s: dstack offer probe (all configured backends) ────────────────
+    def _collect_dstack_offers() -> None:
+        offers, status = collect_verda_offers()
+        now = datetime.now(UTC)
+        with state.lock:
+            state.dstack_probe_offers = offers
+            _archive_offer_snapshots(state, offers, now)
+            state.last_refreshed_at["dstack_offers"] = now
+            state.collector_health["dstack_offers"] = status.value
+
+    workers.append(CollectorWorker("dstack-offers-60s", 60.0, _collect_dstack_offers, ev))
 
     for w in workers:
         w.start()

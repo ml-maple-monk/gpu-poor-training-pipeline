@@ -16,15 +16,18 @@ services:
       HF_HOME: /data/hf_cache
       TOKENIZERS_PARALLELISM: "false"
       PYTHONUNBUFFERED: "1"
+      PYTHONPATH: "/workspace/src${PYTHONPATH:+:${PYTHONPATH}}"
       # Verda-parity signals (informational; training workload bypasses /health)
       VERDA_REQUIRE_GPU: "1"
       VERDA_PROFILE: training
     volumes:
       - ../../training/src/minimind:/workspace/minimind
+      - ../../src:/workspace/src:ro
       - ../../data:/data
       - ../../training/scripts/run-train.sh:/workspace/run-train.sh:ro
       - ../../training/scripts/lib/train-pretrain-args.sh:/workspace/train-pretrain-args.sh:ro
       - ../../training/scripts/lib/load-run-config-env.py:/workspace/load-run-config-env.py:ro
+      - ../../training/scripts/lib/runtime-defaults.sh:/workspace/runtime-defaults.sh:ro
     working_dir: /workspace/minimind
     deploy:
       resources:

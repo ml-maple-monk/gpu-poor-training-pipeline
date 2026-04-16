@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import subprocess
 import threading
 from pathlib import Path
@@ -196,6 +198,7 @@ def test_launch_remote_keeps_tunnel_alive_after_success(tmp_path: Path, monkeypa
             dstack_timeouts.append((kwargs["health_timeout_seconds"], kwargs["start_timeout_seconds"])),
         ),
     )
+    monkeypatch.setattr(dstack, "restart_dstack_server_if_needed", lambda *args, **kwargs: None)
     monkeypatch.setattr(dstack, "bash_script", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         dstack,
@@ -637,6 +640,69 @@ def test_start_dstack_server_deadline_based(tmp_path: Path, monkeypatch: pytest.
     assert probe_count["n"] < 30, (
         f"expected wall-clock-bounded probes, got {probe_count['n']} (looks like iteration-count loop)"
     )
+
+
+def test_launch_remote_uses_connector_bundle_without_starting_tunnel(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
+
+    def fake_repo_path(*parts: str) -> Path:
+        return tmp_path.joinpath(*parts)
+
+    monkeypatch.setattr(dstack, "repo_path", fake_repo_path)
+    monkeypatch.setattr(
+        dstack,
+        "load_remote_settings",
+        lambda config=None: {
+            "VCR_IMAGE_BASE": "vccr.io/example",
+            "VCR_USERNAME": "user",
+            "VCR_PASSWORD": "pass",
+        },
+    )
+    monkeypatch.setattr(dstack, "require_remote_settings", lambda settings: None)
+    monkeypatch.setattr(dstack, "find_dstack_bin", lambda: "dstack")
+    monkeypatch.setattr(dstack.ops, "run_preflight", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack, "verify_mlflow", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack, "ensure_dstack_server", lambda *args, **kwargs: None)
+    tunnel_calls: list[tuple[Path, tuple[str, ...]]] = []
+    monkeypatch.setattr(
+        dstack,
+        "bash_script",
+        lambda script, *args, **kwargs: tunnel_calls.append((script, args)),
+    )
+    monkeypatch.setattr(
+        dstack,
+        "render_task",
+        lambda settings, config, image_sha: fake_repo_path(".tmp", "task.yml"),
+    )
+    monkeypatch.setattr(dstack, "read_required_secret", lambda filename: "hf-token")
+    monkeypatch.setattr(dstack, "dstack_has_run", lambda dstack_bin, run_name: True)
+    monkeypatch.setattr(dstack, "wait_for_run_start", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack, "track_run", lambda run_name: None)
+    apply_envs: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        dstack,
+        "run_command",
+        lambda command, **kwargs: apply_envs.append(kwargs["env"]) or None,
+    )
+
+    bundle = SimpleNamespace(
+        mlflow_tracking_uri="https://mlflow-api.mlmonk96.net",
+        to_runtime_env=lambda: {
+            "MLFLOW_TRACKING_URI": "https://mlflow-api.mlmonk96.net",
+            "MLFLOW_ARTIFACT_UPLOAD": "1",
+            "GPUPOOR_CONNECTOR_ARTIFACT_STORE": "r2",
+        },
+    )
+
+    dstack.launch_remote(config, skip_build=True, connection_bundle=bundle)
+
+    assert not any(call[0].name == "run-tunnel.sh" for call in tunnel_calls)
+    runtime_env = json.loads(base64.b64decode(apply_envs[0]["GPUPOOR_RUN_CONFIG_B64"]).decode("utf-8"))["env"]
+    assert runtime_env["MLFLOW_TRACKING_URI"] == "https://mlflow-api.mlmonk96.net"
+    assert runtime_env["GPUPOOR_CONNECTOR_ARTIFACT_STORE"] == "r2"
 
 
 def test_launch_remote_raises_on_tunnel_thread_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
