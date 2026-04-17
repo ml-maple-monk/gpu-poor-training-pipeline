@@ -752,7 +752,7 @@ def launch_remote(
             # Stream logs via REST API (no SSH needed) once the run is active
             log.info("Streaming logs for run '%s' (Ctrl+C to detach)...", run_name)
             try:
-                run_command([dstack_bin, "logs", run_name, "-f"], timeout=apply_timeout)
+                run_command([dstack_bin, "logs", run_name], timeout=apply_timeout)
             except (CommandError, KeyboardInterrupt):
                 log.info("Log streaming ended for run '%s'", run_name)
         else:

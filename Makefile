@@ -88,7 +88,7 @@ remote-offers:
 remote-logs:
 	@name=$$($(DSTACK_BIN) ps 2>/dev/null | grep -E 'running' | awk '{print $$1}' | head -1); \
 	if [ -n "$$name" ]; then \
-		$(DSTACK_BIN) logs "$$name" -f; \
+		$(DSTACK_BIN) logs "$$name"; \
 	else \
 		echo "No running remote run found."; \
 	fi
