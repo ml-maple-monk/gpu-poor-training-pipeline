@@ -1,413 +1,397 @@
-"""app.py — Gradio Blocks entry point for the Verda Dashboard.
-
-Wires 10 panels to AppState reads via gr.Timer callbacks.
-Log panes use streaming generators with per-session sequence tracking.
-queue(max_size=5) caps concurrent viewers for bandwidth safety.
-"""
+"""Dash entrypoint for the hard-pruned availability dashboard."""
 
 from __future__ import annotations
 
-import logging
-import signal
-import sys
-import threading
-from typing import TYPE_CHECKING
+from datetime import UTC
 
-from .bootstrap import choose_access_path
-from .collector_workers import start_all_collectors
-from .config import (
-    GRADIO_PORT,
-    GRADIO_QUEUE_MAX_SIZE,
-    MIN_WORKER_JOIN_TIMEOUT,
-    SHUTDOWN_GRACE_SECONDS,
-    TIMER_DETAIL,
-    TIMER_DSTACK_LOG,
-    TIMER_FAST,
-    TIMER_LOG,
-    TIMER_MEDIUM,
-    TIMER_SEEKER,
-    TIMER_SLOW,
-    TRAINER_CONTAINER,
-)
-from .log_tailer import LogTailer
-from .panels.footer import format_footer_html
-from .panels.local_logs import get_log_snapshot
-from .panels.mlflow_summary import format_mlflow_table
-from .panels.overview import (
-    format_alert_feed_html,
-    format_availability_matrix_html,
-    format_hero_html,
-    format_market_grid_html,
-    format_metrics_html,
-    format_mlflow_feed_html,
-    format_runs_feed_html,
-    format_seeker_attempt_table,
-    format_seeker_offer_table,
-    format_statusbar_html,
-    get_active_run_name,
-)
-from .state import AppState, get_state
-from .theme import DASHBOARD_CSS, build_theme
+import dash_mantine_components as dmc
+from dash import Dash, dcc, html
+from dash import Input as DashIn
+from dash import Output as DashOut
 
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    import gradio as gr
-
-    from .collector_workers import CollectorWorker
-
-log = logging.getLogger(__name__)
-
-# ── Global singletons (set during build_app) ────────────────────────────────────
-_state: AppState | None = None
-_docker_tailer: LogTailer | None = None
-_dstack_tailer: LogTailer | None = None
-_workers: list = []
-
-# Grace budget derivation:
-#   max in-flight collector today is the 60s dstack offer probe, which may
-#   spend up to ~75s in sequential HTTP requests (5 GPU families x 15s timeout).
-#   Workers sleep via shutdown_event.wait(cadence), which returns immediately
-#   once the event is set, so the grace window primarily covers one in-flight
-#   collect() call that may already be mid-probe. Keep a small buffer above the
-#   worst-case probe path to avoid routine shutdown warnings during normal ops.
-#   See SHUTDOWN_GRACE_SECONDS and MIN_WORKER_JOIN_TIMEOUT in config.
+from .models import DashboardConfig, DashboardSnapshot, GpuCard, LaneSnapshot, ProviderRow, SweepStatus
+from .utils import build_dashboard_snapshot, build_history_figure, load_dashboard_config, start_sweep_scheduler
 
 
-def _shutdown_sequence(
-    tailers: Sequence[LogTailer],
-    workers: Sequence[CollectorWorker],
-    *,
-    shutdown_event: threading.Event,
-    grace_seconds: float = SHUTDOWN_GRACE_SECONDS,
-) -> int:
-    """Run the graceful shutdown sequence. Pure function — signal-free.
-
-    Steps:
-      1. Set ``shutdown_event`` so collector workers wake from their cadence
-         sleep early.
-      2. Tear down each tailer (SIGTERM->SIGKILL + httpx close, per F1).
-      3. Join every collector worker with a per-worker timeout computed so
-         the combined wall-clock stays within ``grace_seconds``.
-      4. Report which (if any) workers failed to exit.
-
-    Returns:
-      ``0`` if every worker thread confirmed dead after join.
-      ``1`` if any worker thread remained alive; names of survivors are
-      logged at WARNING so operators can see what blocked shutdown.
-    """
-    log.info("shutdown sequence starting (grace=%.1fs)", grace_seconds)
-    shutdown_event.set()
-
-    # Tailers own their own 5s join budget internally (see LogTailer.shutdown).
-    # They run first so the collectors don't see a half-dead stream while they
-    # wind down their own work.
-    for tailer in tailers:
-        try:
-            tailer.shutdown()
-        except Exception as exc:  # pragma: no cover — defensive
-            log.warning(
-                "LogTailer[%s/%s] shutdown raised: %s",
-                getattr(tailer, "mode", "?"),
-                getattr(tailer, "target", "?"),
-                exc,
-            )
-
-    # Share the remaining grace budget equally across workers so a single
-    # slow worker can't starve the rest. Floor at 1s to avoid zero-timeout
-    # spin-polling when the worker list is long.
-    if workers:
-        per_worker_timeout = max(MIN_WORKER_JOIN_TIMEOUT, grace_seconds / len(workers))
-    else:
-        per_worker_timeout = grace_seconds
-
-    survivors: list[str] = []
-    for worker in workers:
-        worker.join(timeout=per_worker_timeout)
-        thread = getattr(worker, "_thread", None)
-        if thread is not None and thread.is_alive():
-            survivors.append(worker.name)
-
-    if survivors:
-        log.warning(
-            "shutdown: %d worker(s) did not exit within grace budget: %s",
-            len(survivors),
-            ", ".join(survivors),
-        )
-        return 1
-
-    log.info("shutdown sequence complete — all workers joined cleanly")
-    return 0
+def money_label(value: float | None) -> str:
+    if value is None or value <= 0:
+        return "n/a"
+    return f"${value:.3f}/hr"
 
 
-def _setup_signal_handler(
-    state: AppState,
-    tailers: Sequence[LogTailer],
-    workers: Sequence[CollectorWorker],
-) -> None:
-    def _sigterm_handler(signum, frame):
-        log.info("SIGTERM/SIGINT received (signum=%s) — draining", signum)
-        rc = _shutdown_sequence(
-            tailers=tailers,
-            workers=workers,
-            shutdown_event=state.shutdown_event,
-        )
-        sys.exit(rc)
-
-    signal.signal(signal.SIGTERM, _sigterm_handler)
-    signal.signal(signal.SIGINT, _sigterm_handler)
+def time_label(value) -> str:
+    if value is None:
+        return "never"
+    return value.astimezone(UTC).strftime("%H:%M:%S UTC")
 
 
-def build_app() -> gr.Blocks:
-    """Build and return the Gradio Blocks app."""
-    import gradio as gr  # Lazy: keeps module import light for test lanes without gradio.
+def age_label(seconds: int | None) -> str:
+    if seconds is None:
+        return "n/a"
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, remainder = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {remainder:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes:02d}m"
 
-    global _state, _docker_tailer, _dstack_tailer, _workers
 
-    # ── Bootstrap ────────────────────────────────────────────────────────────
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+def lane_color(mode: str) -> str:
+    if mode == "preemptible":
+        return "#59C9A5"
+    return "#F4A259"
+
+
+def shell_theme() -> dict:
+    return {
+        "fontFamily": "IBM Plex Sans, Avenir Next, Segoe UI, sans-serif",
+        "primaryColor": "teal",
+        "defaultRadius": "lg",
+        "colors": {
+            "ink": [
+                "#f5f7fb",
+                "#d8dde8",
+                "#b7c0d0",
+                "#8791a3",
+                "#677287",
+                "#4b5568",
+                "#2c3441",
+                "#1d222d",
+                "#141821",
+                "#0d1017",
+            ]
+        },
+    }
+
+
+def header_kpis(snapshot: DashboardSnapshot) -> list:
+    return [
+        metric_chip("Preemptible", snapshot.preemptible.live_instance_count, lane_color("preemptible")),
+        metric_chip("On-Demand", snapshot.on_demand.live_instance_count, lane_color("on-demand")),
+        metric_chip("Hidden Unknown", snapshot.hidden_unknown_count, "#8B949E"),
+    ]
+
+
+def metric_chip(label: str, value, accent: str):
+    return dmc.Paper(
+        radius="xl",
+        p="md",
+        withBorder=True,
+        style={
+            "background": f"linear-gradient(145deg, {accent}22 0%, rgba(13,16,23,0.92) 82%)",
+            "borderColor": f"{accent}55",
+            "minWidth": "10rem",
+        },
+        children=dmc.Stack(
+            gap=0,
+            children=[
+                dmc.Text(label, size="xs", tt="uppercase", fw=700, c="dimmed"),
+                dmc.Text(str(value), size="xl", fw=800, c=accent),
+            ],
+        ),
     )
-    log.info("Verda Dashboard starting up...")
 
-    path = choose_access_path()
-    log.info("dstack access path: %s", path)
-    if path == "FAILED":
-        log.warning("dstack access path FAILED — dstack panels will show errors")
 
-    state = get_state()
-    _state = state
+def source_badges(snapshot: DashboardSnapshot) -> list:
+    badges: list = []
+    for note in snapshot.source_notes:
+        color = "gray"
+        lowered = note.lower()
+        if "ok" in lowered:
+            color = "teal"
+        elif "error" in lowered:
+            color = "red"
+        elif "skipped" in lowered or "missing" in lowered:
+            color = "yellow"
+        badges.append(dmc.Badge(note, color=color, variant="light", radius="sm"))
+    if snapshot.hidden_unknown_labels:
+        labels = ", ".join(snapshot.hidden_unknown_labels[:3])
+        if len(snapshot.hidden_unknown_labels) > 3:
+            labels = f"{labels}, +{len(snapshot.hidden_unknown_labels) - 3} more"
+        badges.append(
+            dmc.Badge(
+                f"Hidden modes: {labels}",
+                color="gray",
+                variant="outline",
+                radius="sm",
+            )
+        )
+    return badges
 
-    # ── Start log tailers ────────────────────────────────────────────────────
-    docker_tailer = LogTailer(
-        target=TRAINER_CONTAINER,
-        mode="docker",
-        shutdown_event=state.shutdown_event,
+
+def sweep_badges(sweep: SweepStatus) -> list:
+    state_colors = {
+        "running": ("blue", "Sweep running"),
+        "error": ("red", "Sweep error"),
+        "idle": ("teal", "Sweep idle"),
+    }
+    color, label = state_colors.get(sweep.state, ("gray", "Sweep idle"))
+    badges = [
+        dmc.Badge(label, color=color, variant="light", radius="sm"),
+        dmc.Badge(f"Last success {time_label(sweep.last_success_at)}", color="gray", variant="outline", radius="sm"),
+        dmc.Badge(f"Snapshot age {age_label(sweep.snapshot_age_seconds)}", color="gray", variant="outline", radius="sm"),
+    ]
+    if sweep.state == "running" and sweep.running_since is not None:
+        badges.append(dmc.Badge(f"Started {time_label(sweep.running_since)}", color="blue", variant="outline", radius="sm"))
+    if sweep.state == "error" and sweep.last_error_text:
+        badges.append(dmc.Badge(sweep.last_error_text[:108], color="red", variant="outline", radius="sm"))
+    return badges
+
+
+def provider_row_component(row: ProviderRow):
+    header = dmc.Group(
+        justify="space-between",
+        children=[
+            dmc.Group(
+                gap="xs",
+                children=[
+                    dmc.Badge(
+                        row.provider_label,
+                        variant="outline",
+                        radius="sm",
+                        style={"borderColor": row.provider_color, "color": row.provider_color},
+                    ),
+                    dmc.Text(row.regions_label, size="sm", c="dimmed"),
+                ],
+            ),
+            dmc.Group(
+                gap="md",
+                children=[
+                    dmc.Text(f"{row.current_count} live", size="sm", fw=700),
+                    dmc.Text(money_label(row.cheapest_price), size="sm", fw=700, c=row.provider_color),
+                ],
+            ),
+        ],
     )
-    docker_tailer.start()
-    _docker_tailer = docker_tailer
-
-    # dstack tailer — start with empty target; swaps when active run is detected
-    dstack_tailer = LogTailer(
-        target="__init__",
-        mode="dstack",
-        shutdown_event=state.shutdown_event,
+    subline = dmc.Group(
+        justify="space-between",
+        children=[
+            dmc.Text(row.instance_label, size="xs", c="dimmed"),
+            dmc.Text(f"Last available {time_label(row.last_available_at)}", size="xs", c="dimmed"),
+        ],
     )
-    # Only start if REST path available
-    if path == "C2.2":
-        dstack_tailer.start()
-    _dstack_tailer = dstack_tailer
+    progress = dmc.Progress(
+        value=row.availability_percent,
+        color=row.provider_color,
+        radius="xl",
+        size="md",
+        style={"background": "#151b22"},
+    )
+    footer = dmc.Group(
+        justify="space-between",
+        children=[
+            dmc.Text(f"30m availability {row.availability_percent:.0f}%", size="xs", c="dimmed"),
+            dmc.Text("Available" if row.available else "Waiting", size="xs", fw=700, c=row.provider_color),
+        ],
+    )
+    return dmc.Paper(
+        p="sm",
+        radius="lg",
+        withBorder=True,
+        style={"background": "#11161f", "borderColor": f"{row.provider_color}33"},
+        children=dmc.Stack(gap="xs", children=[header, subline, progress, footer]),
+    )
 
-    # ── Start collector workers ──────────────────────────────────────────────
-    workers = start_all_collectors(state)
-    _workers = workers
 
-    # SIGTERM handler wired after tailers + workers exist so it can drain them.
-    _setup_signal_handler(state, tailers=[docker_tailer, dstack_tailer], workers=workers)
+def card_component(card: GpuCard):
+    accent = lane_color(card.mode)
+    figure = dcc.Graph(
+        figure=build_history_figure(card),
+        config={"displayModeBar": False, "responsive": True},
+        style={"height": "220px"},
+    )
+    stats = dmc.Group(
+        justify="space-between",
+        children=[
+            dmc.Stack(
+                gap=0,
+                children=[
+                    dmc.Text(card.gpu, size="xl", fw=800),
+                    dmc.Text(
+                        f"{card.available_backends} backend{'s' if card.available_backends != 1 else ''} live",
+                        size="sm",
+                        c="dimmed",
+                    ),
+                ],
+            ),
+            dmc.Stack(
+                gap=0,
+                ta="right",
+                children=[
+                    dmc.Text(f"{card.total_available_count} instances", size="lg", fw=800, c=accent),
+                    dmc.Text(f"Best now {money_label(card.cheapest_price)}", size="sm", c="dimmed"),
+                ],
+            ),
+        ],
+    )
+    row_stack = dmc.Stack(
+        gap="sm",
+        children=[provider_row_component(row) for row in card.rows]
+        or [dmc.Text("No provider data for this lane yet.", size="sm", c="dimmed")],
+    )
+    return dmc.Paper(
+        radius="xl",
+        p="lg",
+        withBorder=True,
+        style={
+            "background": (
+                f"radial-gradient(circle at top left, {accent}1d 0%, rgba(13,16,23,0.96) 42%, rgba(13,16,23,1) 100%)"
+            ),
+            "borderColor": f"{accent}44",
+            "height": "100%",
+        },
+        children=dmc.Stack(
+            gap="md",
+            children=[
+                stats,
+                dmc.Text("30-minute backend availability", size="sm", fw=700, c="dimmed"),
+                figure,
+                row_stack,
+            ],
+        ),
+    )
 
-    # ── Build Gradio UI ──────────────────────────────────────────────────────
-    with gr.Blocks(title="Verda Dashboard") as demo:
-        with gr.Column(elem_id="dashboard-shell"):
-            statusbar_html = gr.HTML(value=format_statusbar_html(state))
-            hero_html = gr.HTML(value=format_hero_html(state))
 
-            # ── Availability matrix (large, focal) ──────────────────────
-            gr.HTML('<div class="vd-section-hdr">GPU AVAILABILITY — CAN I DEPLOY?</div>')
-            avail_matrix_html = gr.HTML(value=format_availability_matrix_html(state))
-
-            # ── Metrics row ──────────────────────────────────────────────
-            gr.HTML('<div class="vd-section-hdr">LIVE METRICS</div>')
-            metrics_html = gr.HTML(value=format_metrics_html(state))
-
-            # ── Market ──────────────────────────────────────────────────
-            gr.HTML('<div class="vd-section-hdr">GPU MARKET</div>')
-            market_html = gr.HTML(value=format_market_grid_html(state))
-
-            # ── Alerts ──────────────────────────────────────────────────
-            gr.HTML('<div class="vd-section-hdr">ALERTS &amp; ACTIVITY</div>')
-            alert_html = gr.HTML(value=format_alert_feed_html(state))
-
-            # ── MLflow + dstack feeds ───────────────────────────────────
-            with gr.Row():
-                with gr.Column(scale=6):
-                    gr.HTML('<div class="vd-section-hdr">MLFLOW RUNS</div>')
-                    mlflow_html = gr.HTML(value=format_mlflow_feed_html(state))
-                with gr.Column(scale=6):
-                    gr.HTML('<div class="vd-section-hdr">DSTACK FLEET</div>')
-                    runs_html = gr.HTML(value=format_runs_feed_html(state))
-
-            with gr.Accordion("Logs", open=False), gr.Row():
-                with gr.Column(scale=6):
-                    local_log_box = gr.Textbox(
-                        value=get_log_snapshot(docker_tailer),
-                        label=f"Container: {TRAINER_CONTAINER}",
-                        lines=14,
-                        max_lines=22,
-                        autoscroll=True,
-                        interactive=False,
-                        elem_id="vd-docker-log",
-                    )
-                    local_log_seq = gr.State(value=[0])
-                with gr.Column(scale=6):
-                    dstack_log_box = gr.Textbox(
-                        value="",
-                        label="dstack active run",
-                        lines=14,
-                        max_lines=22,
-                        autoscroll=True,
-                        interactive=False,
-                        elem_id="vd-dstack-log",
-                    )
-                    dstack_log_seq = gr.State(value=[0])
-
-            with gr.Accordion("Diagnostics", open=False):
-                mlflow_detail = gr.DataFrame(
-                    value=format_mlflow_table(state),
-                    headers=["Name", "Status", "Started", "Experiment", "Metrics"],
-                    label="MLflow Runs (Detailed)",
-                )
-                seeker_offer_detail = gr.DataFrame(
-                    value=format_seeker_offer_table(state),
-                    headers=["Backend", "Region", "GPU", "Count", "Mode", "Price", "Instance"],
-                    label="Current Ranked Offers (Detailed)",
-                )
-                seeker_attempt_detail = gr.DataFrame(
-                    value=format_seeker_attempt_table(state),
-                    headers=["Status", "Job", "Backend", "Region", "GPU", "Price", "Reason"],
-                    label="Recent Attempts (Detailed)",
-                )
-
-            # ── Footer ──────────────────────────────────────────────────
-            footer_html = gr.HTML(value=format_footer_html(state))
-
-        # ── Timer callbacks (pure readers) ───────────────────────────────────
-
-        def read_fast_state():
-            return (
-                gr.update(value=format_statusbar_html(state)),
-                gr.update(value=format_hero_html(state)),
-                gr.update(value=format_availability_matrix_html(state)),
-            )
-
-        def read_medium_state():
-            active = get_active_run_name(state)
-            if path == "C2.2" and active != "(none)" and dstack_tailer is not None:
-                current = getattr(dstack_tailer, "target", "")
-                if current != active:
-                    try:
-                        dstack_tailer.swap(active)
-                    except Exception as exc:
-                        log.debug("Could not sync dstack log target to %s: %s", active, exc)
-
-            return (
-                gr.update(value=format_market_grid_html(state)),
-                gr.update(value=format_alert_feed_html(state)),
-                gr.update(value=format_runs_feed_html(state)),
-                gr.update(value=format_footer_html(state)),
-            )
-
-        def read_slow_state():
-            return (
-                gr.update(value=format_metrics_html(state)),
-                gr.update(value=format_mlflow_feed_html(state)),
-            )
-
-        def read_seeker_state():
-            return (
-                gr.update(value=format_hero_html(state)),
-                gr.update(value=format_market_grid_html(state)),
-                gr.update(value=format_alert_feed_html(state)),
-            )
-
-        def read_detail_state():
-            return (
-                gr.update(value=format_mlflow_table(state)),
-                gr.update(value=format_seeker_offer_table(state)),
-                gr.update(value=format_seeker_attempt_table(state)),
-            )
-
-        # Log streaming — uses per-session seq state for line-delta pushes
-        def stream_local_log(seq_state):
-            lines, new_seq = docker_tailer.snapshot_since(seq_state[0])
-            seq_state[0] = new_seq
-            if lines:
-                return gr.update(value="\n".join(lines)), seq_state
-            return gr.update(), seq_state
-
-        def stream_dstack_log(seq_state):
-            lines, new_seq = dstack_tailer.snapshot_since(seq_state[0])
-            seq_state[0] = new_seq
-            if lines:
-                return gr.update(value="\n".join(lines)), seq_state
-            return gr.update(), seq_state
-
-        # Wire timers
-        fast_timer = gr.Timer(value=TIMER_FAST)
-        fast_timer.tick(
-            read_fast_state,
-            inputs=None,
-            outputs=[statusbar_html, hero_html, avail_matrix_html],
+def lane_component(lane: LaneSnapshot):
+    accent = lane_color(lane.mode)
+    cards = [card_component(card) for card in lane.cards]
+    body = (
+        dmc.SimpleGrid(cols={"base": 1, "xl": 2}, spacing="lg", children=cards)
+        if cards
+        else dmc.Paper(
+            radius="xl",
+            p="xl",
+            withBorder=True,
+            style={"background": "#11161f", "borderColor": f"{accent}44"},
+            children=dmc.Text("No GPU data has landed in this lane yet.", size="sm", c="dimmed"),
         )
+    )
+    return dmc.Stack(
+        gap="lg",
+        children=[
+            dmc.Group(
+                justify="space-between",
+                children=[
+                    dmc.Stack(
+                        gap=0,
+                        children=[
+                            dmc.Text(lane.title, size="xl", fw=900, c=accent, tt="uppercase"),
+                            dmc.Text(
+                                f"{lane.live_gpu_count} GPU families live across {lane.live_provider_count} providers",
+                                size="sm",
+                                c="dimmed",
+                            ),
+                        ],
+                    ),
+                    dmc.Group(
+                        gap="sm",
+                        children=[
+                            dmc.Badge(f"{lane.live_instance_count} instances", color="gray", variant="light"),
+                            dmc.Badge(f"Best {money_label(lane.best_price)}", color="gray", variant="outline"),
+                        ],
+                    ),
+                ],
+            ),
+            body,
+        ],
+    )
 
-        medium_timer = gr.Timer(value=TIMER_MEDIUM)
-        medium_timer.tick(
-            read_medium_state,
-            inputs=None,
-            outputs=[market_html, alert_html, runs_html, footer_html],
-        )
 
-        slow_timer = gr.Timer(value=TIMER_SLOW)
-        slow_timer.tick(
-            read_slow_state,
-            inputs=None,
-            outputs=[metrics_html, mlflow_html],
-        )
+def render_dashboard(snapshot: DashboardSnapshot, config: DashboardConfig):
+    refreshed = snapshot.generated_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+    header = dmc.AppShellHeader(
+        p="md",
+        withBorder=False,
+        style={
+            "background": "linear-gradient(135deg, #0f1724 0%, #102331 45%, #12291f 100%)",
+            "borderBottom": "1px solid rgba(148,163,184,0.16)",
+        },
+        children=dmc.Stack(
+            gap="sm",
+            children=[
+                dmc.Group(
+                    justify="space-between",
+                    children=[
+                        dmc.Stack(
+                            gap=0,
+                            children=[
+                                dmc.Text("Verda Capacity Board", size="xs", tt="uppercase", fw=800, c="dimmed"),
+                                dmc.Title("Availability at a glance", order=1, c="#F8FAFC"),
+                                dmc.Text(
+                                    "Dense preemptible and on-demand boards with SQL-backed sweep history, live price, and last-seen context.",
+                                    size="sm",
+                                    c="#C7D2DA",
+                                ),
+                            ],
+                        ),
+                        dmc.Stack(
+                            gap=0,
+                            ta="right",
+                            children=[
+                                dmc.Text("Refreshed", size="xs", tt="uppercase", fw=800, c="dimmed"),
+                                dmc.Text(refreshed, size="sm", fw=700),
+                                dmc.Text(f"Polling every {int(config.poll_seconds)}s on :{config.dashboard_port}", size="xs", c="dimmed"),
+                            ],
+                        ),
+                    ],
+                ),
+                dmc.Group(gap="xs", children=sweep_badges(snapshot.sweep)),
+                dmc.Group(gap="sm", children=header_kpis(snapshot)),
+                dmc.Group(gap="xs", children=source_badges(snapshot)),
+            ],
+        ),
+    )
+    main = dmc.AppShellMain(
+        p="lg",
+        children=dmc.Stack(
+            gap="xl",
+            children=[
+                lane_component(snapshot.preemptible),
+                lane_component(snapshot.on_demand),
+            ],
+        ),
+    )
+    return dmc.AppShell(
+        padding="lg",
+        header={"height": 164},
+        children=[header, main],
+        style={"background": "#0B0F15", "minHeight": "100vh"},
+    )
 
-        seeker_timer = gr.Timer(value=TIMER_SEEKER)
-        seeker_timer.tick(
-            read_seeker_state,
-            inputs=None,
-            outputs=[hero_html, market_html, alert_html],
-        )
 
-        detail_timer = gr.Timer(value=TIMER_DETAIL)
-        detail_timer.tick(
-            read_detail_state,
-            inputs=None,
-            outputs=[mlflow_detail, seeker_offer_detail, seeker_attempt_detail],
-        )
+def build_app() -> Dash:
+    config = load_dashboard_config()
+    initial_snapshot = build_dashboard_snapshot(config)
+    app = Dash(__name__, external_stylesheets=dmc.styles.ALL)
+    app.title = "Verda Availability Dashboard"
+    app.layout = dmc.MantineProvider(
+        theme=shell_theme(),
+        forceColorScheme="dark",
+        children=[
+            dcc.Interval(
+                id="dashboard-tick",
+                interval=config.poll_interval_ms,
+                n_intervals=0,
+            ),
+            html.Div(id="dashboard-shell", children=render_dashboard(initial_snapshot, config)),
+        ],
+    )
 
-        # Log timers — 2s cadence with per-session delta
-        log_timer = gr.Timer(value=TIMER_LOG)
-        log_timer.tick(
-            stream_local_log,
-            inputs=[local_log_seq],
-            outputs=[local_log_box, local_log_seq],
-        )
+    @app.callback(DashOut("dashboard-shell", "children"), DashIn("dashboard-tick", "n_intervals"))
+    def refresh_dashboard(_: int):
+        return render_dashboard(build_dashboard_snapshot(config), config)
 
-        dstack_log_timer = gr.Timer(value=TIMER_DSTACK_LOG)
-        dstack_log_timer.tick(
-            stream_dstack_log,
-            inputs=[dstack_log_seq],
-            outputs=[dstack_log_box, dstack_log_seq],
-        )
+    return app
 
-    demo.queue(max_size=GRADIO_QUEUE_MAX_SIZE, default_concurrency_limit=GRADIO_QUEUE_MAX_SIZE)
-    return demo
+
+app = build_app()
 
 
 def main() -> None:
-    """Entry point for running the dashboard."""
-    app = build_app()
-    app.launch(
-        server_name="0.0.0.0",
-        server_port=GRADIO_PORT,
-        share=False,
-        prevent_thread_lock=False,
-        theme=build_theme(),
-        css=DASHBOARD_CSS,
-    )
+    config = load_dashboard_config()
+    start_sweep_scheduler(config)
+    app.run(host="0.0.0.0", port=config.dashboard_port, debug=False)
 
 
 if __name__ == "__main__":
