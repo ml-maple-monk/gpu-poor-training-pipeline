@@ -188,6 +188,11 @@ def start(runtime_args, model_config, mlflow_config: dict) -> None:
         print("[mlflow] tracking_uri not set — skipping integration", flush=True)
         return
 
+    # Update mlflow_config so downstream logging (log_params, log_dict) reflects
+    # the active URI instead of the stale TOML value.
+    if isinstance(mlflow_config, dict):
+        mlflow_config["tracking_uri"] = uri
+
     # Set env vars that the MLflow SDK reads directly.
     os.environ["MLFLOW_TRACKING_URI"] = uri
     if mlflow_config.get("enable_system_metrics_logging"):
