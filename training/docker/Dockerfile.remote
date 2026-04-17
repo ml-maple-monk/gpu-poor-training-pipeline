@@ -18,6 +18,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     TOKENIZERS_PARALLELISM=false \
     PYTHONPATH=/opt/training/shared
 
+RUN apt-get update && apt-get install -y --no-install-recommends gcc && rm -rf /var/lib/apt/lists/*
+
 RUN mkdir -p /var/run/sshd /root/.ssh \
     && chmod 700 /root/.ssh
 
