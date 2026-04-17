@@ -50,7 +50,7 @@ lr_min_ratio = 0.1
 [backend]
 kind = "dstack"
 skip_build = true
-remote_image_tag = "1d2662a-noattest"
+remote_image_tag = "1d2662a"
 
 [mlflow]
 experiment_name = "e2e-runpod-test"
@@ -80,7 +80,7 @@ run_start_timeout_seconds = 7200
 backends = ["runpod"]
 gpu_names = ["H100", "H200"]
 gpu_count = 1
-spot_policy = "auto"
+spot_policy = "on-demand"
 max_price = 4.00
 
 [smoke]

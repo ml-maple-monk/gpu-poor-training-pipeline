@@ -745,7 +745,13 @@ def launch_remote(
         # inventing a new knob.
         apply_cmd = [dstack_bin, "apply", "-f", str(rendered_task), "-y"]
         apply_timeout = config.remote.run_start_timeout_seconds + _DSTACK_APPLY_TIMEOUT_BUFFER_SECONDS
-        run_command(apply_cmd, env=apply_env, timeout=apply_timeout)
+        try:
+            run_command(apply_cmd, env=apply_env, timeout=apply_timeout)
+        except CommandError as exc:
+            # dstack apply exits non-zero when it can't attach to the remote
+            # host (e.g. SSH not available on RunPod). The run may still have
+            # been submitted successfully — fall through to check dstack ps.
+            log.warning("dstack apply exited with error (run may still be active): %s", exc)
 
         run_name = config.name
         if dstack_has_run(dstack_bin, run_name):
