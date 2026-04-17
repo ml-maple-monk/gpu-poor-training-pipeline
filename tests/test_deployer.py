@@ -354,7 +354,7 @@ def test_deploy_local_emulator_preserves_mlflow_artifact_upload_toggle(monkeypat
     config = load_run_config(REPO_ROOT / "examples" / "tiny_local.toml")
     config.mlflow.artifact_upload = True
     connector_requests: list[dict[str, object]] = []
-    launched_configs = []
+    launched_runs: list[dict[str, object]] = []
 
     monkeypatch.setattr(deployer, "load_run_config", lambda _path: config)
 
@@ -366,19 +366,146 @@ def test_deploy_local_emulator_preserves_mlflow_artifact_upload_toggle(monkeypat
                 "ensure_ready": ensure_ready,
             }
         )
-        return SimpleNamespace(apply_to_config=lambda value: value)
+        return SimpleNamespace(
+            health_verdict="healthy",
+            to_runtime_env=lambda: {
+                "MLFLOW_TRACKING_URI": "https://mlflow.example",
+                "MLFLOW_ARTIFACT_UPLOAD": "1",
+                "GPUPOOR_CONNECTOR_ARTIFACT_STORE": "r2",
+            },
+        )
 
     monkeypatch.setattr(deployer, "connection_bundle_for_request", fake_connection_bundle)
-    monkeypatch.setattr(deployer, "run_local_training", lambda launch_config: launched_configs.append(launch_config))
+    monkeypatch.setattr(deployer, "load_remote_settings", lambda remote: {"HF_TOKEN": "hf-token"})
+    monkeypatch.setattr(
+        deployer,
+        "run_local_emulator",
+        lambda launch_config, connector_env, *, remote_settings=None: launched_runs.append(
+            {
+                "config": launch_config,
+                "connector_env": connector_env,
+                "remote_settings": remote_settings,
+            }
+        ),
+    )
 
     deployer.deploy_local_emulator(str(config.source))
 
     assert connector_requests == [
         {
-            "lane": "local-debug",
+            "lane": "remote",
             "artifact_upload_requested": True,
             "ensure_ready": True,
         }
     ]
-    assert len(launched_configs) == 1
-    assert launched_configs[0].mlflow.artifact_upload is True
+    assert len(launched_runs) == 1
+    assert launched_runs[0]["config"].mlflow.artifact_upload is True
+    assert launched_runs[0]["connector_env"]["MLFLOW_TRACKING_URI"] == "https://mlflow.example"
+    assert launched_runs[0]["remote_settings"] == {"HF_TOKEN": "hf-token"}
+
+
+def test_deploy_local_emulator_rejects_unsupported_backend_before_side_effects(monkeypatch) -> None:
+    config = load_run_config(REPO_ROOT / "examples" / "tiny_local.toml")
+    config.backend.kind = "runpod"
+
+    monkeypatch.setattr(deployer, "load_run_config", lambda _path: config)
+    monkeypatch.setattr(
+        deployer,
+        "connection_bundle_for_request",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("connector should not run")),
+    )
+    monkeypatch.setattr(
+        deployer,
+        "load_remote_settings",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("remote settings should not load")),
+    )
+    monkeypatch.setattr(
+        deployer,
+        "run_local_emulator",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("local emulator should not launch")),
+    )
+
+    with pytest.raises(RuntimeError, match="backend.kind='dstack' or 'local'"):
+        deployer.deploy_local_emulator(str(config.source))
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected_error"),
+    [
+        (
+            {
+                "tracking_uri": "https://mlflow.example",
+                "artifact_store_kind": "r2",
+                "remote_mlflow_ready": False,
+                "remote_mlflow_blocker": "remote mlflow blocked",
+                "r2_status": "ready",
+                "r2_blocker": "",
+            },
+            "remote mlflow blocked",
+        ),
+        (
+            {
+                "tracking_uri": "https://mlflow.example",
+                "artifact_store_kind": "r2",
+                "remote_mlflow_ready": True,
+                "remote_mlflow_blocker": "",
+                "r2_status": "blocked",
+                "r2_blocker": "r2 blocked",
+            },
+            "r2 blocked",
+        ),
+    ],
+)
+def test_deploy_local_emulator_blocks_on_remote_runtime_blockers(monkeypatch, payload, expected_error) -> None:
+    config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
+
+    monkeypatch.setattr(deployer, "load_run_config", lambda _path: config)
+    monkeypatch.setattr(deployer.mlflow_service, "ensure_runtime", lambda *args, **kwargs: None)
+    monkeypatch.setattr(deployer.mlflow_service, "tunnel", lambda: None)
+    monkeypatch.setattr(deployer.dashboard_service, "up", lambda: None)
+    monkeypatch.setattr(deployer.connector_service, "status_payload", lambda: payload)
+    monkeypatch.setattr(
+        deployer,
+        "run_local_emulator",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("local emulator should not launch")),
+    )
+
+    with pytest.raises(RuntimeError, match=expected_error):
+        deployer.deploy_local_emulator(str(config.source))
+
+
+def test_deploy_local_emulator_with_dstack_backend_stays_local(monkeypatch) -> None:
+    config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
+    launches: list[dict[str, object]] = []
+
+    monkeypatch.setattr(deployer, "load_run_config", lambda _path: config)
+    monkeypatch.setattr(
+        deployer,
+        "connection_bundle_for_request",
+        lambda *args, **kwargs: SimpleNamespace(
+            health_verdict="healthy",
+            to_runtime_env=lambda: {"MLFLOW_TRACKING_URI": "https://mlflow.example"},
+        ),
+    )
+    monkeypatch.setattr(deployer, "load_remote_settings", lambda remote: {})
+    monkeypatch.setattr(
+        deployer,
+        "run_local_emulator",
+        lambda launch_config, connector_env, *, remote_settings=None: launches.append(
+            {
+                "config": launch_config,
+                "connector_env": connector_env,
+                "remote_settings": remote_settings,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        deployer.dstack_backend,
+        "launch_remote",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("remote scheduling should not run")),
+    )
+
+    deployer.deploy_local_emulator(str(config.source))
+
+    assert len(launches) == 1
+    assert launches[0]["config"].backend.kind == "dstack"

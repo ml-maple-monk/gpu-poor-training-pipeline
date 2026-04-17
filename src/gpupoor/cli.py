@@ -13,6 +13,7 @@ from gpupoor.backends.local import run_training as run_local_training
 from gpupoor.config import (
     ConfigError,
     RunConfig,
+    SmokeConfig,
     load_run_config,
 )
 from gpupoor.services import dashboard as dashboard_service
@@ -35,6 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     smoke_parser = subparsers.add_parser("smoke", help="Run repo smoke checks")
     smoke_parser.add_argument("config", nargs="?", help="Optional TOML run config with smoke defaults")
+    smoke_parser.add_argument("--health-port", type=int, help="Override the smoke /health port")
 
     fix_clock_parser = subparsers.add_parser("fix-clock", help="Sync the WSL2 clock from Windows")
     fix_clock_parser.add_argument("config", nargs="?", help="Optional TOML run config with doctor defaults")
@@ -72,7 +74,10 @@ def build_parser() -> argparse.ArgumentParser:
     deploy_remote.add_argument("config", help="Path to a TOML run config")
     deploy_remote.add_argument("--skip-build", action="store_true", default=None, help="Skip image build and push")
     deploy_remote.add_argument("--dry-run", action="store_true", help="Print the remote plan without mutating")
-    deploy_local = deploy_subparsers.add_parser("local-emulator", help="Deploy a fast local debug run")
+    deploy_local = deploy_subparsers.add_parser(
+        "local-emulator",
+        help="Run the canonical local pre-remote wrapper validation path",
+    )
     deploy_local.add_argument("config", help="Path to a TOML run config")
 
     connector_parser = subparsers.add_parser("connector", help="Manage shared MLflow/tunnel/storage wiring")
@@ -93,12 +98,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     infra_parser = subparsers.add_parser("infra", help="Manage local debug/runtime services")
     infra_subparsers = infra_parser.add_subparsers(dest="infra_target", required=True)
-    for service, actions in {
-        "mlflow": ("up", "down", "logs", "tunnel"),
-        "dashboard": ("up", "down", "logs"),
-        "emulator": ("up", "cpu", "nvcr", "down", "logs", "shell", "health"),
-    }.items():
-        service_parser = infra_subparsers.add_parser(service)
+    for service, help_text, actions in (
+        ("mlflow", "Manage local MLflow/tunnel services", ("up", "down", "logs", "tunnel")),
+        ("dashboard", "Manage the local dashboard service", ("up", "down", "logs")),
+        (
+            "emulator",
+            "Manage the non-canonical pseudo-Verda smoke harness",
+            ("up", "cpu", "nvcr", "down", "logs", "shell", "health"),
+        ),
+    ):
+        service_parser = infra_subparsers.add_parser(service, help=help_text)
         service_parser.add_argument("action", choices=actions)
         service_parser.add_argument("extra_args", nargs=argparse.REMAINDER)
 
@@ -151,6 +160,9 @@ def dispatch(args: argparse.Namespace) -> None:
     if args.command == "smoke":
         config = _load_optional_run_config(args.config)
         smoke_config = config.smoke if config else None
+        if args.health_port is not None:
+            smoke_config = smoke_config or SmokeConfig()
+            smoke_config.health_port = args.health_port
         doctor = config.doctor if config else None
         run_non_mutating("smoke", lambda: ops.run_smoke(smoke_config, doctor=doctor))
         return

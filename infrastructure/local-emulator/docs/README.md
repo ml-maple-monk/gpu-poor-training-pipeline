@@ -1,8 +1,8 @@
 # Local Emulator
 
-The local emulator is an optional pseudo-Verda runtime for container-contract debugging. It is useful when you want to reproduce the running container surface locally without exercising the real Verda scheduler or the remote dstack path.
+The local emulator is an optional pseudo-Verda runtime for smoke and compatibility debugging. It is useful when you want to reproduce the running container surface locally without exercising the real Verda scheduler or the remote dstack path.
 
-It is not required for the normal remote-training flow. The primary remote path remains `training/ + dstack/ + infrastructure/mlflow`, with `run.sh` as the thin repo-level router.
+It is not the canonical local training-validation path. Use `gpupoor deploy local-emulator examples/verda_remote.toml` when you want local wrapper parity with the remote lane. This subsystem stays available as the standalone pseudo-Verda smoke harness.
 
 ## Start Surface
 
@@ -24,11 +24,13 @@ This subsystem owns only:
 - the pseudo-Verda API container
 - emulator Docker and compose assets
 - emulator runtime dependencies
+- smoke-harness compatibility coverage
 
 It does not own:
 - MLflow services
 - dashboard UI code
 - dstack remote deployment semantics
+- the canonical `deploy local-emulator` wrapper-validation path
 
 ## Fidelity Goals
 
@@ -44,6 +46,7 @@ Non-goals:
 - reproducing Verda fleet scheduling
 - reproducing the dstack control plane
 - becoming a required prerequisite for remote training
+- replacing `gpupoor deploy local-emulator` for wrapper-parity validation
 
 ## Main Files
 
