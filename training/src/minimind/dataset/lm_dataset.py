@@ -224,19 +224,37 @@ def pretokenized_dataset_exists(path, metadata_file="metadata.json"):
     return (Path(path) / metadata_file).is_file()
 
 
-def load_pretokenized_metadata(path, metadata_file="metadata.json", dataset_version=1):
+def load_pretokenized_metadata(
+    path,
+    metadata_file="metadata.json",
+    dataset_version=1,
+    index_file="index.bin",
+    index_dtype_name="int64",
+):
     metadata_path = Path(path) / metadata_file
-    if not metadata_path.is_file():
+    if metadata_path.is_file():
+        with metadata_path.open(encoding="utf-8") as handle:
+            metadata = json.load(handle)
+        if metadata.get("version") != dataset_version:
+            raise ValueError(
+                f"Unsupported pretokenized dataset version {metadata.get('version')}; expected {dataset_version}"
+            )
+        return metadata
+    # Derive metadata from binary files when metadata.json is missing
+    index_path = Path(path) / index_file
+    if not index_path.is_file():
         raise FileNotFoundError(
-            f"{metadata_path} not found. Run the pretokenization pipeline before starting pretraining."
+            f"Neither {metadata_path} nor {index_path} found. "
+            "Run the pretokenization pipeline before starting pretraining."
         )
-    with metadata_path.open(encoding="utf-8") as handle:
-        metadata = json.load(handle)
-    if metadata.get("version") != dataset_version:
-        raise ValueError(
-            f"Unsupported pretokenized dataset version {metadata.get('version')}; expected {dataset_version}"
-        )
-    return metadata
+    index_dtype = _DTYPE_MAP[index_dtype_name]
+    index_data = np.memmap(str(index_path), dtype=index_dtype, mode="r")
+    sample_count = len(index_data) // 2  # each entry is (offset, length)
+    return {
+        "version": dataset_version,
+        "sample_count": sample_count,
+        "pad_token_id": 0,
+    }
 
 
 def pretokenized_sample_count(path, metadata_file="metadata.json", dataset_version=1):

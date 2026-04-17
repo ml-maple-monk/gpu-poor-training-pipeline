@@ -754,12 +754,29 @@ def launch_remote(
             track_run(run_name)
             wait_for_run_start(dstack_bin, run_name, max_wait=config.remote.run_start_timeout_seconds)
             launched_remote_run = True
-            # Stream logs via REST API (no SSH needed) once the run is active
+            # Poll logs via REST API (no SSH) until the run finishes.
+            # dstack 0.20.17 'logs' dumps current output and exits;
+            # we loop with --since to get incremental updates.
             log.info("Streaming logs for run '%s' (Ctrl+C to detach)...", run_name)
             try:
-                run_command([dstack_bin, "logs", run_name], timeout=apply_timeout)
-            except (CommandError, KeyboardInterrupt):
-                log.info("Log streaming ended for run '%s'", run_name)
+                last_since = "0s"
+                while True:
+                    try:
+                        run_command(
+                            [dstack_bin, "logs", run_name, "--since", last_since],
+                            timeout=60,
+                            quiet=True,
+                        )
+                    except CommandError:
+                        pass  # logs command may fail if run just finished
+                    status, _, _ = dstack_run_status_triplet(dstack_bin, run_name)
+                    if status not in {"running", "provisioning", "submitted", "pending"}:
+                        log.info("Run '%s' finished with status: %s", run_name, status)
+                        break
+                    last_since = f"{_RUN_START_POLL_INTERVAL_SECONDS}s"
+                    time.sleep(_RUN_START_POLL_INTERVAL_SECONDS)
+            except KeyboardInterrupt:
+                log.info("Detached from log stream (run '%s' continues on RunPod)", run_name)
         else:
             # Original print went to stdout (no file=sys.stderr); preserve via
             # log.info so stream routing stays the same. "WARN:" stays in text.
