@@ -137,7 +137,9 @@ def load_dashboard_config() -> DashboardConfig:
         history_points=history_points,
         max_offers_per_gpu=int(defaults.get("max_offers_per_gpu", 20) or 20),
         dstack_timeout_seconds=float(defaults.get("timeout_dstack_offers", 15.0) or 15.0),
-        dstack_server_url=str(os.environ.get("DSTACK_SERVER") or defaults.get("dstack_server_url", "http://localhost:3000")),
+        dstack_server_url=str(
+            os.environ.get("DSTACK_SERVER") or defaults.get("dstack_server_url", "http://localhost:3000")
+        ),
         dstack_project=str(os.environ.get("DSTACK_PROJECT", "main")),
         dstack_token=read_dstack_token(),
         queue_dsn=str(os.environ.get("SEEKER_QUEUE_DSN") or _DEFAULT_QUEUE_DSN),
@@ -501,7 +503,9 @@ def offered_gpus(config: DashboardConfig, offers: list[NormalizedOffer]) -> list
     return ordered + extras
 
 
-def aggregate_provider_rows(config: DashboardConfig, offers: list[NormalizedOffer]) -> tuple[list[ProviderRow], int, tuple[str, ...]]:
+def aggregate_provider_rows(
+    config: DashboardConfig, offers: list[NormalizedOffer]
+) -> tuple[list[ProviderRow], int, tuple[str, ...]]:
     hidden_unknown_count = sum(1 for offer in offers if offer.mode == "unknown")
     hidden_unknown_labels = tuple(sorted({offer.mode for offer in offers if offer.mode == "unknown"}))
     live_offers = merge_offers([offer for offer in offers if offer.mode in {"preemptible", "on-demand"}])
@@ -720,10 +724,7 @@ def history_stats(conn: psycopg.Connection, cutoff: datetime) -> dict[tuple[str,
         """,
         {"cutoff": cutoff},
     ).fetchall()
-    return {
-        (str(row["backend"]), str(row["gpu"]), str(row["mode"])): row
-        for row in rows
-    }
+    return {(str(row["backend"]), str(row["gpu"]), str(row["mode"])): row for row in rows}
 
 
 def coerce_float(value: Any) -> float | None:
@@ -737,10 +738,7 @@ def build_provider_rows(
     current_rows: list[dict[str, Any]],
     history_by_key: dict[tuple[str, str, str], dict[str, Any]],
 ) -> list[ProviderRow]:
-    current_by_key = {
-        (str(row["backend"]), str(row["gpu"]), str(row["mode"])): row
-        for row in current_rows
-    }
+    current_by_key = {(str(row["backend"]), str(row["gpu"]), str(row["mode"])): row for row in current_rows}
     discovered_backends = {backend for backend in config.platform_colors}
     discovered_backends.update(key[0] for key in current_by_key)
     discovered_backends.update(key[0] for key in history_by_key)
@@ -791,7 +789,12 @@ def build_lane(mode: str, title: str, rows: list[ProviderRow], config: Dashboard
     for gpu in gpu_order(config, rows):
         lane_rows = sorted(
             grouped_by_gpu.get(gpu, []),
-            key=lambda item: (not item.available, item.cheapest_price is None, item.cheapest_price or 0.0, item.provider_label),
+            key=lambda item: (
+                not item.available,
+                item.cheapest_price is None,
+                item.cheapest_price or 0.0,
+                item.provider_label,
+            ),
         )
         if lane_rows or gpu in {spec.display_name for spec in config.gpu_specs}:
             cards.append(
@@ -815,7 +818,9 @@ def build_lane(mode: str, title: str, rows: list[ProviderRow], config: Dashboard
         live_gpu_count=sum(1 for card in cards if card.available_backends > 0),
         live_provider_count=sum(1 for row in all_rows if row.available),
         live_instance_count=sum(row.current_count for row in all_rows),
-        best_price=min((row.cheapest_price for row in all_rows if row.available and row.cheapest_price is not None), default=None),
+        best_price=min(
+            (row.cheapest_price for row in all_rows if row.available and row.cheapest_price is not None), default=None
+        ),
     )
 
 
@@ -885,7 +890,9 @@ def load_latest_sweep_state(
 
 def source_notes(config: DashboardConfig, sweep: SweepStatus) -> tuple[str, ...]:
     notes = [
-        f"Postgres snapshot ({sweep.latest_sample_count} rows)" if sweep.latest_sample_count else "Postgres snapshot unavailable",
+        f"Postgres snapshot ({sweep.latest_sample_count} rows)"
+        if sweep.latest_sample_count
+        else "Postgres snapshot unavailable",
         f"History window {config.history_window_minutes}m",
     ]
     if sweep.state == "error" and sweep.last_error_text:
@@ -935,7 +942,11 @@ def build_dashboard_snapshot(config: DashboardConfig) -> DashboardSnapshot:
             sweep, success_row, hidden_unknown_count, hidden_unknown_labels = load_latest_sweep_state(conn, now)
             current_rows = current_rows_for_sweep(conn, int(success_row["sweep_id"])) if success_row else []
             history = history_stats(conn, now - timedelta(minutes=config.history_window_minutes))
-        provider_rows = build_provider_rows(config, current_rows, history) if current_rows or history else blank_provider_rows(config)
+        provider_rows = (
+            build_provider_rows(config, current_rows, history)
+            if current_rows or history
+            else blank_provider_rows(config)
+        )
         snapshot = DashboardSnapshot(
             generated_at=now,
             sweep=sweep,

@@ -44,7 +44,9 @@ def count_rows(config, table: str) -> int:
     return int(row["count"])
 
 
-def seed_success_sweep(config, sampled_at: datetime, updates: dict[tuple[str, str, str], ProviderUpdate] | None = None) -> None:
+def seed_success_sweep(
+    config, sampled_at: datetime, updates: dict[tuple[str, str, str], ProviderUpdate] | None = None
+) -> None:
     updates = updates or {}
     rows = utils.blank_provider_rows(config)
     patched_rows = []
@@ -124,7 +126,9 @@ def test_schema_bootstrap_and_sweep_contract(dashboard_config, monkeypatch: pyte
 
     assert utils.run_sweep_cycle(config) is True
     assert count_rows(config, utils.sweep_runs_table()) == 1
-    assert count_rows(config, utils.provider_samples_table()) == len(config.platform_colors) * len(config.gpu_specs) * 2
+    assert (
+        count_rows(config, utils.provider_samples_table()) == len(config.platform_colors) * len(config.gpu_specs) * 2
+    )
 
     snapshot = utils.build_dashboard_snapshot(config)
     h100_card = next(card for card in snapshot.preemptible.cards if card.gpu == "H100")
@@ -139,7 +143,9 @@ def test_schema_bootstrap_and_sweep_contract(dashboard_config, monkeypatch: pyte
     assert runpod_row.cheapest_price == pytest.approx(1.75)
     assert verda_row.available is False
     assert snapshot.hidden_unknown_count == 1
-    assert all(card.mode in {"preemptible", "on-demand"} for card in snapshot.preemptible.cards + snapshot.on_demand.cards)
+    assert all(
+        card.mode in {"preemptible", "on-demand"} for card in snapshot.preemptible.cards + snapshot.on_demand.cards
+    )
 
 
 def test_sql_history_last_available_and_error_fallback(dashboard_config, monkeypatch: pytest.MonkeyPatch) -> None:

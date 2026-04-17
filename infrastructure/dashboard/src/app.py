@@ -130,10 +130,14 @@ def sweep_badges(sweep: SweepStatus) -> list:
     badges = [
         dmc.Badge(label, color=color, variant="light", radius="sm"),
         dmc.Badge(f"Last success {time_label(sweep.last_success_at)}", color="gray", variant="outline", radius="sm"),
-        dmc.Badge(f"Snapshot age {age_label(sweep.snapshot_age_seconds)}", color="gray", variant="outline", radius="sm"),
+        dmc.Badge(
+            f"Snapshot age {age_label(sweep.snapshot_age_seconds)}", color="gray", variant="outline", radius="sm"
+        ),
     ]
     if sweep.state == "running" and sweep.running_since is not None:
-        badges.append(dmc.Badge(f"Started {time_label(sweep.running_since)}", color="blue", variant="outline", radius="sm"))
+        badges.append(
+            dmc.Badge(f"Started {time_label(sweep.running_since)}", color="blue", variant="outline", radius="sm")
+        )
     if sweep.state == "error" and sweep.last_error_text:
         badges.append(dmc.Badge(sweep.last_error_text[:108], color="red", variant="outline", radius="sm"))
     return badges
@@ -331,7 +335,11 @@ def render_dashboard(snapshot: DashboardSnapshot, config: DashboardConfig):
                             children=[
                                 dmc.Text("Refreshed", size="xs", tt="uppercase", fw=800, c="dimmed"),
                                 dmc.Text(refreshed, size="sm", fw=700),
-                                dmc.Text(f"Polling every {int(config.poll_seconds)}s on :{config.dashboard_port}", size="xs", c="dimmed"),
+                                dmc.Text(
+                                    f"Polling every {int(config.poll_seconds)}s on :{config.dashboard_port}",
+                                    size="xs",
+                                    c="dimmed",
+                                ),
                             ],
                         ),
                     ],
