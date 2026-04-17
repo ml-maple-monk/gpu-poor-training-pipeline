@@ -3,8 +3,8 @@ name = "runpod-e2e-test"
 [recipe]
 kind = "minimind_pretrain"
 prepare_data = false
-dataset_path = "data/datasets/pretrain_t2t_mini"
-output_dir = "data/minimind-out"
+dataset_path = "/workspace/data/datasets/pretrain_t2t_mini"
+output_dir = "/workspace/out"
 time_cap_seconds = 600
 max_seq_len = 4096
 validation_split_ratio = 0.0

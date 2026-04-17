@@ -134,6 +134,29 @@ if ! download_pretokenized_dataset; then
     bash "$PRETOKENIZE_SCRIPT" "$RAW_DATASET_FILE" "$TOKENIZED_DATASET_DIR"
 fi
 
+# ── Early dataset validation ──────────────────────────────────────────────────
+TOML_DATASET_PATH=$(python3 -c "
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+with open('$RUN_CONFIG_FILE', 'rb') as f:
+    cfg = tomllib.load(f)
+print(cfg.get('recipe', {}).get('dataset_path', '$TOKENIZED_DATASET_DIR'))
+")
+echo "[remote-entrypoint] TOML dataset_path = $TOML_DATASET_PATH"
+echo "[remote-entrypoint] Baked dataset dir = $TOKENIZED_DATASET_DIR"
+if [ -d "$TOML_DATASET_PATH" ]; then
+    echo "[remote-entrypoint] Dataset OK: $(ls "$TOML_DATASET_PATH" | tr '\n' ' ')"
+elif [ -d "$TOKENIZED_DATASET_DIR" ]; then
+    echo "[remote-entrypoint] WARNING: TOML path '$TOML_DATASET_PATH' not found, but baked dataset exists at $TOKENIZED_DATASET_DIR"
+    echo "[remote-entrypoint] Contents: $(ls "$TOKENIZED_DATASET_DIR" | tr '\n' ' ')"
+else
+    echo "[remote-entrypoint] ERROR: No dataset found at '$TOML_DATASET_PATH' or '$TOKENIZED_DATASET_DIR'"
+    echo "[remote-entrypoint] Available dirs:" && find /workspace/data -type d 2>/dev/null || true
+    exit 1
+fi
+
 # ── Launch training ───────────────────────────────────────────────────────────
 echo "[remote-entrypoint] Starting train_pretrain.py ..."
 cd /opt/training/minimind/trainer
