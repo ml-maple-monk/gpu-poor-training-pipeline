@@ -743,21 +743,21 @@ def launch_remote(
         # liveness signal. Budget: the existing run-start window plus a
         # 60s buffer covers dstack's own internal retries without
         # inventing a new knob.
-        apply_cmd = [dstack_bin, "apply", "-f", str(rendered_task), "-y"]
+        apply_cmd = [dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"]
         apply_timeout = config.remote.run_start_timeout_seconds + _DSTACK_APPLY_TIMEOUT_BUFFER_SECONDS
-        try:
-            run_command(apply_cmd, env=apply_env, timeout=apply_timeout)
-        except CommandError as exc:
-            # dstack apply exits non-zero when it can't attach to the remote
-            # host (e.g. SSH not available on RunPod). The run may still have
-            # been submitted successfully — fall through to check dstack ps.
-            log.warning("dstack apply exited with error (run may still be active): %s", exc)
+        run_command(apply_cmd, env=apply_env, timeout=apply_timeout)
 
         run_name = config.name
         if dstack_has_run(dstack_bin, run_name):
             track_run(run_name)
             wait_for_run_start(dstack_bin, run_name, max_wait=config.remote.run_start_timeout_seconds)
             launched_remote_run = True
+            # Stream logs via REST API (no SSH needed) once the run is active
+            log.info("Streaming logs for run '%s' (Ctrl+C to detach)...", run_name)
+            try:
+                run_command([dstack_bin, "logs", run_name, "-f"], timeout=apply_timeout)
+            except (CommandError, KeyboardInterrupt):
+                log.info("Log streaming ended for run '%s'", run_name)
         else:
             # Original print went to stdout (no file=sys.stderr); preserve via
             # log.info so stream routing stays the same. "WARN:" stays in text.
