@@ -745,7 +745,7 @@ def launch_remote(
         # liveness signal. Budget: the existing run-start window plus a
         # 60s buffer covers dstack's own internal retries without
         # inventing a new knob.
-        apply_cmd = [dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"]
+        apply_cmd = [dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d", "--force"]
         apply_timeout = config.remote.run_start_timeout_seconds + _DSTACK_APPLY_TIMEOUT_BUFFER_SECONDS
         run_command(apply_cmd, env=apply_env, timeout=apply_timeout)
 
