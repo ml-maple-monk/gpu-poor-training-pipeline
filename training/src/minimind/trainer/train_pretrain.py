@@ -717,9 +717,9 @@ def main():
         "use_compile": 1 if training["use_compile"] else 0,
         "validation_split_ratio": recipe["validation_split_ratio"],
         "validation_interval_steps": recipe["validation_interval_steps"],
-        "peak_tflops_per_gpu": mlflow_cfg["peak_tflops_per_gpu"],
-        "time_to_target_metric": mlflow_cfg["time_to_target_metric"],
-        "time_to_target_value": mlflow_cfg["time_to_target_value"],
+        "peak_tflops_per_gpu": mlflow_cfg.get("peak_tflops_per_gpu", 0.0),
+        "time_to_target_metric": mlflow_cfg.get("time_to_target_metric", "none"),
+        "time_to_target_value": mlflow_cfg.get("time_to_target_value", 0.0),
     }
 
     # Store extra config sections on the runtime args for downstream use
