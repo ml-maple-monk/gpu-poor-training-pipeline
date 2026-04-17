@@ -495,6 +495,11 @@ def wait_for_run_start(
         if run_status == "running" or job_status == "running":
             log.info("Run '%s' is running", run_name)
             return
+        if run_status == "provisioning" or job_status == "provisioning":
+            log.info("Run '%s' is provisioning (pulling image, ~3-10 min)... [%ds]", run_name, elapsed)
+            time.sleep(_RUN_START_POLL_INTERVAL_SECONDS)
+            elapsed += _RUN_START_POLL_INTERVAL_SECONDS
+            continue
         if run_status in {"pending", "submitted"} and termination_reason == "failed_to_start_due_to_no_capacity":
             log.info(
                 "Run '%s' is retrying after a no-capacity offer; waiting for the next submission",
