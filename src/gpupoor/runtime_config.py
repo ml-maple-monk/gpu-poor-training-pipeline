@@ -83,6 +83,7 @@ def _config_to_dict(config: RunConfig) -> dict:
     # fields (gpu_profiles, model, pretokenize, container, etc.) so the
     # container has access to the full config surface.
     from gpupoor.config import _DEFAULTS
+
     dataclass_fields = {field.name for field in fields(config)}
     for key, value in _DEFAULTS.items():
         if key in dataclass_fields or key in _SKIP_FIELDS or key in result:

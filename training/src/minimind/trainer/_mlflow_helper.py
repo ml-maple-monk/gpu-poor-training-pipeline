@@ -203,12 +203,8 @@ def start(runtime_args, model_config, mlflow_config: dict) -> None:
     os.environ["MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING"] = str(
         mlflow_config.get("system_metrics_samples_before_logging", "1")
     )
-    os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] = str(
-        mlflow_config.get("http_request_max_retries", "7")
-    )
-    os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] = str(
-        mlflow_config.get("http_request_timeout_seconds", "120")
-    )
+    os.environ["MLFLOW_HTTP_REQUEST_MAX_RETRIES"] = str(mlflow_config.get("http_request_max_retries", "7"))
+    os.environ["MLFLOW_HTTP_REQUEST_TIMEOUT"] = str(mlflow_config.get("http_request_timeout_seconds", "120"))
 
     mlflow = _load_mlflow_module()
     if mlflow is None:

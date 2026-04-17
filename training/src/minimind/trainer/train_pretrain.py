@@ -61,6 +61,7 @@ from trainer.trainer_utils import (
     validation_ppl_from_loss as _validation_ppl_from_loss,
 )
 
+
 def _sigterm_handler(signum, frame):
     print("[SIGTERM] Received SIGTERM — shutting down gracefully", flush=True)
 
@@ -126,7 +127,8 @@ def _build_pretrain_datasets(tokenizer):
                 Logger("Validation disabled: dataset has fewer than 2 samples after loading")
         else:
             train_indices, val_indices = split_validation_indices(
-                sample_count, args.validation_split_ratio,
+                sample_count,
+                args.validation_split_ratio,
                 seed=args._validation_split_seed,
             )
             if dist_ready():
@@ -469,9 +471,9 @@ def run_training(runtime_args):
 
     # ========== 2. 配置目录、模型参数、检查ckp ==========
     os.makedirs(args.save_dir, exist_ok=True)
-    model_internals = getattr(args, '_model_config', {}).get('internals', {})
-    model_rope_scaling = getattr(args, '_model_config', {}).get('rope_scaling', {})
-    model_generation = getattr(args, '_model_config', {}).get('generation', {})
+    model_internals = getattr(args, "_model_config", {}).get("internals", {})
+    model_rope_scaling = getattr(args, "_model_config", {}).get("rope_scaling", {})
+    model_generation = getattr(args, "_model_config", {}).get("generation", {})
 
     lm_config = MiniMindConfig(
         hidden_size=args.hidden_size,
@@ -493,19 +495,19 @@ def run_training(runtime_args):
         moe_intermediate_size=args.moe_intermediate_size,
         norm_topk_prob=bool(args.norm_topk_prob),
         router_aux_loss_coef=args.router_aux_loss_coef,
-        bos_token_id=model_internals.get('bos_token_id', 1),
-        eos_token_id=model_internals.get('eos_token_id', 2),
-        rms_norm_forward_eps=model_internals.get('rms_norm_forward_eps', 1e-5),
-        freqs_end=model_internals.get('freqs_end', 32768),
-        moe_topk_epsilon=model_internals.get('moe_topk_epsilon', 1e-20),
-        rope_scaling_min_ramp_denominator=model_internals.get('rope_scaling_min_ramp_denominator', 0.001),
+        bos_token_id=model_internals.get("bos_token_id", 1),
+        eos_token_id=model_internals.get("eos_token_id", 2),
+        rms_norm_forward_eps=model_internals.get("rms_norm_forward_eps", 1e-5),
+        freqs_end=model_internals.get("freqs_end", 32768),
+        moe_topk_epsilon=model_internals.get("moe_topk_epsilon", 1e-20),
+        rope_scaling_min_ramp_denominator=model_internals.get("rope_scaling_min_ramp_denominator", 0.001),
         rope_scaling_config=model_rope_scaling if model_rope_scaling else None,
-        generate_max_new_tokens=model_generation.get('max_new_tokens', 8192),
-        generate_temperature=model_generation.get('temperature', 0.85),
-        generate_top_p=model_generation.get('top_p', 0.85),
-        generate_top_k=model_generation.get('top_k', 50),
-        generate_eos_token_id=model_generation.get('eos_token_id', 2),
-        repetition_penalty=model_generation.get('repetition_penalty', 1.0),
+        generate_max_new_tokens=model_generation.get("max_new_tokens", 8192),
+        generate_temperature=model_generation.get("temperature", 0.85),
+        generate_top_p=model_generation.get("top_p", 0.85),
+        generate_top_k=model_generation.get("top_k", 50),
+        generate_eos_token_id=model_generation.get("eos_token_id", 2),
+        repetition_penalty=model_generation.get("repetition_penalty", 1.0),
     )
     ckp_data = (
         lm_checkpoint(lm_config, weight=args.save_weight, save_dir=args.save_dir) if args.from_resume == 1 else None
@@ -520,7 +522,7 @@ def run_training(runtime_args):
     resolved_peak_profile = None
     if device_type == "cuda":
         gpu_name = torch.cuda.get_device_name(torch.cuda.current_device())
-        resolved_peak_profile = resolve_peak_flops_profile(gpu_name, getattr(args, '_gpu_profiles', None))
+        resolved_peak_profile = resolve_peak_flops_profile(gpu_name, getattr(args, "_gpu_profiles", None))
         if resolved_peak_profile is not None:
             args.peak_fp8_tflops_per_gpu = resolved_peak_profile.fp8_tflops_per_gpu
             if args.peak_tflops_per_gpu is None:
@@ -542,7 +544,7 @@ def run_training(runtime_args):
 
     # ========== 4. MLflow (no-op unless MLFLOW_TRACKING_URI is set) ==========
     if is_main_process():
-        _mlflow_start(args, lm_config, getattr(args, '_mlflow_config', {}))
+        _mlflow_start(args, lm_config, getattr(args, "_mlflow_config", {}))
 
     # ========== 5. 定义模型、数据、优化器 ==========
     model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
@@ -640,6 +642,7 @@ def run_training(runtime_args):
 def main():
     """MiniMind pretraining entrypoint — reads config from a TOML file."""
     import sys
+
     try:
         import tomllib
     except ModuleNotFoundError:

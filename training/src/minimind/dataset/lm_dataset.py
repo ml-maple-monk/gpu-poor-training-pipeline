@@ -258,7 +258,9 @@ def load_pretokenized_metadata(
 
 
 def pretokenized_sample_count(path, metadata_file="metadata.json", dataset_version=1):
-    return int(load_pretokenized_metadata(path, metadata_file=metadata_file, dataset_version=dataset_version)["sample_count"])
+    return int(
+        load_pretokenized_metadata(path, metadata_file=metadata_file, dataset_version=dataset_version)["sample_count"]
+    )
 
 
 def build_pretokenized_corpus(
