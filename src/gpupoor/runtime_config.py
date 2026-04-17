@@ -79,4 +79,11 @@ def _config_to_dict(config: RunConfig) -> dict:
         sanitized = _sanitize_value(raw)
         result[field.name] = sanitized
 
+    # Include gpu_profiles (array-of-tables from defaults.toml) so the
+    # container can match its GPU against known peak TFLOPs values.
+    from gpupoor.config import _DEFAULTS
+    gpu_profiles = _DEFAULTS.get("gpu_profiles")
+    if gpu_profiles:
+        result["gpu_profiles"] = _sanitize_value(gpu_profiles)
+
     return result
