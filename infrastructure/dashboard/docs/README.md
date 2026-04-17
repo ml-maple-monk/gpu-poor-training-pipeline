@@ -1,6 +1,6 @@
 # Dashboard
 
-This subsystem owns the read-only Gradio dashboard at `:7860`.
+This subsystem now owns a Dash availability board at `:7860`.
 
 ## Startup Surface
 
@@ -17,57 +17,69 @@ Other useful commands:
 ```text
 infrastructure/dashboard/
 ├── start.sh
-├── src/            # Gradio app, collectors, panels
-├── scripts/        # dashboard-only entrypoint/bootstrap
-├── docker/         # dashboard image only
+├── src/            # Dash app, dataclasses, and read-only data helpers
+├── scripts/        # thin container entrypoint
+├── docker/         # shared image for dashboard + dstack sidecar
 ├── compose/        # dashboard compose only
 ├── docs/
 └── tests/
 ```
 
-## Read-Only Contract
+## Runtime Shape
 
-The dashboard is intentionally constrained to observation-only behavior.
-
-Anchored code paths worth knowing:
-- `doc-anchor: safe-exec-allowlist`
-- `doc-anchor: log-tailer-docker-precheck`
-- `doc-anchor: collector-worker-loop`
-- `doc-anchor: dashboard-config-gen`
-- `doc-anchor: dstack-runs-list-post`
-- `doc-anchor: verda-offers-busybox`
-
-What enforces read-only behavior:
-1. Docker access is limited to allowlisted verbs in `infrastructure/dashboard/src/safe_exec.py`
-2. dstack REST access is limited to allowlisted endpoints in the same module
-3. Tests grep the source tree for forbidden verbs and paths
-4. Panels are pure readers; state updates happen in collector workers only
-
-## Threat Model
-
-The dashboard is intentionally not a control plane. It reads local and remote state, but it must not mutate containers, dstack runs, or host files.
-
-- `docker.sock` is mounted read-only for observability, but socket access is still privileged. The real safety boundary is the `argv-whitelist` enforced in `infrastructure/dashboard/src/safe_exec.py`.
-- dstack REST access is constrained by a `REST-whitelist`, also enforced in `infrastructure/dashboard/src/safe_exec.py`.
-- The dashboard mounts only the specific host paths it needs for observability: docker metadata, the isolated dstack CLI venv, `artifacts-pull`, and the single `.cf-tunnel.url` file.
-- Dashboard code stays read-only by design: no write paths in the app hot path, and CI checks fail if mutating verbs creep back in.
-
-## Main Files
+The runtime is intentionally hard-pruned to three coding files:
 
 | File | Role |
 |---|---|
-| `infrastructure/dashboard/compose/docker-compose.yml` | Dashboard runtime |
-| `infrastructure/dashboard/scripts/entrypoint.sh` | Writes temporary dstack CLI config inside the container |
-| `infrastructure/dashboard/src/bootstrap.py` | REST access-path gate |
-| `infrastructure/dashboard/src/safe_exec.py` | Docker and dstack allowlists |
-| `infrastructure/dashboard/src/log_tailer.py` | Local docker logs with remote dstack fallback |
+| `infrastructure/dashboard/src/app.py` | Dash entrypoint, AppShell layout, polling callback |
+| `infrastructure/dashboard/src/models.py` | Normalized dashboard dataclasses |
+| `infrastructure/dashboard/src/utils.py` | Config loading, Postgres sweep storage, dstack `runs/get_plan`, history tracking, figures |
 
-## Version-Sensitive Detail
+The app is availability-only:
+- `Preemptible` lane
+- `On-Demand` lane
+- compact sweep/source badges in the header
 
-The dashboard assumes dstack `0.20+` semantics for `runs/list`, so the read path uses `POST` with a JSON body instead of the older `GET` probe behavior.
+Removed on purpose:
+- Gradio panels and theme
+- docker log access
+- background collectors and worker fanout
+- MLflow, system, tunnel, and log panels
+
+## Data Contract
+
+The dashboard is not a seeker job control plane, but it does own a small Postgres-backed sweep scheduler.
+
+Inputs:
+1. Postgres queue/storage via `SEEKER_QUEUE_DSN`
+2. one authenticated dstack endpoint: `runs/get_plan`
+
+Persistent dashboard-owned writes:
+1. `dashboard.sweep_runs`
+2. `dashboard.provider_samples`
+
+Disallowed by design:
+1. docker socket access
+2. seeker queue mutation in `seeker.jobs` / `seeker.attempts`
+3. dstack CLI bootstrap/config generation in the dashboard container
+4. any mutation-style REST path other than the single plan probe above
+5. host-file offer snapshots
+
+## Visual Contract
+
+Each lane uses dense GPU cards that show:
+- current available instance count
+- cheapest live price
+- per-provider badges
+- 30-minute historical availability
+- `last available` in UTC
+
+The header now also shows:
+- sweep health
+- last successful sweep timestamp
+- snapshot age
 
 ## Related Docs
 
-- [infrastructure/mlflow/docs/README.md](../../mlflow/docs/README.md)
 - [dstack/docs/README.md](../../dstack/docs/README.md)
 - [TROUBLESHOOTING.md](../../TROUBLESHOOTING.md)

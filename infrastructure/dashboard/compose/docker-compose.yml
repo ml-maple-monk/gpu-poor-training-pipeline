@@ -55,47 +55,20 @@ services:
     tmpfs:
       - /tmp:size=128m,mode=1777
       - /tmp/.cache:size=64m,mode=1777
-      - /tmp/mpl:size=16m,mode=1777
     environment:
-      GRADIO_ANALYTICS_ENABLED: "False"
       HF_HUB_DISABLE_TELEMETRY: "1"
       DO_NOT_TRACK: "1"
       HOME: /tmp
       XDG_CACHE_HOME: /tmp/.cache
-      MPLCONFIGDIR: /tmp/mpl
-      DSTACK_SERVER_ADMIN_TOKEN: "${DSTACK_SERVER_ADMIN_TOKEN}"
-      TRAINER_CONTAINER: "${TRAINER_CONTAINER}"
-      # Remote log source: name of the active dstack run.
-      # When set (and local TRAINER_CONTAINER is absent), log panel streams
-      # `dstack logs -f <REMOTE_RUN_NAME>` via the mounted dstack CLI.
-      REMOTE_RUN_NAME: "${REMOTE_RUN_NAME:-verda-minimind-pretrain}"
+      DASHBOARD_PORT: "${DASHBOARD_PORT}"
+      DSTACK_SERVER_ADMIN_TOKEN: "${DSTACK_SERVER_ADMIN_TOKEN:-}"
+      DSTACK_CONFIG_PATH: "/seed-dstack/config.yml"
       DSTACK_PROJECT: "${DSTACK_PROJECT:-main}"
-      DSTACK_SERVER: "http://dstack-server:3000"
-      DSTACK_TOKEN: "${DSTACK_SERVER_ADMIN_TOKEN}"
-      DSTACK_WAIT_FOR_SERVER: "1"
-      # Absolute path to the dstack CLI inside the container. Must match the
-      # bind-mount target below. Override via $DSTACK_CLI_PATH in the host env
-      # if the host's isolated venv lives elsewhere.
-      DSTACK_CLI_PATH: "${DSTACK_CLI_PATH:-/home/geeyang/.dstack-cli-venv/bin/dstack}"
-      # dstack imports GitPython which probes for `git` on PATH; suppress noise
-      # since the dashboard doesn't need git operations.
-      GIT_PYTHON_REFRESH: "quiet"
-      SEEKER_DATA_DIR: "${SEEKER_DATA_DIR}"
+      DSTACK_SERVER: "http://dstack-server:${DSTACK_SERVER_PORT}"
+      SEEKER_QUEUE_DSN: "${SEEKER_QUEUE_DSN:-postgresql://mlflow:mlflow@mlflow-postgres:5432/mlflow}"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /usr/bin/docker:/usr/bin/docker:ro
-      # dstack CLI (isolated venv on host) — shebang expects absolute path,
-      # so mount at the same path for the shebang to resolve. Cannot live under
-      # /tmp because the container tmpfs would shadow the bind mount.
-      - /home/geeyang/.dstack-cli-venv:/home/geeyang/.dstack-cli-venv:ro
-      # Python interpreter (uv-managed, symlinked from the venv).
-      - /home/geeyang/.local/share/uv/python:/home/geeyang/.local/share/uv/python:ro
-      - ../../../artifacts-pull:/artifacts-pull:ro
-      - ../../../data/seeker:/seeker-data:ro
-      - ../../../.cf-tunnel.url:/tunnel/.cf-tunnel.url:ro
+      - /home/geeyang/.dstack:/seed-dstack:ro
       - ../../../defaults.toml:/app/defaults.toml:ro
-      - ../../../examples/runpod_e2e_test.toml:/app/config-overlay.toml:ro
-      - /home/geeyang/.dstack/config.yml:/seed-dstack/config.yml:ro
     ports:
       - "${DASHBOARD_PORT}:${DASHBOARD_PORT}"
     restart: unless-stopped
@@ -106,8 +79,6 @@ services:
     depends_on:
       dstack-server:
         condition: service_healthy
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     networks:
       - verda-mlflow
 
