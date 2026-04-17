@@ -8,8 +8,8 @@ from pathlib import Path
 from gpupoor.config import (
     DEFAULT_EMULATOR_HEALTH_PORT,
     DEFAULT_EMULATOR_HEALTH_TIMEOUT,
-    DEFAULT_EMULATOR_PER_CHECK_TIMEOUT,
     DEFAULT_EMULATOR_LOG_TAIL_LINES,
+    DEFAULT_EMULATOR_PER_CHECK_TIMEOUT,
 )
 from gpupoor.subprocess_utils import run_command
 from gpupoor.utils import repo_path

@@ -80,6 +80,7 @@ def _safe(text: str | int | float | None) -> str:
 _PLATFORM_COLORS = PLATFORM_COLORS
 _DEFAULT_PLATFORM_COLOR = DEFAULT_PLATFORM_COLOR
 
+
 def _platform_color(backend: str) -> tuple[str, str, str]:
     return _PLATFORM_COLORS.get(backend.lower().strip(), _DEFAULT_PLATFORM_COLOR)
 
@@ -103,8 +104,7 @@ def _render_availability_heatmap(history: list, *, points: int = 30, color: str 
         fill = color if avail else "#21262d"
         opacity = "1" if avail else "0.4"
         rects.append(
-            f"<rect x='{x}' y='0' width='{bar_w}' height='{bar_h}' "
-            f"rx='1' fill='{fill}' opacity='{opacity}'/>"
+            f"<rect x='{x}' y='0' width='{bar_w}' height='{bar_h}' rx='1' fill='{fill}' opacity='{opacity}'/>"
         )
 
     avail_count = sum(available_flags)
@@ -157,10 +157,7 @@ def _render_gpu_card(gpu_name: str, offers: list, history_by_backend: dict[str, 
             f"</div>"
         )
 
-    rows = [
-        _render_backend_row(offer, history_by_backend.get(offer.backend, []))
-        for offer in offers
-    ]
+    rows = [_render_backend_row(offer, history_by_backend.get(offer.backend, [])) for offer in offers]
 
     # Build stacked availability chart
     chart_rows = []
@@ -208,10 +205,7 @@ def format_availability_matrix_html(state: AppState, *, slots: int = 30) -> str:
         color = _GPU_COLORS.get(gpu_name, "#8b949e")
 
         # Check current availability: any offer with this gpu_name that is available?
-        available_offers = [
-            o for o in all_offers
-            if o.gpu_name == gpu_name and o.availability == "available"
-        ]
+        available_offers = [o for o in all_offers if o.gpu_name == gpu_name and o.availability == "available"]
         is_available = len(available_offers) > 0
         offer_count = len(available_offers)
 
@@ -221,8 +215,7 @@ def format_availability_matrix_html(state: AppState, *, slots: int = 30) -> str:
         for b in avail_backends:
             b_color, _, b_label = _platform_color(b)
             backend_chips += (
-                f"<span class='vd-block-chip' style='color:{b_color};border-color:{b_color}40'>"
-                f"{_safe(b_label)}</span>"
+                f"<span class='vd-block-chip' style='color:{b_color};border-color:{b_color}40'>{_safe(b_label)}</span>"
             )
 
         # Find last-available timestamp if currently unavailable
@@ -239,8 +232,7 @@ def format_availability_matrix_html(state: AppState, *, slots: int = 30) -> str:
                         break
             if latest_ts is not None:
                 last_available_text = (
-                    f"<div class='vd-block-last'>Last seen: "
-                    f"{_safe(latest_ts.strftime('%H:%M:%S UTC'))}</div>"
+                    f"<div class='vd-block-last'>Last seen: {_safe(latest_ts.strftime('%H:%M:%S UTC'))}</div>"
                 )
             else:
                 last_available_text = "<div class='vd-block-last'>No recent availability</div>"
@@ -309,10 +301,7 @@ def format_availability_matrix_html(state: AppState, *, slots: int = 30) -> str:
             area_coords.append(f"{pad_left + plot_w:.1f},{plot_h:.1f}")
             area_coords.append(f"{pad_left:.1f},{plot_h:.1f}")
 
-            lines_svg.append(
-                f"<polygon points='{' '.join(area_coords)}' "
-                f"fill='{b_color}' opacity='0.08'/>"
-            )
+            lines_svg.append(f"<polygon points='{' '.join(area_coords)}' fill='{b_color}' opacity='0.08'/>")
             lines_svg.append(
                 f"<polyline points='{' '.join(coords)}' "
                 f"fill='none' stroke='{b_color}' stroke-width='2' "
@@ -331,9 +320,7 @@ def format_availability_matrix_html(state: AppState, *, slots: int = 30) -> str:
             f"stroke='#30363d' stroke-width='0.5'/>"
         )
         # "available" / "unavailable" labels
-        lines_svg.append(
-            f"<text x='{pad_left + plot_w + 2}' y='8' class='vd-chart-axis-label'>avail</text>"
-        )
+        lines_svg.append(f"<text x='{pad_left + plot_w + 2}' y='8' class='vd-chart-axis-label'>avail</text>")
 
         legend_html = f"<div class='vd-chart-legend'>{''.join(legend_items)}</div>" if legend_items else ""
 
@@ -349,8 +336,8 @@ def format_availability_matrix_html(state: AppState, *, slots: int = 30) -> str:
 
     history_section = (
         f"<div class='vd-history-grid'>{''.join(charts)}</div>"
-        if charts else
-        "<div class='vd-empty'>Collecting availability history...</div>"
+        if charts
+        else "<div class='vd-empty'>Collecting availability history...</div>"
     )
 
     return f"{status_section}{history_section}"
@@ -382,9 +369,7 @@ def format_statusbar_html(state: AppState) -> str:
         if tunnel_url
         else "<span class='vd-badge vd-badge-idle'>Tunnel offline</span>"
     )
-    mlflow_link = (
-        f"<a href='{escape(MLFLOW_URL, quote=True)}' target='_blank' rel='noreferrer'>MLflow {_safe(_fmt_url(MLFLOW_URL))}</a>"
-    )
+    mlflow_link = f"<a href='{escape(MLFLOW_URL, quote=True)}' target='_blank' rel='noreferrer'>MLflow {_safe(_fmt_url(MLFLOW_URL))}</a>"
 
     return f"""
     <div class="vd-statusbar">
@@ -400,7 +385,7 @@ def format_statusbar_html(state: AppState) -> str:
         <span class="vd-badge vd-badge-success">ok {ok}</span>
         <span class="vd-badge vd-badge-pending">stale {stale}</span>
         <span class="vd-badge vd-badge-error">error {error}</span>
-        {''.join(health_bits[:4])}
+        {"".join(health_bits[:4])}
       </div>
     </div>
     """
@@ -453,8 +438,8 @@ def format_hero_html(state: AppState) -> str:
           <div class="vd-card-accent vd-progress-green"></div>
           <div class="vd-card-title">Best Offer Now</div>
           <div class="vd-card-value">{_safe(best_offer.gpu_name)} · {_safe(best_offer.count)}x</div>
-          <div class="vd-card-sub">{_safe(best_offer.backend)} · {_safe(best_offer.region)} · {_safe(best_offer.mode or 'mode n/a')}</div>
-          <div class="vd-card-sub">{_safe(best_offer.instance_type or 'instance n/a')} · <span class="vd-green">{_safe(_fmt_money(best_offer.price_per_hour))}</span></div>
+          <div class="vd-card-sub">{_safe(best_offer.backend)} · {_safe(best_offer.region)} · {_safe(best_offer.mode or "mode n/a")}</div>
+          <div class="vd-card-sub">{_safe(best_offer.instance_type or "instance n/a")} · <span class="vd-green">{_safe(_fmt_money(best_offer.price_per_hour))}</span></div>
         </div>
         """
         if best_offer
@@ -479,7 +464,7 @@ def format_hero_html(state: AppState) -> str:
       <div class="vd-card-value">{_safe(pending_count)}</div>
       <div class="vd-card-sub">{_safe(seeker_title)}</div>
       <div class="vd-card-sub">{_safe(len(active_jobs))} active jobs</div>
-      <div class="vd-card-sub"><span class="vd-badge {_badge_class(seeker_status)}">{_safe(seeker_status or 'idle')}</span> · retries {_safe(seeker_retries)}</div>
+      <div class="vd-card-sub"><span class="vd-badge {_badge_class(seeker_status)}">{_safe(seeker_status or "idle")}</span> · retries {_safe(seeker_retries)}</div>
       <div class="vd-progress vd-progress-lg"><div class="vd-progress-fill vd-progress-blue" style="width: {seeker_progress}%"></div></div>
     </div>
     """
@@ -491,7 +476,7 @@ def format_hero_html(state: AppState) -> str:
       <div class="vd-card-accent vd-progress-green"></div>
       <div class="vd-card-title">Active Run</div>
       <div class="vd-card-value">{_safe(active_run_name)}</div>
-      <div class="vd-card-sub">{_safe(running_run.backend if running_run else 'backend n/a')} · {_safe(running_run.region if running_run else 'region n/a')}</div>
+      <div class="vd-card-sub">{_safe(running_run.backend if running_run else "backend n/a")} · {_safe(running_run.region if running_run else "region n/a")}</div>
       <div class="vd-card-sub"><span class="vd-badge {_badge_class(run_status)}">{_safe(run_status)}</span> · {_safe(run_cost)}</div>
     </div>
     """
@@ -502,9 +487,9 @@ def format_hero_html(state: AppState) -> str:
     <div class="vd-card">
       <div class="vd-card-accent vd-progress-yellow"></div>
       <div class="vd-card-title">Training Container</div>
-      <div class="vd-card-value">{_safe(training.container_name or 'trainer')}</div>
-      <div class="vd-card-sub"><span class="vd-badge {_badge_class(training_status)}">{_safe(training_status)}</span> · uptime {_safe(f"{training.uptime_seconds:.0f}s" if training.uptime_seconds > 0 else 'n/a')}</div>
-      <div class="vd-card-sub">GPU {_safe(f'{training.gpu_util_percent:.0f}%') if training.gpu_mem_total_mb else 'n/a'} · VRAM {_safe(f'{training.gpu_mem_used_mb:.0f}/{training.gpu_mem_total_mb:.0f} MB' if training.gpu_mem_total_mb else 'n/a')}</div>
+      <div class="vd-card-value">{_safe(training.container_name or "trainer")}</div>
+      <div class="vd-card-sub"><span class="vd-badge {_badge_class(training_status)}">{_safe(training_status)}</span> · uptime {_safe(f"{training.uptime_seconds:.0f}s" if training.uptime_seconds > 0 else "n/a")}</div>
+      <div class="vd-card-sub">GPU {_safe(f"{training.gpu_util_percent:.0f}%") if training.gpu_mem_total_mb else "n/a"} · VRAM {_safe(f"{training.gpu_mem_used_mb:.0f}/{training.gpu_mem_total_mb:.0f} MB" if training.gpu_mem_total_mb else "n/a")}</div>
       <div class="vd-progress vd-progress-lg"><div class="vd-progress-fill {_progress_class(gpu_percent)}" style="width: {gpu_percent}%"></div></div>
     </div>
     """
@@ -574,10 +559,7 @@ def format_market_grid_html(state: AppState, limit: int = 6) -> str:
     """Render a fixed GPU-first market board with backend availability history."""
     with state.lock:
         offers = list(_merge_offers(state))
-        offer_history = {
-            key: list(history)
-            for key, history in state.offer_history.items()
-        }
+        offer_history = {key: list(history) for key, history in state.offer_history.items()}
 
     gpu_offers = [offer for offer in offers if offer.gpu_name]
     cpu_only_count = len(offers) - len(gpu_offers)
@@ -605,8 +587,7 @@ def format_market_grid_html(state: AppState, limit: int = 6) -> str:
     for gpu_name in TARGET_GPUS:
         offers_for_gpu = offers_by_gpu[gpu_name]
         history_by_backend = {
-            offer.backend: offer_history.get((gpu_name, offer.backend), [])
-            for offer in offers_for_gpu
+            offer.backend: offer_history.get((gpu_name, offer.backend), []) for offer in offers_for_gpu
         }
         cards.append(_render_gpu_card(gpu_name, offers_for_gpu, history_by_backend))
 
@@ -674,7 +655,7 @@ def format_alert_feed_html(state: AppState, limit: int = 6) -> str:
             f"""
             <div class="vd-feed-item">
               <span class="vd-dot {_dot_class(attempt.status)}"></span>
-              <div class="vd-feed-name">{_safe(attempt.backend or 'backend')}</div>
+              <div class="vd-feed-name">{_safe(attempt.backend or "backend")}</div>
               <div class="vd-feed-detail">{_safe(attempt.status)} · {_safe(attempt.gpu)} · {_safe(reason)}</div>
               <div class="vd-feed-metric">{_safe(_fmt_money(attempt.price_per_hour))}</div>
             </div>
@@ -723,9 +704,7 @@ def format_mlflow_feed_html(state: AppState, limit: int = 5) -> str:
 
     items = []
     for run in runs[:limit]:
-        metrics = " · ".join(
-            f"{key}={value:.4g}" for key, value in list(run.metrics.items())[:2]
-        )
+        metrics = " · ".join(f"{key}={value:.4g}" for key, value in list(run.metrics.items())[:2])
         run_name = run.run_name or (run.run_id[:8] if run.run_id else "run")
         started = run.start_time.strftime("%H:%M") if run.start_time else "--:--"
         items.append(
@@ -733,7 +712,7 @@ def format_mlflow_feed_html(state: AppState, limit: int = 5) -> str:
             <div class="vd-feed-item">
               <span class="vd-dot {_dot_class(run.status)}"></span>
               <div class="vd-feed-name">{_safe(run_name)}</div>
-              <div class="vd-feed-detail"><span class="vd-badge {_badge_class(run.status)}">{_safe(run.status)}</span> · {_safe(started)} · {_safe(metrics or 'no metrics yet')}</div>
+              <div class="vd-feed-detail"><span class="vd-badge {_badge_class(run.status)}">{_safe(run.status)}</span> · {_safe(started)} · {_safe(metrics or "no metrics yet")}</div>
             </div>
             """
         )
@@ -758,7 +737,7 @@ def format_runs_feed_html(state: AppState, limit: int = 5) -> str:
             <div class="vd-feed-item">
               <span class="vd-dot {_dot_class(run.status)}"></span>
               <div class="vd-feed-name">{_safe(run.run_name)}</div>
-              <div class="vd-feed-detail">{_safe(run.backend)} · {_safe(run.region)} · {_safe(run.instance_type or 'instance n/a')} · {_safe(gpu_count)}</div>
+              <div class="vd-feed-detail">{_safe(run.backend)} · {_safe(run.region)} · {_safe(run.instance_type or "instance n/a")} · {_safe(gpu_count)}</div>
               <div class="vd-feed-metric">{_safe(cost)}</div>
             </div>
             """

@@ -6,11 +6,6 @@ import base64
 from dataclasses import asdict, fields
 from pathlib import Path
 
-try:
-    import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib  # type: ignore[no-redef]
-
 import tomli_w
 
 from gpupoor.config import RunConfig

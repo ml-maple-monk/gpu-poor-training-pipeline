@@ -72,7 +72,9 @@ class MiniMindConfig(PretrainedConfig):
         ### MoE specific configs (ignored if use_moe = False)
         self.num_experts = num_experts
         self.num_experts_per_tok = num_experts_per_tok
-        self.moe_intermediate_size = moe_intermediate_size if moe_intermediate_size is not None else self.intermediate_size
+        self.moe_intermediate_size = (
+            moe_intermediate_size if moe_intermediate_size is not None else self.intermediate_size
+        )
         self.norm_topk_prob = norm_topk_prob
         self.router_aux_loss_coef = router_aux_loss_coef
         # Internal constants

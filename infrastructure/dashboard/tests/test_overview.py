@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections import deque
 import sys
-from datetime import datetime, timezone
+from collections import deque
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -51,7 +51,7 @@ def test_market_grid_hides_cpu_only_rows_from_primary_board() -> None:
 
 def test_market_grid_renders_fixed_gpu_cards_with_svg_and_repeated_backend_rows() -> None:
     state = reset_state()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with state.lock:
         state.seeker_offers = [
             SeekerOffer(

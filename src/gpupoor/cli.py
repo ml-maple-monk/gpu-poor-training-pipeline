@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+
 from gpupoor import __version__, ops
 from gpupoor import connector as connector_module
 from gpupoor import deployer as deployer_module
@@ -134,7 +135,6 @@ def run_non_mutating(label: str, action) -> None:
 
 def _load_optional_run_config(path: str | None) -> RunConfig | None:
     return load_run_config(path) if path else None
-
 
 
 def dispatch(args: argparse.Namespace) -> None:

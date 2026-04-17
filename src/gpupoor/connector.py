@@ -148,6 +148,7 @@ required_r2_keys = (
     "MLFLOW_ARTIFACTS_DESTINATION",
 )
 
+
 def connector_dir() -> Path:
     path = repo_path("infrastructure", "capacity-seeker")
     path.mkdir(parents=True, exist_ok=True)

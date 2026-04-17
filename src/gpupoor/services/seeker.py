@@ -1091,7 +1091,16 @@ class PostgresQueueStore(QueueStore):
                 """,
                 (limit,),
             ).fetchall()
-        return [parse_attempt({**row, "started_at": format_timestamp(row["started_at"]), "ended_at": format_timestamp(row["ended_at"])}) for row in rows]
+        return [
+            parse_attempt(
+                {
+                    **row,
+                    "started_at": format_timestamp(row["started_at"]),
+                    "ended_at": format_timestamp(row["ended_at"]),
+                }
+            )
+            for row in rows
+        ]
 
     def recommended_sleep_seconds(self, now: datetime) -> int:
         queue = self.projection_queue()
@@ -1194,7 +1203,9 @@ class SeekerOrchestrator:
         outcome = classify_finished_run(run_status, job_status, termination_reason)
         if outcome == "failed_to_start":
             job.submit_retries += 1
-            self.record_attempt(job, status="failed_to_start", reason=termination_reason or "failed before steady state")
+            self.record_attempt(
+                job, status="failed_to_start", reason=termination_reason or "failed before steady state"
+            )
             if job.submit_retries >= job.max_submit_retries:
                 self.record_attempt(job, status="cancelled", reason="max_submit_retries exceeded")
                 self.store.mark_cancelled(job, reason="max_submit_retries exceeded", now=now)
@@ -1211,11 +1222,15 @@ class SeekerOrchestrator:
             if outcome == "cancelled":
                 self.store.mark_cancelled(job, reason=termination_reason or job_status or run_status, now=now)
             else:
-                self.store.mark_completed(job, status=outcome, reason=termination_reason or job_status or run_status, now=now)
+                self.store.mark_completed(
+                    job, status=outcome, reason=termination_reason or job_status or run_status, now=now
+                )
             return
         self.store.touch_submitted_job(job, now, self.lease_seconds)
 
-    def probe_targets(self, dstack_bin: str, targets: tuple[SeekerTarget, ...]) -> tuple[list[TargetProbeResult], list[SeekerOffer]]:
+    def probe_targets(
+        self, dstack_bin: str, targets: tuple[SeekerTarget, ...]
+    ) -> tuple[list[TargetProbeResult], list[SeekerOffer]]:
         if not targets:
             return [], []
 
@@ -1223,8 +1238,7 @@ class SeekerOrchestrator:
         max_workers = max(1, min(_MAX_TARGET_PROBE_WORKERS, len(targets)))
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="seeker-offer-probe") as executor:
             future_map = {
-                executor.submit(fetch_target_offers, dstack_bin, target): index
-                for index, target in enumerate(targets)
+                executor.submit(fetch_target_offers, dstack_bin, target): index for index, target in enumerate(targets)
             }
             for future in as_completed(future_map):
                 index = future_map[future]
@@ -1257,7 +1271,9 @@ class SeekerOrchestrator:
         combined.sort(key=_offer_sort_key)
         return ordered_results, combined
 
-    def select_target_offer(self, probe_results: list[TargetProbeResult]) -> tuple[SeekerTarget | None, SeekerOffer | None]:
+    def select_target_offer(
+        self, probe_results: list[TargetProbeResult]
+    ) -> tuple[SeekerTarget | None, SeekerOffer | None]:
         return choose_targeted_offer(probe_results)
 
     def submit_lease_seconds(self, job: SeekerJob) -> int:
@@ -1390,9 +1406,7 @@ class SeekerOrchestrator:
         probe_results, snapshot_offers = self.probe_targets(dstack_bin, job.targets)
         target, offer = self.select_target_offer(probe_results)
         probe_error = "; ".join(
-            f"{result.target.backend}:{result.target.gpu}:{result.error}"
-            for result in probe_results
-            if result.error
+            f"{result.target.backend}:{result.target.gpu}:{result.error}" for result in probe_results if result.error
         )
         if target is None or offer is None:
             reason = "no configured target matched a live dstack offer"
@@ -1421,8 +1435,7 @@ def default_queue_store() -> QueueStore:
         raise
     except Exception as exc:
         raise RuntimeError(
-            "Seeker requires a reachable Postgres queue via SEEKER_QUEUE_DSN; "
-            f"startup failed: {exc}"
+            f"Seeker requires a reachable Postgres queue via SEEKER_QUEUE_DSN; startup failed: {exc}"
         ) from exc
     return store
 

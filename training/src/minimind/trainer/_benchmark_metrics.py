@@ -84,9 +84,7 @@ def resolve_peak_flops_profile(
     return None
 
 
-def resolve_peak_tflops_per_gpu(
-    gpu_name: str | None, gpu_profiles: list[dict] | None = None
-) -> float | None:
+def resolve_peak_tflops_per_gpu(gpu_name: str | None, gpu_profiles: list[dict] | None = None) -> float | None:
     profile = resolve_peak_flops_profile(gpu_name, gpu_profiles)
     return None if profile is None else profile.training_tflops_per_gpu
 

@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+
 try:
     import tomllib
 except ModuleNotFoundError:
@@ -14,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from gpupoor.utils import repo_path
+
 
 def _load_defaults() -> dict:
     """Load the project-wide defaults from defaults.toml."""
@@ -631,21 +633,22 @@ def parse_env_file(path: Path) -> dict[str, str]:
 
 _ENV_FILE_ALLOWED_KEYS = frozenset({"VCR_USERNAME", "VCR_PASSWORD", "HF_TOKEN"})
 
+
 def load_remote_settings(config: RemoteConfig | None = None) -> dict[str, str]:
     remote = config or RemoteConfig()
     settings = parse_env_file(repo_path(remote.env_file))
     unexpected = set(settings) - _ENV_FILE_ALLOWED_KEYS
     if unexpected:
         import logging
+
         logging.getLogger(__name__).warning(
             "%s contains non-secret keys: %s (use TOML instead)",
-            remote.env_file, ", ".join(sorted(unexpected)),
+            remote.env_file,
+            ", ".join(sorted(unexpected)),
         )
     # TOML is the sole source for non-secret config — no os.environ override
     settings["VCR_IMAGE_BASE"] = remote.vcr_image_base
-    settings["VCR_LOGIN_REGISTRY"] = (
-        remote.vcr_login_registry or settings["VCR_IMAGE_BASE"].rsplit("/", 1)[0]
-    )
+    settings["VCR_LOGIN_REGISTRY"] = remote.vcr_login_registry or settings["VCR_IMAGE_BASE"].rsplit("/", 1)[0]
     return settings
 
 
@@ -687,7 +690,25 @@ def find_dstack_bin() -> str:
     raise RuntimeError("No working dstack CLI found")
 
 
-_KNOWN_TOP_LEVEL = {"name", "recipe", "training", "backend", "mlflow", "doctor", "smoke", "remote", "seeker", "model", "pretokenize", "gpu_profiles", "dataset", "container", "dstack", "emulator", "dashboard"}
+_KNOWN_TOP_LEVEL = {
+    "name",
+    "recipe",
+    "training",
+    "backend",
+    "mlflow",
+    "doctor",
+    "smoke",
+    "remote",
+    "seeker",
+    "model",
+    "pretokenize",
+    "gpu_profiles",
+    "dataset",
+    "container",
+    "dstack",
+    "emulator",
+    "dashboard",
+}
 _KNOWN_RECIPE = {
     "kind",
     "prepare_data",
@@ -787,13 +808,54 @@ _KNOWN_REMOTE = {
 _KNOWN_SEEKER = {"poll_seconds", "max_offer_age_seconds", "max_submit_retries", "targets"}
 _KNOWN_SEEKER_TARGET = {"backend", "gpu", "count", "mode", "regions", "max_price"}
 _KNOWN_MODEL = {"internals", "generation", "rope_scaling"}
-_KNOWN_MODEL_INTERNALS = {"bos_token_id", "eos_token_id", "rms_norm_forward_eps", "freqs_end", "moe_topk_epsilon", "rope_scaling_min_ramp_denominator"}
+_KNOWN_MODEL_INTERNALS = {
+    "bos_token_id",
+    "eos_token_id",
+    "rms_norm_forward_eps",
+    "freqs_end",
+    "moe_topk_epsilon",
+    "rope_scaling_min_ramp_denominator",
+}
 _KNOWN_MODEL_GENERATION = {"max_new_tokens", "temperature", "top_p", "top_k", "eos_token_id", "repetition_penalty"}
-_KNOWN_MODEL_ROPE_SCALING = {"beta_fast", "beta_slow", "factor", "original_max_position_embeddings", "attention_factor", "type"}
+_KNOWN_MODEL_ROPE_SCALING = {
+    "beta_fast",
+    "beta_slow",
+    "factor",
+    "original_max_position_embeddings",
+    "attention_factor",
+    "type",
+}
 _KNOWN_PRETOKENIZE = {"tokenizer_path", "max_length", "overwrite", "progress_interval"}
-_KNOWN_DATASET = {"tokenizers_parallelism", "sample_add_system_ratio", "empty_think_ratio", "progress_interval", "tokens_dtype", "index_dtype", "version", "tokens_file", "index_file", "metadata_file", "system_prompts"}
+_KNOWN_DATASET = {
+    "tokenizers_parallelism",
+    "sample_add_system_ratio",
+    "empty_think_ratio",
+    "progress_interval",
+    "tokens_dtype",
+    "index_dtype",
+    "version",
+    "tokens_file",
+    "index_file",
+    "metadata_file",
+    "system_prompts",
+}
 _KNOWN_CONTAINER = {"data_root", "runtime_dataset_path", "runtime_output_dir"}
-_KNOWN_DSTACK = {"rendered_task_path", "tunnel_join_timeout_seconds", "min_restart_wait_seconds", "health_recheck_timeout_seconds", "task_sigterm_grace_seconds", "task_duration_buffer_minutes", "offer_timeout_seconds", "offer_query_timeout_seconds", "provider_max_offers", "targeted_max_offers", "run_start_poll_interval_seconds", "apply_timeout_buffer_seconds", "final_tunnel_join_timeout_seconds", "dry_run_mlflow_url"}
+_KNOWN_DSTACK = {
+    "rendered_task_path",
+    "tunnel_join_timeout_seconds",
+    "min_restart_wait_seconds",
+    "health_recheck_timeout_seconds",
+    "task_sigterm_grace_seconds",
+    "task_duration_buffer_minutes",
+    "offer_timeout_seconds",
+    "offer_query_timeout_seconds",
+    "provider_max_offers",
+    "targeted_max_offers",
+    "run_start_poll_interval_seconds",
+    "apply_timeout_buffer_seconds",
+    "final_tunnel_join_timeout_seconds",
+    "dry_run_mlflow_url",
+}
 _KNOWN_EMULATOR = {"health_port", "health_timeout_seconds", "per_check_health_timeout_seconds", "log_tail_lines"}
 _KNOWN_GPU_PROFILE = {"pattern", "canonical_name", "training_tflops", "fp8_tflops"}
 

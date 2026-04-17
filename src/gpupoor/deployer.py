@@ -131,7 +131,9 @@ class ConnectorRuntime:
                 mlflow_tracking_uri=config.mlflow.tracking_uri,
                 artifact_upload_enabled=request.artifact_upload_requested,
                 artifact_store_kind="local",
-                health_verdict=HEALTH_OK if http_ok(config.remote.mlflow_health_url, timeout_seconds=5) else "degraded",
+                health_verdict=HEALTH_OK
+                if http_ok(config.remote.mlflow_health_url, timeout_seconds=5)
+                else "degraded",
             )
         if request.lane != LANE_REMOTE:
             raise RuntimeError(f"Unsupported connector lane: {request.lane}")

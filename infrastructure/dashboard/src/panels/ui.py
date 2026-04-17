@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from html import escape
 from typing import Final
 
@@ -29,7 +29,7 @@ def compact_time(value: str | datetime | None) -> str:
     if value is None:
         return "n/a"
     if isinstance(value, datetime):
-        ts = value.astimezone(timezone.utc) if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        ts = value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
         return ts.strftime("%H:%M:%S UTC")
     text = str(value).strip()
     if not text:

@@ -8,8 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import threading
-
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from src.state import DstackRun, OfferSnapshot, TrainingSnapshot, get_state, reset_state
 
@@ -85,7 +84,7 @@ def test_shutdown_event_exposes_stop_signal():
 def test_offer_snapshot_defaults_capture_archival_shape():
     """Proves the offer history snapshot model carries stable defaults for
     availability sparklines and archival metadata."""
-    snap = OfferSnapshot(timestamp=datetime.now(timezone.utc))
+    snap = OfferSnapshot(timestamp=datetime.now(UTC))
     assert snap.available is False
     assert snap.price_per_hour == 0.0
     assert snap.count == 0

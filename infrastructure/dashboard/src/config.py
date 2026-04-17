@@ -122,9 +122,7 @@ GPU_SPECS: list[tuple[str, str, int | None]] = [
 # Dict mapping lowercase backend name -> (primary, muted, label)
 _pc = _DEFAULTS.get("platform_colors", {})
 PLATFORM_COLORS: dict[str, tuple[str, str, str]] = {
-    k: (v["primary"], v["muted"], v["label"])
-    for k, v in _pc.items()
-    if k != "_default"
+    k: (v["primary"], v["muted"], v["label"]) for k, v in _pc.items() if k != "_default"
 }
 _dc = _pc.get("_default", {"primary": "#8b949e", "muted": "#21262d", "label": "Other"})
 DEFAULT_PLATFORM_COLOR: tuple[str, str, str] = (_dc["primary"], _dc["muted"], _dc["label"])
