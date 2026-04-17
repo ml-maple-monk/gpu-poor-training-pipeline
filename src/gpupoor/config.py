@@ -629,14 +629,22 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return data
 
 
+_ENV_FILE_ALLOWED_KEYS = frozenset({"VCR_USERNAME", "VCR_PASSWORD", "HF_TOKEN"})
+
 def load_remote_settings(config: RemoteConfig | None = None) -> dict[str, str]:
     remote = config or RemoteConfig()
     settings = parse_env_file(repo_path(remote.env_file))
-    settings.update(os.environ)
-    settings.setdefault("VCR_IMAGE_BASE", remote.vcr_image_base)
-    settings.setdefault(
-        "VCR_LOGIN_REGISTRY",
-        remote.vcr_login_registry or settings["VCR_IMAGE_BASE"].rsplit("/", 1)[0],
+    unexpected = set(settings) - _ENV_FILE_ALLOWED_KEYS
+    if unexpected:
+        import logging
+        logging.getLogger(__name__).warning(
+            "%s contains non-secret keys: %s (use TOML instead)",
+            remote.env_file, ", ".join(sorted(unexpected)),
+        )
+    # TOML is the sole source for non-secret config — no os.environ override
+    settings["VCR_IMAGE_BASE"] = remote.vcr_image_base
+    settings["VCR_LOGIN_REGISTRY"] = (
+        remote.vcr_login_registry or settings["VCR_IMAGE_BASE"].rsplit("/", 1)[0]
     )
     return settings
 

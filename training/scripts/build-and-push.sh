@@ -21,7 +21,9 @@ source "$REPO_ROOT/training/scripts/lib/remote-env.sh"
 echo "[STEP 1/2] Building and pushing slim training base image..."
 
 load_remote_env
-require_vcr_auth
+if echo "${VCR_IMAGE_BASE:-}" | grep -q "vccr.io"; then
+    require_vcr_auth
+fi
 
 # doc-anchor: image-render-template
 # ── Resolve image SHA ────────────────────────────────────────────────────────

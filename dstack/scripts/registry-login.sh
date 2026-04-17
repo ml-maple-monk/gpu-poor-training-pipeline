@@ -12,7 +12,9 @@ if [ "${1:-}" = "--dry-run" ]; then
 fi
 
 load_remote_env
-require_vcr_auth
+if echo "${VCR_IMAGE_BASE:-}" | grep -q "vccr.io"; then
+    require_vcr_auth
+fi
 
 if [ "$DRY_RUN" -eq 1 ]; then
     echo "[vcr-login] DRY-RUN: would log in to $VCR_LOGIN_REGISTRY as \$VCR_USERNAME from env/.env.remote"

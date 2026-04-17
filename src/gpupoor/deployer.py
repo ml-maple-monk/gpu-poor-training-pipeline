@@ -45,7 +45,7 @@ class DeploymentRequest:
 
 def validate_remote_registry_auth(remote: RemoteConfig) -> None:
     settings = load_remote_settings(remote)
-    image_base = settings.get("VCR_IMAGE_BASE") or remote.vcr_image_base
+    image_base = settings["VCR_IMAGE_BASE"]
     registry = settings.get("VCR_LOGIN_REGISTRY", "").strip()
     env_file = repo_path(remote.env_file)
     if not registry:

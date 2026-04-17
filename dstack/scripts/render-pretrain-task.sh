@@ -28,17 +28,9 @@ TASK_INSTANCE_TYPES="${TASK_INSTANCE_TYPES:-}"
 TASK_MEMORY="${TASK_MEMORY:-1GB..}"
 TASK_DISK="${TASK_DISK:-1GB..}"
 
-# Save caller-provided overrides before load_remote_env which may clobber them.
-_CALLER_VCR_IMAGE_BASE="${VCR_IMAGE_BASE:-}"
-
 # shellcheck source=training/scripts/lib/remote-env.sh
 source "$REPO_ROOT/training/scripts/lib/remote-env.sh"
 load_remote_env
-
-# Restore caller override if it was set (TOML vcr_image_base takes precedence).
-if [ -n "$_CALLER_VCR_IMAGE_BASE" ]; then
-    VCR_IMAGE_BASE="$_CALLER_VCR_IMAGE_BASE"
-fi
 
 # Only require VCR auth when using the Verda Container Registry.
 # Public registries (Docker Hub, GHCR) don't need registry_auth.

@@ -309,9 +309,6 @@ def render_task(settings: dict[str, str], config: RunConfig, image_sha: str) -> 
     render_env = dict(settings)
     render_env["IMAGE_SHA"] = image_sha
     render_env["TASK_NAME"] = config.name
-    # TOML vcr_image_base overrides .env.remote when explicitly set in config.
-    if config.remote.vcr_image_base:
-        render_env["VCR_IMAGE_BASE"] = config.remote.vcr_image_base
     render_env["TASK_MAX_DURATION"] = task_max_duration(config.recipe.time_cap_seconds)
     # Task/GPU overrides: unset fields fall back to shell defaults so the
     # baseline example stays unchanged while targeted runs (e.g. B300) can
@@ -608,12 +605,6 @@ def launch_remote(
 
     settings = load_remote_settings(config.remote)
     require_remote_settings(settings)
-    # TOML vcr_image_base takes precedence over .env.remote for ALL steps
-    # (build, push, render). Without this, .env.remote's vccr.io overrides
-    # the TOML's Docker Hub setting and pushes to the wrong registry.
-    if config.remote.vcr_image_base:
-        settings["VCR_IMAGE_BASE"] = config.remote.vcr_image_base
-        os.environ["VCR_IMAGE_BASE"] = config.remote.vcr_image_base
     dstack_bin = find_dstack_bin()
 
     ops.run_preflight(remote=True, doctor=config.doctor, remote_config=config.remote)
@@ -672,7 +663,7 @@ def launch_remote(
             else:
                 bash_script(
                     repo_path("training", "scripts", "prepare-data.sh"),
-                    env={**settings, **os.environ, "UPLOAD_PRETOKENIZED_DATASET": "1"},
+                    env={**os.environ, **settings, "UPLOAD_PRETOKENIZED_DATASET": "1"},
                 )
         else:
             log.info("Skipping dataset preparation (prepare_data=false)")
@@ -687,7 +678,7 @@ def launch_remote(
             if dry_run:
                 print("[DRY-RUN] Would build and push the remote image")
             elif not use_skip_build:
-                bash_script(repo_path("training", "scripts", "build-and-push.sh"))
+                bash_script(repo_path("training", "scripts", "build-and-push.sh"), env={**os.environ, **settings})
         else:
             log.info("Skipping remote image build")
 
