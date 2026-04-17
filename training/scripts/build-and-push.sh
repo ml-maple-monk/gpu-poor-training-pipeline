@@ -49,10 +49,14 @@ echo "[build] TRAINING_BASE_RUNTIME_IMAGE=$BASE_RUNTIME_IMAGE"
 echo "[build] Base image: $BASE_IMAGE_SHA"
 echo "[build] Image: $IMAGE_SHA"
 
-# ── Docker login (VCR) ───────────────────────────────────────────────────────
-echo "[build] Logging in to $VCR_LOGIN_REGISTRY as \$VCR_USERNAME ..."
-printf '%s\n' "$VCR_PASSWORD" | docker login "$VCR_LOGIN_REGISTRY" -u "$VCR_USERNAME" --password-stdin
-echo "[build] Docker login OK"
+# ── Docker login (VCR only — Docker Hub uses existing auth) ──────────────────
+if echo "${VCR_IMAGE_BASE:-}" | grep -q "vccr.io"; then
+    echo "[build] Logging in to $VCR_LOGIN_REGISTRY as \$VCR_USERNAME ..."
+    printf '%s\n' "$VCR_PASSWORD" | docker login "$VCR_LOGIN_REGISTRY" -u "$VCR_USERNAME" --password-stdin
+    echo "[build] Docker login OK"
+else
+    echo "[build] Using existing Docker auth for ${VCR_IMAGE_BASE}"
+fi
 
 ensure_pretokenized_dataset() {
     local required_file
