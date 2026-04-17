@@ -7,6 +7,7 @@ from pathlib import Path
 from gpupoor.config import parse_env_file
 from gpupoor.subprocess_utils import bash_script, run_command
 from gpupoor.utils import repo_path
+from gpupoor.utils.http import http_ok, wait_for_health
 
 LOCAL_ARTIFACTS_DESTINATION = "/mlflow/artifacts"
 _R2_ENV_KEYS = (
@@ -95,3 +96,20 @@ def tunnel(extra_args: list[str] | None = None) -> None:
         *(extra_args or []),
         env=_connector_env(),
     )
+
+
+def ensure_runtime(
+    health_url: str,
+    *,
+    total_timeout_seconds: int = 120,
+    per_check_timeout_seconds: int = 5,
+) -> None:
+    if http_ok(health_url, timeout_seconds=per_check_timeout_seconds):
+        return
+    up()
+    if not wait_for_health(
+        health_url,
+        total_timeout_seconds=total_timeout_seconds,
+        per_check_timeout_seconds=per_check_timeout_seconds,
+    ):
+        raise RuntimeError(f"MLflow did not become healthy at {health_url}")

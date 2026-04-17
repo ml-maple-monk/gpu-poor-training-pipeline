@@ -1,10 +1,44 @@
-"""Seeker queue orchestration with explicit store-backed state transitions.
+"""Seeker queue orchestration for remote GPU placement and launch retries.
 
-The public CLI surface stays the same (`enqueue`, `daemon`, `status`), but the
-implementation now treats queue claims, retries, dashboard projections, and
-offer probing as named orchestration steps instead of hidden helper side
-effects. A Postgres queue authority is the default runtime path, while the
-legacy file-backed queue remains available as a test/local compatibility store.
+This module is the control plane behind `gpupoor seeker enqueue`, `daemon`, and
+`status`. Its job is to turn a user-supplied run config into durable queued
+work, probe provider offers for each configured seeker target, and hand the
+best matching target to `deployer.py` only when capacity is actually available.
+
+The main design goals are:
+
+1. Freeze launch intent at enqueue time.
+   The seeker stores a fully merged base64 TOML snapshot plus the parsed seeker
+   policy so later edits to the source config file do not rewrite already
+   queued jobs.
+2. Make state transitions explicit.
+   Queue mutation is modeled as named transitions such as pending -> claimed ->
+   launching -> submitted -> completed/cancelled instead of helper functions
+   that silently reshuffle queue state.
+3. Support multi-daemon safety.
+   The only runtime store is Postgres, using lease ownership plus
+   `FOR UPDATE SKIP LOCKED` claims so multiple daemons can compete for work
+   without intentionally double-claiming the same job.
+4. Preserve dashboard compatibility.
+   Even when Postgres is authoritative, the seeker still projects a simplified
+   read-only view to `data/seeker/queue.json`, `latest_offers.json`, and
+   `attempts.jsonl` so the dashboard and status commands can keep using files.
+5. Keep scheduling policy deterministic.
+   Target offer probes run concurrently for speed, but results are reordered
+   back into declaration order before selection. The first configured target
+   with a valid live offer wins; the cheapest offer is chosen only within that
+   target.
+
+At a high level, the daemon loop does this:
+
+- ensure the queue store schema exists
+- requeue expired claims
+- refresh an already submitted/launching job if one is due
+- otherwise claim the next pending job
+- probe offers for that job's frozen targets
+- record diagnostics or retry state when no target matches
+- call `deploy_remote_request()` when a match is found
+- project current queue/offer/attempt state back to the file snapshots
 """
 
 from __future__ import annotations
@@ -375,6 +409,7 @@ def parse_attempt(item: dict[str, Any]) -> SeekerAttempt:
 
 
 def load_queue() -> SeekerQueue:
+    """Read the projected queue snapshot written for dashboard compatibility."""
     path = queue_path()
     if not path.is_file():
         return SeekerQueue()
@@ -390,6 +425,10 @@ def load_queue() -> SeekerQueue:
 
 
 def save_queue(queue: SeekerQueue) -> None:
+    """Write a projected queue snapshot.
+
+    This helper only updates the file read-model under ``data/seeker/``.
+    """
     payload = {
         "active": serialize_job(queue.active_jobs[0], public=False) if queue.active_jobs else None,
         "active_jobs": [serialize_job(job, public=False) for job in queue.active_jobs],
@@ -426,6 +465,7 @@ def write_offer_snapshot(seeker: SeekerConfig, normalized_offers: list[SeekerOff
 
 
 def read_recent_attempts(limit: int = 5) -> list[dict[str, Any]]:
+    """Read projected attempt rows from the dashboard-compatible JSONL file."""
     path = attempts_path()
     if not path.is_file():
         return []
@@ -534,179 +574,6 @@ class QueueStore:
 
     def recommended_sleep_seconds(self, now: datetime) -> int:
         raise NotImplementedError
-
-
-class FileQueueStore(QueueStore):
-    """Compatibility store used by tests and local read/write probes."""
-
-    def ensure_schema(self) -> None:
-        seeker_data_dir()
-
-    def enqueue_job(self, snapshot: FrozenRunConfigSnapshot) -> SeekerJob:
-        queue = load_queue()
-        job = SeekerJob(
-            job_id=uuid.uuid4().hex[:_ID_HEX_LENGTH],
-            config_name=snapshot.config_name,
-            config_path=snapshot.config_path,
-            enqueued_at=utc_now(),
-            frozen_config_b64=snapshot.merged_config_b64,
-            targets=snapshot.targets,
-            poll_seconds=snapshot.poll_seconds,
-            submit_timeout_seconds=snapshot.submit_timeout_seconds,
-            max_offer_age_seconds=snapshot.max_offer_age_seconds,
-            max_submit_retries=snapshot.max_submit_retries,
-            state=SeekerJobState.PENDING.value,
-            last_status="pending",
-            updated_at=utc_now(),
-        )
-        queue.pending.append(job)
-        save_queue(queue)
-        return job
-
-    def requeue_expired_claims(self, now: datetime, lease_seconds: int) -> None:
-        queue = load_queue()
-        changed = False
-        for job in list(queue.active_jobs):
-            expires_at = parse_timestamp(job.lease_expires_at)
-            if expires_at is None or expires_at >= now:
-                continue
-            if job.state == SeekerJobState.CLAIMED.value and not job.submitted_run_name:
-                queue.active_jobs.remove(job)
-                job.state = SeekerJobState.PENDING.value
-                job.lease_owner = ""
-                job.lease_expires_at = ""
-                job.claimed_at = ""
-                job.updated_at = utc_now()
-                queue.pending.append(job)
-                changed = True
-        if changed:
-            save_queue(queue)
-
-    def claim_existing_submitted_job(self, worker_id: str, now: datetime, lease_seconds: int) -> SeekerJob | None:
-        queue = load_queue()
-        for index, job in enumerate(queue.active_jobs):
-            if job.state != SeekerJobState.SUBMITTED.value:
-                continue
-            next_poll_at = parse_timestamp(job.next_poll_at)
-            expires_at = parse_timestamp(job.lease_expires_at)
-            lease_expired = expires_at is None or expires_at < now
-            owned = job.lease_owner == worker_id or not job.lease_owner or lease_expired
-            if not owned or (next_poll_at is not None and next_poll_at > now):
-                continue
-            job.lease_owner = worker_id
-            job.lease_expires_at = format_timestamp(now + timedelta(seconds=lease_seconds))
-            job.updated_at = utc_now()
-            queue.active_jobs[index] = job
-            save_queue(queue)
-            return job
-        return None
-
-    def claim_next_pending_job(self, worker_id: str, now: datetime, lease_seconds: int) -> SeekerJob | None:
-        queue = load_queue()
-        for index, job in enumerate(queue.pending):
-            next_poll_at = parse_timestamp(job.next_poll_at)
-            if next_poll_at is not None and next_poll_at > now:
-                continue
-            claimed_job = queue.pending.pop(index)
-            claimed_job.state = SeekerJobState.CLAIMED.value
-            claimed_job.claimed_at = utc_now()
-            claimed_job.lease_owner = worker_id
-            claimed_job.lease_expires_at = format_timestamp(now + timedelta(seconds=lease_seconds))
-            claimed_job.updated_at = utc_now()
-            queue.active_jobs.append(claimed_job)
-            save_queue(queue)
-            return claimed_job
-        return None
-
-    def _replace_active_job(self, updated_job: SeekerJob) -> None:
-        queue = load_queue()
-        for index, job in enumerate(queue.active_jobs):
-            if job.job_id == updated_job.job_id:
-                queue.active_jobs[index] = updated_job
-                save_queue(queue)
-                return
-        raise RuntimeError(f"Active seeker job {updated_job.job_id} is missing from queue.json")
-
-    def update_submitted_job(self, job: SeekerJob, now: datetime, lease_seconds: int) -> SeekerJob:
-        job.state = SeekerJobState.SUBMITTED.value
-        job.last_status = "submitted"
-        job.last_reason = ""
-        job.next_poll_at = format_timestamp(now + timedelta(seconds=job.poll_seconds))
-        job.lease_expires_at = format_timestamp(now + timedelta(seconds=lease_seconds))
-        job.updated_at = utc_now()
-        self._replace_active_job(job)
-        return job
-
-    def mark_launching(self, job: SeekerJob, now: datetime, lease_seconds: int) -> SeekerJob:
-        job.state = SeekerJobState.LAUNCHING.value
-        job.last_status = SeekerJobState.LAUNCHING.value
-        job.last_reason = ""
-        job.next_poll_at = ""
-        job.lease_expires_at = format_timestamp(now + timedelta(seconds=lease_seconds))
-        job.updated_at = utc_now()
-        self._replace_active_job(job)
-        return job
-
-    def touch_submitted_job(self, job: SeekerJob, now: datetime, lease_seconds: int) -> SeekerJob:
-        job.next_poll_at = format_timestamp(now + timedelta(seconds=job.poll_seconds))
-        job.lease_expires_at = format_timestamp(now + timedelta(seconds=lease_seconds))
-        job.updated_at = utc_now()
-        self._replace_active_job(job)
-        return job
-
-    def move_to_retry_wait(self, job: SeekerJob, *, status: str, reason: str, now: datetime) -> SeekerJob:
-        queue = load_queue()
-        queue.active_jobs = [active for active in queue.active_jobs if active.job_id != job.job_id]
-        job.state = SeekerJobState.RETRY_WAIT.value
-        job.submitted_run_name = ""
-        job.last_status = status
-        job.last_reason = reason
-        job.next_poll_at = format_timestamp(now + timedelta(seconds=job.poll_seconds))
-        job.lease_owner = ""
-        job.lease_expires_at = ""
-        job.updated_at = utc_now()
-        queue.pending.append(job)
-        save_queue(queue)
-        return job
-
-    def mark_completed(self, job: SeekerJob, *, status: str, reason: str, now: datetime) -> None:
-        queue = load_queue()
-        queue.active_jobs = [active for active in queue.active_jobs if active.job_id != job.job_id]
-        save_queue(queue)
-
-    def mark_cancelled(self, job: SeekerJob, *, reason: str, now: datetime) -> None:
-        queue = load_queue()
-        queue.active_jobs = [active for active in queue.active_jobs if active.job_id != job.job_id]
-        queue.pending = [pending for pending in queue.pending if pending.job_id != job.job_id]
-        save_queue(queue)
-
-    def record_attempt(self, attempt: SeekerAttempt) -> None:
-        append_jsonl(attempts_path(), serialize_attempt(attempt))
-
-    def projection_queue(self) -> SeekerQueue:
-        return load_queue()
-
-    def recent_attempts(self, limit: int = 10) -> list[SeekerAttempt]:
-        return [parse_attempt(row) for row in read_recent_attempts(limit)]
-
-    def recommended_sleep_seconds(self, now: datetime) -> int:
-        queue = load_queue()
-        if queue.active_jobs:
-            return 1
-        ready_pending = [
-            job
-            for job in queue.pending
-            if parse_timestamp(job.next_poll_at) is None or parse_timestamp(job.next_poll_at) <= now
-        ]
-        if ready_pending:
-            return 1
-        next_due = min(
-            (parse_timestamp(job.next_poll_at) for job in queue.pending if job.next_poll_at),
-            default=None,
-        )
-        if next_due is None:
-            return _DEFAULT_IDLE_POLL_SECONDS
-        return max(1, min(_DEFAULT_IDLE_POLL_SECONDS, int((next_due - now).total_seconds())))
 
 
 def _require_psycopg() -> tuple[Any, Any]:
@@ -1187,10 +1054,14 @@ class PostgresQueueStore(QueueStore):
                 f"""
                 SELECT *
                 FROM {_QUEUE_SCHEMA}.jobs
-                WHERE state IN (%s, %s)
+                WHERE state IN (%s, %s, %s)
                 ORDER BY enqueued_at
                 """,
-                (SeekerJobState.CLAIMED.value, SeekerJobState.SUBMITTED.value),
+                (
+                    SeekerJobState.CLAIMED.value,
+                    SeekerJobState.LAUNCHING.value,
+                    SeekerJobState.SUBMITTED.value,
+                ),
             ).fetchall()
             pending_rows = conn.execute(
                 f"""
@@ -1540,7 +1411,20 @@ class SeekerOrchestrator:
 
 
 def default_queue_store() -> QueueStore:
-    return PostgresQueueStore(queue_dsn())
+    dsn = queue_dsn().strip()
+    if not dsn:
+        raise RuntimeError("Seeker requires SEEKER_QUEUE_DSN to point to a reachable Postgres queue")
+    store = PostgresQueueStore(dsn)
+    try:
+        store.ensure_schema()
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError(
+            "Seeker requires a reachable Postgres queue via SEEKER_QUEUE_DSN; "
+            f"startup failed: {exc}"
+        ) from exc
+    return store
 
 
 def default_file_projector() -> FileSnapshotProjector:
@@ -1616,7 +1500,7 @@ def ensure_daemon_runtime(dstack_bin: str) -> None:
         start_timeout_seconds=remote.dstack_server_start_timeout_seconds,
         dry_run=False,
     )
-    default_queue_store().ensure_schema()
+    default_queue_store()
 
 
 def daemon() -> None:
