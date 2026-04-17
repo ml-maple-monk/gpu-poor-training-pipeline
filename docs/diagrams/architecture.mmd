@@ -1,28 +1,133 @@
-flowchart TD
-    DEV["developer"] --> CLI["gpupoor CLI<br/>src/gpupoor/cli.py"]
-    DEV --> RUN["run.sh"]
-    DEV --> MAKE["Makefile targets"]
-    RUN --> CLI
+flowchart LR
+    classDef surface fill:#e0f2fe,stroke:#0284c7,color:#0f172a,stroke-width:1.5px;
+    classDef contract fill:#fef3c7,stroke:#d97706,color:#111827,stroke-width:1.5px;
+    classDef control fill:#dcfce7,stroke:#16a34a,color:#111827,stroke-width:1.5px;
+    classDef exec fill:#ede9fe,stroke:#7c3aed,color:#111827,stroke-width:1.5px;
+    classDef state fill:#fee2e2,stroke:#dc2626,color:#111827,stroke-width:1.5px;
+    classDef external fill:#f3f4f6,stroke:#4b5563,color:#111827,stroke-width:1.5px;
 
-    CLI --> CFG["config.py<br/>TOML to RunConfig<br/>strict-keys"]
+    subgraph Entry["Entry Surfaces"]
+        direction TB
+        DEV["Developer / Operator"]
+        WRAPPERS["run.sh + Makefile"]
+        CLI["gpupoor CLI<br/>src/gpupoor/cli.py"]
+    end
 
-    CFG --> OPS["ops/<br/>doctor, smoke, secrets<br/>leak-scan, check-anchors"]
-    CFG --> BACKEND{"backend.kind"}
-    CFG --> SERVICES["services/<br/>mlflow, dashboard, emulator"]
+    subgraph Control["Control Plane + Contracts"]
+        direction TB
+        CFG["config.py<br/>TOML to RunConfig<br/>RemoteConfig / SeekerConfig"]
+        RTCFG["runtime_config.py<br/>merged TOML + base64 payload"]
+        REQ["Launch contracts<br/>DeploymentRequest<br/>ConnectionProfileRequest<br/>ConnectionBundle"]
+        OPS["ops<br/>preflight + repo checks"]
+        SEEKER["services/seeker.py<br/>queue daemon + offer matching"]
+        DEPLOYER["deployer.py<br/>remote/local deployment gates"]
+        CONNECTOR["connector.py<br/>MLflow + tunnel + R2 readiness"]
+        MLFSVC["services/mlflow.py<br/>compose + tunnel control"]
+        DASHSVC["services/dashboard.py<br/>dashboard control"]
+        EMUSVC["services/emulator.py<br/>local emulator control"]
+    end
 
-    BACKEND -- local --> LOCAL["backends/local.py<br/>docker compose"]
-    BACKEND -- dstack --> DSTACK["backends/dstack.py<br/>launch_remote"]
+    subgraph State["State + Sidecars"]
+        direction TB
+        SEEKERSTATE["data/seeker/<br/>queue.json<br/>latest_offers.json<br/>attempts.jsonl"]
+        CONNSTATE["capacity-seeker/<br/>.connector.json<br/>.env.connector<br/>.env.r2"]
+        TUNSTATE["repo sidecars<br/>.cf-tunnel.url / .pid<br/>.run-ids / .dstack-server.log"]
+        BUILDSTATE["generated task + cache<br/>.tmp/*<br/>remote-image-tag.json"]
+    end
 
-    LOCAL --> DOCKER["Docker"]
-    DSTACK --> DCLI["dstack CLI"]
-    DSTACK --> TUNNEL["Cloudflare tunnel<br/>cf-tunnel.url"]
-    DCLI --> VERDA["Verda fleet"]
+    subgraph Execute["Execution + Training"]
+        direction TB
+        LOCAL["backends/local.py<br/>compose run_training()"]
+        DSTACK["backends/dstack.py<br/>offers + render + apply + track"]
+        TRAIN["training/scripts<br/>prepare-data / build-push<br/>remote-entrypoint / run-train"]
+        MINIMIND["training/src/minimind<br/>recipe + trainer runtime"]
+        IMAGES["training/docker + compose<br/>base / train / remote images"]
+        REMOTERUN["Remote dstack task<br/>GPU container runtime"]
+    end
 
-    SERVICES --> MLFLOW["MLflow<br/>port 5000"]
-    SERVICES --> DASH["Dashboard (Gradio)<br/>port 7860"]
-    TUNNEL --> MLFLOW
+    subgraph External["External Systems"]
+        direction TB
+        DOCKER["Docker engine / compose"]
+        DSTACKSYS["dstack CLI + local server"]
+        CF["Cloudflare Tunnel + DNS"]
+        MLFLOW["MLflow service"]
+        DASH["Dashboard service"]
+        R2["Cloudflare R2 / S3"]
+        HF["Hugging Face"]
+        GPUFLEET["Remote GPU providers"]
+    end
 
-    DASH --> COLLECTORS["7 collectors"]
-    COLLECTORS --> MLFLOW
-    COLLECTORS --> DCLI
-    COLLECTORS --> DOCKER
+    DEV --> WRAPPERS
+    DEV --> CLI
+    WRAPPERS --> CLI
+
+    CLI --> CFG
+    CLI --> OPS
+    CLI --> SEEKER
+    CLI --> DEPLOYER
+    CLI --> CONNECTOR
+    CLI --> MLFSVC
+    CLI --> DASHSVC
+    CLI --> EMUSVC
+
+    CFG --> RTCFG
+    CFG --> SEEKER
+    CFG --> DEPLOYER
+    CFG --> CONNECTOR
+
+    SEEKER --> SEEKERSTATE
+    SEEKER -- "targeted offers" --> DSTACK
+    SEEKER -- "DeploymentRequest" --> DEPLOYER
+
+    DEPLOYER --> REQ
+    CONNECTOR --> REQ
+    DEPLOYER -- "ConnectionProfileRequest" --> CONNECTOR
+    CONNECTOR -- "ConnectionBundle" --> DEPLOYER
+    DEPLOYER --> LOCAL
+    DEPLOYER --> DSTACK
+
+    RTCFG -- "GPUPOOR_RUN_CONFIG" --> LOCAL
+    RTCFG -- "GPUPOOR_RUN_CONFIG_B64" --> DSTACK
+
+    CONNECTOR --> CONNSTATE
+    CONNECTOR --> TUNSTATE
+    CONNECTOR --> MLFSVC
+    CONNECTOR --> DASHSVC
+    CONNECTOR --> CF
+    CONNECTOR --> R2
+
+    MLFSVC --> DOCKER
+    MLFSVC --> MLFLOW
+    MLFSVC -- "run-tunnel.sh" --> CF
+
+    DASHSVC --> DOCKER
+    DASHSVC --> DASH
+    DASH -- "read-only polling" --> MLFLOW
+
+    EMUSVC --> DOCKER
+
+    LOCAL --> DOCKER
+    LOCAL --> TRAIN
+
+    DSTACK --> BUILDSTATE
+    DSTACK --> DSTACKSYS
+    DSTACK --> TRAIN
+    DSTACKSYS --> GPUFLEET
+    GPUFLEET --> REMOTERUN
+    REMOTERUN --> TRAIN
+
+    TRAIN --> IMAGES
+    TRAIN --> MINIMIND
+    TRAIN --> HF
+
+    MINIMIND --> MLFLOW
+    MINIMIND -- "artifacts / checkpoints" --> R2
+    CF --> MLFLOW
+    CF --> DASH
+
+    class DEV,WRAPPERS,CLI surface;
+    class CFG,RTCFG,REQ contract;
+    class OPS,SEEKER,DEPLOYER,CONNECTOR,MLFSVC,DASHSVC,EMUSVC control;
+    class LOCAL,DSTACK,TRAIN,MINIMIND,IMAGES,REMOTERUN exec;
+    class SEEKERSTATE,CONNSTATE,TUNSTATE,BUILDSTATE state;
+    class DOCKER,DSTACKSYS,CF,MLFLOW,DASH,R2,HF,GPUFLEET external;

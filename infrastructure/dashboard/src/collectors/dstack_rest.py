@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 
+from ..config import DSTACK_RUNS_LIMIT
 from ..errors import SourceStatus
 from ..safe_exec import safe_dstack_rest
 from ..state import DstackRun
@@ -19,7 +20,7 @@ def collect_dstack_runs() -> tuple[list[DstackRun], SourceStatus]:
     """Fetch current dstack runs via REST (POST /api/runs/list)."""
     try:
         # dstack 0.20+ requires POST with empty filter body
-        resp = safe_dstack_rest("runs/list", method="POST", json={"limit": 50})
+        resp = safe_dstack_rest("runs/list", method="POST", json={"limit": DSTACK_RUNS_LIMIT})
         data = resp.json()
         runs_raw: list[dict[str, Any]] = data if isinstance(data, list) else data.get("runs", [])
         runs: list[DstackRun] = []

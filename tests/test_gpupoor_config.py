@@ -323,6 +323,42 @@ max_price = 4.0
     assert config.seeker.targets[1].mode == "on-demand"
 
 
+def test_seeker_target_regions_default_to_all_regions_when_omitted_or_empty(tmp_path: Path) -> None:
+    config_file = tmp_path / "seeker-regions.toml"
+    config_file.write_text(
+        """
+name = "seek-regions"
+[recipe]
+[backend]
+kind = "dstack"
+[mlflow]
+[doctor]
+[smoke]
+[remote]
+[seeker]
+
+[[seeker.targets]]
+backend = "runpod"
+gpu = "H100"
+count = 1
+mode = "spot"
+
+[[seeker.targets]]
+backend = "vastai"
+gpu = "H100"
+count = 1
+mode = "spot"
+regions = []
+""",
+        encoding="utf-8",
+    )
+
+    config = load_run_config(config_file)
+
+    assert config.seeker.targets[0].regions == ()
+    assert config.seeker.targets[1].regions == ()
+
+
 def test_backend_aliases_normalize_vast_ai_in_remote_and_seeker_config(tmp_path: Path) -> None:
     config_file = tmp_path / "vast-seeker.toml"
     config_file.write_text(

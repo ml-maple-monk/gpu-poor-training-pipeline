@@ -7,20 +7,14 @@ from typing import Any
 
 import httpx
 
+from ..config import GPU_SPECS, MAX_OFFERS_PER_GPU, TIMEOUT_DSTACK_OFFERS
 from ..errors import SourceStatus
 from ..safe_exec import safe_dstack_rest
 from ..state import SeekerOffer
 
 log = logging.getLogger(__name__)
 
-# GPU specs to query pricing for: (probe name, display name, min_memory_mib)
-GPU_SPECS = [
-    ("A100", "A100-80G", 75_000),
-    ("H100", "H100", None),
-    ("H200", "H200", None),
-    ("B200", "B200", None),
-    ("B300", "B300", None),
-]
+# GPU_SPECS imported from config
 
 
 # doc-anchor: verda-offers-busybox
@@ -52,9 +46,9 @@ def collect_verda_offers() -> tuple[list[SeekerOffer], SourceStatus]:
                         "repo_id": "offers-probe",
                         "repo_data": {"repo_type": "virtual"},
                     },
-                    "max_offers": 20,
+                    "max_offers": MAX_OFFERS_PER_GPU,
                 },
-                timeout=15.0,
+                timeout=TIMEOUT_DSTACK_OFFERS,
             )
             data = resp.json()
             # dstack 0.20+: offers are nested in job_plans[*].offers[*]

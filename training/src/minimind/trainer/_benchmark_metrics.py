@@ -14,8 +14,6 @@ import torch.distributed as dist
 _PYNVML_UNSET = object()
 pynvml: Any = _PYNVML_UNSET
 
-DEFAULT_VALIDATION_SPLIT_SEED = 42
-
 
 def _load_pynvml() -> Any | None:
     global pynvml
@@ -40,82 +38,6 @@ class PeakFlopsProfile:
         self.canonical_name = canonical_name
         self.training_tflops_per_gpu = training_tflops_per_gpu
         self.fp8_tflops_per_gpu = fp8_tflops_per_gpu
-
-
-_PEAK_FLOPS_RULES: tuple[tuple[re.Pattern[str], PeakFlopsProfile], ...] = (
-    (
-        re.compile(r"\bRTX\s+PRO\s+6000\b"),
-        PeakFlopsProfile("RTX PRO 6000", training_tflops_per_gpu=1000.0, fp8_tflops_per_gpu=2000.0),
-    ),
-    (
-        re.compile(r"\bRTX\s+6000\s+ADA(?:\s+GENERATION)?\b"),
-        PeakFlopsProfile("RTX 6000 ADA", training_tflops_per_gpu=364.2, fp8_tflops_per_gpu=728.4),
-    ),
-    (
-        re.compile(r"\bRTX\s+A6000\b"),
-        PeakFlopsProfile("RTX A6000", training_tflops_per_gpu=154.8),
-    ),
-    (
-        re.compile(r"\bL40S\b"),
-        PeakFlopsProfile("L40S", training_tflops_per_gpu=362.05, fp8_tflops_per_gpu=733.0),
-    ),
-    (
-        re.compile(r"\bB300\b"),
-        PeakFlopsProfile("B300", training_tflops_per_gpu=2250.0, fp8_tflops_per_gpu=4500.0),
-    ),
-    (
-        re.compile(r"\bB200\b"),
-        PeakFlopsProfile("B200", training_tflops_per_gpu=2250.0, fp8_tflops_per_gpu=4500.0),
-    ),
-    (
-        re.compile(r"\bH200\s+NVL\b"),
-        PeakFlopsProfile("H200 NVL", training_tflops_per_gpu=835.0, fp8_tflops_per_gpu=1671.0),
-    ),
-    (
-        re.compile(r"\bH200\b"),
-        PeakFlopsProfile("H200", training_tflops_per_gpu=989.0, fp8_tflops_per_gpu=1979.0),
-    ),
-    (
-        re.compile(r"\bH100\s+NVL\b"),
-        PeakFlopsProfile("H100 NVL", training_tflops_per_gpu=835.0, fp8_tflops_per_gpu=1671.0),
-    ),
-    (
-        re.compile(r"\bH100\b"),
-        PeakFlopsProfile("H100", training_tflops_per_gpu=989.0, fp8_tflops_per_gpu=1979.0),
-    ),
-    (
-        re.compile(r"\bA100\b"),
-        PeakFlopsProfile("A100", training_tflops_per_gpu=312.0),
-    ),
-    (
-        re.compile(r"\bV100\b"),
-        PeakFlopsProfile("V100", training_tflops_per_gpu=125.0),
-    ),
-    (
-        re.compile(r"\bA10\b"),
-        PeakFlopsProfile("A10", training_tflops_per_gpu=125.0),
-    ),
-    (
-        re.compile(r"\bL4\b"),
-        PeakFlopsProfile("L4", training_tflops_per_gpu=121.0, fp8_tflops_per_gpu=242.0),
-    ),
-    (
-        re.compile(r"\bRTX\s+4090\s+LAPTOP\b"),
-        PeakFlopsProfile("RTX 4090 Laptop", training_tflops_per_gpu=85.8, fp8_tflops_per_gpu=171.5),
-    ),
-    (
-        re.compile(r"\bRTX\s+4090\b"),
-        PeakFlopsProfile("RTX 4090", training_tflops_per_gpu=165.2, fp8_tflops_per_gpu=330.3),
-    ),
-    (
-        re.compile(r"\bRTX\s+3090\b"),
-        PeakFlopsProfile("RTX 3090", training_tflops_per_gpu=71.0),
-    ),
-    (
-        re.compile(r"\bT4\b"),
-        PeakFlopsProfile("T4", training_tflops_per_gpu=65.0),
-    ),
-)
 
 
 def dist_ready() -> bool:
@@ -143,19 +65,27 @@ def normalize_gpu_name(gpu_name: str | None) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9]+", " ", gpu_name.upper())).strip()
 
 
-def resolve_peak_flops_profile(gpu_name: str | None) -> PeakFlopsProfile | None:
+def resolve_peak_flops_profile(
+    gpu_name: str | None, gpu_profiles: list[dict] | None = None
+) -> PeakFlopsProfile | None:
+    """Match *gpu_name* against *gpu_profiles* loaded from TOML config."""
     normalized = normalize_gpu_name(gpu_name)
-    if not normalized:
+    if not normalized or gpu_profiles is None:
         return None
 
-    for pattern, profile in _PEAK_FLOPS_RULES:
+    for profile in gpu_profiles:
+        pattern = re.compile(profile["pattern"])
         if pattern.search(normalized):
-            return profile
+            return PeakFlopsProfile(
+                profile["canonical_name"],
+                training_tflops_per_gpu=profile["training_tflops"],
+                fp8_tflops_per_gpu=profile.get("fp8_tflops"),
+            )
     return None
 
 
-def resolve_peak_tflops_per_gpu(gpu_name: str | None) -> float | None:
-    profile = resolve_peak_flops_profile(gpu_name)
+def resolve_peak_tflops_per_gpu(gpu_name: str | None, gpu_profiles: list[dict] | None = None) -> float | None:
+    profile = resolve_peak_flops_profile(gpu_name, gpu_profiles)
     return None if profile is None else profile.training_tflops_per_gpu
 
 
@@ -191,7 +121,7 @@ def split_validation_indices(
     sample_count: int,
     validation_split_ratio: float,
     *,
-    seed: int = DEFAULT_VALIDATION_SPLIT_SEED,
+    seed: int = 42,
 ) -> tuple[list[int], list[int]]:
     if sample_count < 2 or validation_split_ratio <= 0.0:
         return list(range(sample_count)), []

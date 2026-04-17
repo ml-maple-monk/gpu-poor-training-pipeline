@@ -7,7 +7,13 @@ from datetime import datetime
 
 import requests
 
-from ..config import MLFLOW_URL
+from ..config import (
+    MLFLOW_MAX_METRIC_HISTORY,
+    MLFLOW_MAX_METRICS_PER_RUN,
+    MLFLOW_MAX_RECENT_RUNS,
+    MLFLOW_URL,
+    TIMEOUT_MLFLOW,
+)
 from ..errors import SourceStatus
 from ..state import MLflowRun
 
@@ -22,13 +28,13 @@ def _ts_ms_to_dt(ts_ms: int | None) -> datetime | None:
     return datetime.utcfromtimestamp(ts_ms / 1000)
 
 
-def collect_mlflow_recent(max_results: int = 20) -> tuple[list[MLflowRun], SourceStatus]:
+def collect_mlflow_recent(max_results: int = MLFLOW_MAX_RECENT_RUNS) -> tuple[list[MLflowRun], SourceStatus]:
     """Fetch recent MLflow runs across all experiments."""
     try:
         resp = requests.post(
             f"{_MLFLOW_API}/runs/search",
             json={"max_results": max_results, "order_by": ["start_time DESC"]},
-            timeout=5,
+            timeout=TIMEOUT_MLFLOW,
         )
         resp.raise_for_status()
         runs_raw = resp.json().get("runs", [])
@@ -73,7 +79,7 @@ def collect_live_metrics(
             resp = requests.post(
                 f"{_MLFLOW_API}/runs/search",
                 json={"filter": "attributes.status = 'RUNNING'", "max_results": 1},
-                timeout=5,
+                timeout=TIMEOUT_MLFLOW,
             )
             resp.raise_for_status()
             runs_raw = resp.json().get("runs", [])
@@ -89,19 +95,19 @@ def collect_live_metrics(
         resp = requests.get(
             f"{_MLFLOW_API}/runs/get",
             params={"run_id": run_id},
-            timeout=5,
+            timeout=TIMEOUT_MLFLOW,
         )
         resp.raise_for_status()
         run_data = resp.json().get("run", {})
         metric_keys = [m["key"] for m in run_data.get("data", {}).get("metrics", [])]
 
         result: dict[str, list[tuple[int, float]]] = {}
-        for key in metric_keys[:10]:  # cap at 10 metrics
+        for key in metric_keys[:MLFLOW_MAX_METRICS_PER_RUN]:
             try:
                 hist_resp = requests.get(
                     f"{_MLFLOW_API}/metrics/get-history",
-                    params={"run_id": run_id, "metric_key": key, "max_results": 200},
-                    timeout=5,
+                    params={"run_id": run_id, "metric_key": key, "max_results": MLFLOW_MAX_METRIC_HISTORY},
+                    timeout=TIMEOUT_MLFLOW,
                 )
                 hist_resp.raise_for_status()
                 history = hist_resp.json().get("metrics", [])

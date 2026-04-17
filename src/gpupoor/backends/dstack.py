@@ -18,42 +18,61 @@ except ImportError:  # pragma: no cover - non-POSIX fallback (Windows)
 
 from gpupoor import ops
 from gpupoor.config import (
+    DEFAULT_DSTACK_APPLY_TIMEOUT_BUFFER,
+    DEFAULT_DSTACK_DRY_RUN_MLFLOW_URL,
+    DEFAULT_DSTACK_FINAL_TUNNEL_JOIN_TIMEOUT,
+    DEFAULT_DSTACK_HEALTH_RECHECK_TIMEOUT,
+    DEFAULT_DSTACK_MIN_RESTART_WAIT,
+    DEFAULT_DSTACK_OFFER_QUERY_TIMEOUT,
+    DEFAULT_DSTACK_OFFER_TIMEOUT,
+    DEFAULT_DSTACK_PROVIDER_MAX_OFFERS,
+    DEFAULT_DSTACK_RENDERED_TASK_PATH,
+    DEFAULT_DSTACK_RUN_START_POLL_INTERVAL,
+    DEFAULT_DSTACK_TARGETED_MAX_OFFERS,
+    DEFAULT_DSTACK_TASK_DURATION_BUFFER_MINUTES,
+    DEFAULT_DSTACK_TASK_SIGTERM_GRACE,
+    DEFAULT_DSTACK_TUNNEL_JOIN_TIMEOUT,
+    DEFAULT_HF_DATASET_REPO,
+    DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME,
+    DEFAULT_REMOTE_DATASET_PATH,
+    DEFAULT_REMOTE_IMAGE_TAG,
+    DEFAULT_REMOTE_OUTPUT_DIR,
+    DEFAULT_REMOTE_RUN_START_TIMEOUT_SECONDS,
     BackendConfig,
     RunConfig,
     find_dstack_bin,
     load_remote_settings,
     require_remote_settings,
 )
-from gpupoor.runtime_config import build_training_runtime_env, runtime_config_b64
+from gpupoor.runtime_config import merged_toml_b64
 from gpupoor.subprocess_utils import CommandError, bash_script, run_command
 from gpupoor.utils import repo_path
 from gpupoor.utils.http import http_ok
 from gpupoor.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from gpupoor.connector import ConnectionBundle
+    from gpupoor.deployer import ConnectionBundle
 
 log = get_logger(__name__)
 
-_TUNNEL_JOIN_TIMEOUT = 180
-_MIN_RESTART_WAIT_SECONDS = 5
-_HEALTH_RECHECK_TIMEOUT_SECONDS = 1
-_DEFAULT_REMOTE_IMAGE_TAG = "latest"
-_TASK_SIGTERM_GRACE_SECONDS = 30
-_TASK_DURATION_BUFFER_MINUTES = 2
-_DEFAULT_OFFER_TIMEOUT_SECONDS = 60
-_OFFER_QUERY_TIMEOUT_SECONDS = 30
-_DEFAULT_PROVIDER_MAX_OFFERS = 200
-_DEFAULT_TARGETED_MAX_OFFERS = 400
-_RUN_START_POLL_INTERVAL_SECONDS = 10
-_DEFAULT_RUN_START_TIMEOUT_SECONDS = 480
-_DRY_RUN_MLFLOW_URL = "https://dry-run-example.trycloudflare.com"
-_CONTAINER_REMOTE_DATASET_PATH = "/workspace/data/datasets/pretrain_t2t_mini"
-_DEFAULT_REMOTE_OUTPUT_DIR = "/workspace/out"
-_DEFAULT_HF_DATASET_REPO = "jingyaogong/minimind_dataset"
-_DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME = "pretokenized/pretrain_t2t_mini.tar.gz"
-_DSTACK_APPLY_TIMEOUT_BUFFER_SECONDS = 60
-_FINAL_TUNNEL_JOIN_TIMEOUT_SECONDS = 5
+_TUNNEL_JOIN_TIMEOUT = DEFAULT_DSTACK_TUNNEL_JOIN_TIMEOUT
+_MIN_RESTART_WAIT_SECONDS = DEFAULT_DSTACK_MIN_RESTART_WAIT
+_HEALTH_RECHECK_TIMEOUT_SECONDS = DEFAULT_DSTACK_HEALTH_RECHECK_TIMEOUT
+_DEFAULT_REMOTE_IMAGE_TAG = DEFAULT_REMOTE_IMAGE_TAG
+_TASK_SIGTERM_GRACE_SECONDS = DEFAULT_DSTACK_TASK_SIGTERM_GRACE
+_TASK_DURATION_BUFFER_MINUTES = DEFAULT_DSTACK_TASK_DURATION_BUFFER_MINUTES
+_DEFAULT_OFFER_TIMEOUT_SECONDS = DEFAULT_DSTACK_OFFER_TIMEOUT
+_OFFER_QUERY_TIMEOUT_SECONDS = DEFAULT_DSTACK_OFFER_QUERY_TIMEOUT
+_DEFAULT_PROVIDER_MAX_OFFERS = DEFAULT_DSTACK_PROVIDER_MAX_OFFERS
+_DEFAULT_TARGETED_MAX_OFFERS = DEFAULT_DSTACK_TARGETED_MAX_OFFERS
+_RUN_START_POLL_INTERVAL_SECONDS = DEFAULT_DSTACK_RUN_START_POLL_INTERVAL
+_DRY_RUN_MLFLOW_URL = DEFAULT_DSTACK_DRY_RUN_MLFLOW_URL
+_CONTAINER_REMOTE_DATASET_PATH = DEFAULT_REMOTE_DATASET_PATH
+_DEFAULT_REMOTE_OUTPUT_DIR = DEFAULT_REMOTE_OUTPUT_DIR
+_DEFAULT_HF_DATASET_REPO = DEFAULT_HF_DATASET_REPO
+_DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME = DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME
+_DSTACK_APPLY_TIMEOUT_BUFFER_SECONDS = DEFAULT_DSTACK_APPLY_TIMEOUT_BUFFER
+_FINAL_TUNNEL_JOIN_TIMEOUT_SECONDS = DEFAULT_DSTACK_FINAL_TUNNEL_JOIN_TIMEOUT
 
 __all__ = [
     "ensure_dstack_server",
@@ -285,14 +304,11 @@ def task_max_duration(time_cap_seconds: int) -> str:
 
 
 def render_task(settings: dict[str, str], config: RunConfig, image_sha: str) -> Path:
-    rendered_task = repo_path(".tmp", "pretrain.task.rendered.yml")
+    rendered_task = repo_path(*Path(DEFAULT_DSTACK_RENDERED_TASK_PATH).parts)
     rendered_task.parent.mkdir(parents=True, exist_ok=True)
     render_env = dict(settings)
     render_env["IMAGE_SHA"] = image_sha
     render_env["TASK_NAME"] = config.name
-    # TOML vcr_image_base overrides .env.remote when explicitly set in config.
-    if config.remote.vcr_image_base:
-        render_env["VCR_IMAGE_BASE"] = config.remote.vcr_image_base
     render_env["TASK_MAX_DURATION"] = task_max_duration(config.recipe.time_cap_seconds)
     # Task/GPU overrides: unset fields fall back to shell defaults so the
     # baseline example stays unchanged while targeted runs (e.g. B300) can
@@ -470,7 +486,7 @@ def wait_for_run_start(
     dstack_bin: str,
     run_name: str,
     *,
-    max_wait: int = _DEFAULT_RUN_START_TIMEOUT_SECONDS,
+    max_wait: int = DEFAULT_REMOTE_RUN_START_TIMEOUT_SECONDS,
 ) -> None:
     log.info("Waiting for run '%s' to leave startup states", run_name)
     elapsed = 0
@@ -479,6 +495,11 @@ def wait_for_run_start(
         if run_status == "running" or job_status == "running":
             log.info("Run '%s' is running", run_name)
             return
+        if run_status == "provisioning" or job_status == "provisioning":
+            log.info("Run '%s' is provisioning (pulling image, ~3-10 min)... [%ds]", run_name, elapsed)
+            time.sleep(_RUN_START_POLL_INTERVAL_SECONDS)
+            elapsed += _RUN_START_POLL_INTERVAL_SECONDS
+            continue
         if run_status in {"pending", "submitted"} and termination_reason == "failed_to_start_due_to_no_capacity":
             log.info(
                 "Run '%s' is retrying after a no-capacity offer; waiting for the next submission",
@@ -647,7 +668,7 @@ def launch_remote(
             else:
                 bash_script(
                     repo_path("training", "scripts", "prepare-data.sh"),
-                    env={**settings, **os.environ, "UPLOAD_PRETOKENIZED_DATASET": "1"},
+                    env={**os.environ, **settings, "UPLOAD_PRETOKENIZED_DATASET": "1"},
                 )
         else:
             log.info("Skipping dataset preparation (prepare_data=false)")
@@ -662,7 +683,7 @@ def launch_remote(
             if dry_run:
                 print("[DRY-RUN] Would build and push the remote image")
             elif not use_skip_build:
-                bash_script(repo_path("training", "scripts", "build-and-push.sh"))
+                bash_script(repo_path("training", "scripts", "build-and-push.sh"), env={**os.environ, **settings})
         else:
             log.info("Skipping remote image build")
 
@@ -700,38 +721,31 @@ def launch_remote(
             return
 
         rendered_task = render_task(settings, config, image_sha)
-        runtime_env = build_training_runtime_env(
-            config,
-            dataset_path=_CONTAINER_REMOTE_DATASET_PATH,
-            output_dir=settings.get("OUT_DIR", _DEFAULT_REMOTE_OUTPUT_DIR),
-            mlflow_tracking_uri=mlflow_url,
-            extra_env={
-                "VERDA_PROFILE": "remote",
-                "DSTACK_RUN_NAME": config.name,
-                "OUT_DIR": settings.get("OUT_DIR", _DEFAULT_REMOTE_OUTPUT_DIR),
-                "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", _DEFAULT_HF_DATASET_REPO),
-                "HF_DATASET_FILENAME": settings.get("HF_DATASET_FILENAME", Path(config.recipe.dataset_path).name),
-                "HF_PRETOKENIZED_DATASET_REPO": settings.get(
-                    "HF_PRETOKENIZED_DATASET_REPO",
-                    settings.get("HF_DATASET_REPO", _DEFAULT_HF_DATASET_REPO),
-                ),
-                "HF_PRETOKENIZED_DATASET_FILENAME": settings.get(
-                    "HF_PRETOKENIZED_DATASET_FILENAME",
-                    _DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME,
-                ),
-                **(connection_bundle.to_runtime_env() if connection_bundle is not None else {}),
-            },
-        )
         apply_env = {
             "HF_TOKEN": read_required_secret("hf_token"),
-            "GPUPOOR_RUN_CONFIG_B64": runtime_config_b64(runtime_env),
+            "GPUPOOR_RUN_CONFIG_B64": merged_toml_b64(config),
+            "VERDA_PROFILE": "remote",
+            "DSTACK_RUN_NAME": config.name,
+            "OUT_DIR": settings.get("OUT_DIR", _DEFAULT_REMOTE_OUTPUT_DIR),
+            "MLFLOW_TRACKING_URI": mlflow_url,
+            "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", _DEFAULT_HF_DATASET_REPO),
+            "HF_DATASET_FILENAME": settings.get("HF_DATASET_FILENAME", Path(config.recipe.dataset_path).name),
+            "HF_PRETOKENIZED_DATASET_REPO": settings.get(
+                "HF_PRETOKENIZED_DATASET_REPO",
+                settings.get("HF_DATASET_REPO", _DEFAULT_HF_DATASET_REPO),
+            ),
+            "HF_PRETOKENIZED_DATASET_FILENAME": settings.get(
+                "HF_PRETOKENIZED_DATASET_FILENAME",
+                _DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME,
+            ),
+            **(connection_bundle.to_runtime_env() if connection_bundle is not None else {}),
         }
         # `dstack apply` can hang indefinitely on registry auth or
         # network stalls; without a timeout the CLI freezes with no
         # liveness signal. Budget: the existing run-start window plus a
         # 60s buffer covers dstack's own internal retries without
         # inventing a new knob.
-        apply_cmd = [dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d"]
+        apply_cmd = [dstack_bin, "apply", "-f", str(rendered_task), "-y", "-d", "--force"]
         apply_timeout = config.remote.run_start_timeout_seconds + _DSTACK_APPLY_TIMEOUT_BUFFER_SECONDS
         run_command(apply_cmd, env=apply_env, timeout=apply_timeout)
 
@@ -740,6 +754,29 @@ def launch_remote(
             track_run(run_name)
             wait_for_run_start(dstack_bin, run_name, max_wait=config.remote.run_start_timeout_seconds)
             launched_remote_run = True
+            # Poll logs via REST API (no SSH) until the run finishes.
+            # dstack 0.20.17 'logs' dumps current output and exits;
+            # we loop with --since to get incremental updates.
+            log.info("Streaming logs for run '%s' (Ctrl+C to detach)...", run_name)
+            try:
+                last_since = "0s"
+                while True:
+                    try:
+                        run_command(
+                            [dstack_bin, "logs", run_name, "--since", last_since],
+                            timeout=60,
+                            quiet=True,
+                        )
+                    except CommandError:
+                        pass  # logs command may fail if run just finished
+                    status, _, _ = dstack_run_status_triplet(dstack_bin, run_name)
+                    if status not in {"running", "provisioning", "submitted", "pending"}:
+                        log.info("Run '%s' finished with status: %s", run_name, status)
+                        break
+                    last_since = f"{_RUN_START_POLL_INTERVAL_SECONDS}s"
+                    time.sleep(_RUN_START_POLL_INTERVAL_SECONDS)
+            except KeyboardInterrupt:
+                log.info("Detached from log stream (run '%s' continues on RunPod)", run_name)
         else:
             # Original print went to stdout (no file=sys.stderr); preserve via
             # log.info so stream routing stays the same. "WARN:" stays in text.

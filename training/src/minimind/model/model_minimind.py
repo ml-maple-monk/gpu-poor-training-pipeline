@@ -7,44 +7,6 @@ from transformers import GenerationMixin, PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import MoeCausalLMOutputWithPast
 
-DEFAULT_CONFIG_HIDDEN_SIZE = 768
-DEFAULT_CONFIG_NUM_HIDDEN_LAYERS = 8
-DEFAULT_CONFIG_DROPOUT = 0.0
-DEFAULT_CONFIG_VOCAB_SIZE = 6400
-DEFAULT_CONFIG_BOS_TOKEN_ID = 1
-DEFAULT_CONFIG_EOS_TOKEN_ID = 2
-DEFAULT_CONFIG_FLASH_ATTN = True
-DEFAULT_CONFIG_NUM_ATTENTION_HEADS = 8
-DEFAULT_CONFIG_NUM_KEY_VALUE_HEADS = 4
-DEFAULT_CONFIG_HIDDEN_ACT = "silu"
-DEFAULT_CONFIG_MAX_POSITION_EMBEDDINGS = 32768
-DEFAULT_CONFIG_RMS_NORM_EPS = 1e-6
-DEFAULT_CONFIG_ROPE_THETA = 1e6
-DEFAULT_CONFIG_INFERENCE_ROPE_SCALING = False
-DEFAULT_CONFIG_NUM_EXPERTS = 4
-DEFAULT_CONFIG_NUM_EXPERTS_PER_TOK = 1
-DEFAULT_CONFIG_NORM_TOPK_PROB = True
-DEFAULT_CONFIG_ROUTER_AUX_LOSS_COEF = 5e-4
-
-DEFAULT_RMS_NORM_FORWARD_EPS = 1e-5
-DEFAULT_FREQS_END = 32 * 1024
-ROPE_SCALING_DEFAULTS = {
-    "beta_fast": 32,
-    "beta_slow": 1,
-    "factor": 16,
-    "original_max_position_embeddings": 2048,
-    "attention_factor": 1.0,
-    "type": "yarn",
-}
-ROPE_SCALING_MIN_RAMP_DENOMINATOR = 0.001
-MOE_TOPK_EPSILON = 1e-20
-DEFAULT_GENERATE_MAX_NEW_TOKENS = 8192
-DEFAULT_GENERATE_TEMPERATURE = 0.85
-DEFAULT_GENERATE_TOP_P = 0.85
-DEFAULT_GENERATE_TOP_K = 50
-DEFAULT_GENERATE_EOS_TOKEN_ID = 2
-DEFAULT_REPETITION_PENALTY = 1.0
-
 
 # 🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏
 #                                     MiniMind Config
@@ -54,46 +16,86 @@ class MiniMindConfig(PretrainedConfig):
 
     def __init__(
         self,
-        hidden_size=DEFAULT_CONFIG_HIDDEN_SIZE,
-        num_hidden_layers=DEFAULT_CONFIG_NUM_HIDDEN_LAYERS,
+        hidden_size,
+        num_hidden_layers,
+        dropout,
+        vocab_size,
+        flash_attn,
+        num_attention_heads,
+        num_key_value_heads,
+        hidden_act,
+        intermediate_size,
+        max_position_embeddings,
+        rms_norm_eps,
+        rope_theta,
+        inference_rope_scaling,
+        num_experts,
+        num_experts_per_tok,
+        norm_topk_prob,
+        router_aux_loss_coef,
         use_moe=False,
+        head_dim=None,
+        moe_intermediate_size=None,
+        # Internal constants (will come from [model.internals] TOML section)
+        rms_norm_forward_eps=1e-5,
+        freqs_end=32768,
+        moe_topk_epsilon=1e-20,
+        rope_scaling_min_ramp_denominator=0.001,
+        rope_scaling_config=None,
+        # Generation defaults (will come from [model.generation] TOML section)
+        generate_max_new_tokens=8192,
+        generate_temperature=0.85,
+        generate_top_p=0.85,
+        generate_top_k=50,
+        generate_eos_token_id=2,
+        repetition_penalty=1.0,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.hidden_size = hidden_size
         self.num_hidden_layers = num_hidden_layers
         self.use_moe = use_moe
-        self.dropout = kwargs.get("dropout", DEFAULT_CONFIG_DROPOUT)
-        self.vocab_size = kwargs.get("vocab_size", DEFAULT_CONFIG_VOCAB_SIZE)
-        self.bos_token_id = kwargs.get("bos_token_id", DEFAULT_CONFIG_BOS_TOKEN_ID)
-        self.eos_token_id = kwargs.get("eos_token_id", DEFAULT_CONFIG_EOS_TOKEN_ID)
-        self.flash_attn = kwargs.get("flash_attn", DEFAULT_CONFIG_FLASH_ATTN)
-        self.num_attention_heads = kwargs.get("num_attention_heads", DEFAULT_CONFIG_NUM_ATTENTION_HEADS)
-        self.num_key_value_heads = kwargs.get("num_key_value_heads", DEFAULT_CONFIG_NUM_KEY_VALUE_HEADS)
-        self.head_dim = kwargs.get("head_dim", self.hidden_size // self.num_attention_heads)
-        self.hidden_act = kwargs.get("hidden_act", DEFAULT_CONFIG_HIDDEN_ACT)
-        self.intermediate_size = kwargs.get("intermediate_size", math.ceil(hidden_size * math.pi / 64) * 64)
-        self.max_position_embeddings = kwargs.get("max_position_embeddings", DEFAULT_CONFIG_MAX_POSITION_EMBEDDINGS)
-        self.rms_norm_eps = kwargs.get("rms_norm_eps", DEFAULT_CONFIG_RMS_NORM_EPS)
-        self.rope_theta = kwargs.get("rope_theta", DEFAULT_CONFIG_ROPE_THETA)
-        self.inference_rope_scaling = kwargs.get(
-            "inference_rope_scaling",
-            DEFAULT_CONFIG_INFERENCE_ROPE_SCALING,
-        )
-        self.rope_scaling = dict(ROPE_SCALING_DEFAULTS) if self.inference_rope_scaling else None
+        self.dropout = dropout
+        self.vocab_size = vocab_size
+        self.flash_attn = flash_attn
+        self.num_attention_heads = num_attention_heads
+        self.num_key_value_heads = num_key_value_heads
+        self.head_dim = head_dim if head_dim is not None else self.hidden_size // self.num_attention_heads
+        self.hidden_act = hidden_act
+        self.intermediate_size = intermediate_size
+        self.max_position_embeddings = max_position_embeddings
+        self.rms_norm_eps = rms_norm_eps
+        self.rope_theta = rope_theta
+        self.inference_rope_scaling = inference_rope_scaling
+        self.rope_scaling_config = rope_scaling_config
+        self.rope_scaling = dict(self.rope_scaling_config) if self.inference_rope_scaling else None
         ### MoE specific configs (ignored if use_moe = False)
-        self.num_experts = kwargs.get("num_experts", DEFAULT_CONFIG_NUM_EXPERTS)
-        self.num_experts_per_tok = kwargs.get("num_experts_per_tok", DEFAULT_CONFIG_NUM_EXPERTS_PER_TOK)
-        self.moe_intermediate_size = kwargs.get("moe_intermediate_size", self.intermediate_size)
-        self.norm_topk_prob = kwargs.get("norm_topk_prob", DEFAULT_CONFIG_NORM_TOPK_PROB)
-        self.router_aux_loss_coef = kwargs.get("router_aux_loss_coef", DEFAULT_CONFIG_ROUTER_AUX_LOSS_COEF)
+        self.num_experts = num_experts
+        self.num_experts_per_tok = num_experts_per_tok
+        self.moe_intermediate_size = (
+            moe_intermediate_size if moe_intermediate_size is not None else self.intermediate_size
+        )
+        self.norm_topk_prob = norm_topk_prob
+        self.router_aux_loss_coef = router_aux_loss_coef
+        # Internal constants
+        self.rms_norm_forward_eps = rms_norm_forward_eps
+        self.freqs_end = freqs_end
+        self.moe_topk_epsilon = moe_topk_epsilon
+        self.rope_scaling_min_ramp_denominator = rope_scaling_min_ramp_denominator
+        # Generation defaults
+        self.generate_max_new_tokens = generate_max_new_tokens
+        self.generate_temperature = generate_temperature
+        self.generate_top_p = generate_top_p
+        self.generate_top_k = generate_top_k
+        self.generate_eos_token_id = generate_eos_token_id
+        self.repetition_penalty = repetition_penalty
 
 
 # 🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏
 #                                     MiniMind Model
 # 🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏
 class RMSNorm(torch.nn.Module):
-    def __init__(self, dim: int, eps: float = DEFAULT_RMS_NORM_FORWARD_EPS):
+    def __init__(self, dim: int, eps: float = 1e-5):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
@@ -107,9 +109,10 @@ class RMSNorm(torch.nn.Module):
 
 def precompute_freqs_cis(
     dim: int,
-    end: int = DEFAULT_FREQS_END,
-    rope_base: float = DEFAULT_CONFIG_ROPE_THETA,
+    end: int,
+    rope_base: float,
     rope_scaling: dict = None,
+    rope_scaling_min_ramp_denominator: float = 0.001,
 ):
     freqs, attn_factor = 1.0 / (rope_base ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim)), 1.0
     if rope_scaling is not None:  # YaRN: f'(i) = f(i)((1-γ) + γ/s), where γ∈[0,1] is linear ramp
@@ -128,7 +131,7 @@ def precompute_freqs_cis(
             low, high = max(math.floor(inv_dim(beta_fast)), 0), min(math.ceil(inv_dim(beta_slow)), dim // 2 - 1)
             ramp = torch.clamp(
                 (torch.arange(dim // 2, device=freqs.device).float() - low)
-                / max(high - low, ROPE_SCALING_MIN_RAMP_DENOMINATOR),
+                / max(high - low, rope_scaling_min_ramp_denominator),
                 0,
                 1,
             )
@@ -268,7 +271,7 @@ class MOEFeedForward(nn.Module):
         scores = F.softmax(self.gate(x_flat), dim=-1)
         topk_weight, topk_idx = torch.topk(scores, k=self.config.num_experts_per_tok, dim=-1, sorted=False)
         if self.config.norm_topk_prob:
-            topk_weight = topk_weight / (topk_weight.sum(dim=-1, keepdim=True) + MOE_TOPK_EPSILON)
+            topk_weight = topk_weight / (topk_weight.sum(dim=-1, keepdim=True) + self.config.moe_topk_epsilon)
         y = torch.zeros_like(x_flat)
         for i, expert in enumerate(self.experts):
             mask = topk_idx == i
@@ -320,6 +323,7 @@ class MiniMindModel(nn.Module):
             end=config.max_position_embeddings,
             rope_base=config.rope_theta,
             rope_scaling=config.rope_scaling,
+            rope_scaling_min_ramp_denominator=config.rope_scaling_min_ramp_denominator,
         )
         self.register_buffer("freqs_cos", freqs_cos, persistent=False)
         self.register_buffer("freqs_sin", freqs_sin, persistent=False)
@@ -400,18 +404,24 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
         self,
         inputs=None,
         attention_mask=None,
-        max_new_tokens=DEFAULT_GENERATE_MAX_NEW_TOKENS,
-        temperature=DEFAULT_GENERATE_TEMPERATURE,
-        top_p=DEFAULT_GENERATE_TOP_P,
-        top_k=DEFAULT_GENERATE_TOP_K,
-        eos_token_id=DEFAULT_GENERATE_EOS_TOKEN_ID,
+        max_new_tokens=None,
+        temperature=None,
+        top_p=None,
+        top_k=None,
+        eos_token_id=None,
         streamer=None,
         use_cache=True,
         num_return_sequences=1,
         do_sample=True,
-        repetition_penalty=DEFAULT_REPETITION_PENALTY,
+        repetition_penalty=None,
         **kwargs,
     ):
+        max_new_tokens = max_new_tokens if max_new_tokens is not None else self.config.generate_max_new_tokens
+        temperature = temperature if temperature is not None else self.config.generate_temperature
+        top_p = top_p if top_p is not None else self.config.generate_top_p
+        top_k = top_k if top_k is not None else self.config.generate_top_k
+        eos_token_id = eos_token_id if eos_token_id is not None else self.config.generate_eos_token_id
+        repetition_penalty = repetition_penalty if repetition_penalty is not None else self.config.repetition_penalty
         input_ids = kwargs.pop("input_ids", inputs).repeat(num_return_sequences, 1)
         attention_mask = attention_mask.repeat(num_return_sequences, 1) if attention_mask is not None else None
         past_key_values = kwargs.pop("past_key_values", None)

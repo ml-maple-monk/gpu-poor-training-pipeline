@@ -65,11 +65,19 @@ class OfferSnapshot:
 class SeekerJob:
     job_id: str = ""
     config_name: str = ""
+    config_path: str = ""
     submitted_run_name: str = ""
+    state: str = ""
     submit_retries: int = 0
     last_status: str = ""
     last_reason: str = ""
     enqueued_at: str = ""
+    next_poll_at: str = ""
+    claimed_at: str = ""
+    lease_owner: str = ""
+    lease_expires_at: str = ""
+    updated_at: str = ""
+    last_probe_error: str = ""
 
 
 @dataclass(slots=True)
@@ -84,6 +92,7 @@ class SeekerAttempt:
     price_per_hour: float = 0.0
     status: str = ""
     reason: str = ""
+    probe_error: str = ""
     started_at: str = ""
     ended_at: str = ""
 
@@ -148,6 +157,7 @@ class AppState:
     # dstack get_plan probe offers (all configured backends, independent of seeker)
     dstack_probe_offers: list[SeekerOffer] = field(default_factory=list)
     offer_history: dict[tuple[str, str], deque[OfferSnapshot]] = field(default_factory=dict)
+    seeker_active_jobs: list[SeekerJob] = field(default_factory=list)
     seeker_active: SeekerJob | None = None
     seeker_pending: list[SeekerJob] = field(default_factory=list)
     seeker_attempts: list[SeekerAttempt] = field(default_factory=list)

@@ -1,8 +1,8 @@
 import os
 import sys
 import time
+from pathlib import Path
 
-import click
 from transformers import AutoTokenizer
 
 __package__ = "dataset"
@@ -10,44 +10,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from dataset.lm_dataset import build_pretokenized_corpus
 
-DEFAULT_TOKENIZER_PATH = "../model"
-DEFAULT_PRETOKENIZE_MAX_LENGTH = 340
-DEFAULT_PROGRESS_INTERVAL = 50000
-TOKENIZERS_PARALLELISM_ENV = "TOKENIZERS_PARALLELISM"
-TOKENIZERS_PARALLELISM_DISABLED = "false"
 
-
-@click.command(context_settings={"help_option_names": ["-h", "--help"]})
-@click.option("--input_path", required=True, type=click.Path(path_type=str), help="Path to the source JSONL file")
-@click.option(
-    "--output_dir",
-    required=True,
-    type=click.Path(path_type=str),
-    help="Directory to write mmap artifacts into",
-)
-@click.option(
-    "--tokenizer_path",
-    default=DEFAULT_TOKENIZER_PATH,
-    show_default=True,
-    type=click.Path(path_type=str),
-    help="Tokenizer directory passed to AutoTokenizer",
-)
-@click.option(
-    "--max_length",
-    default=DEFAULT_PRETOKENIZE_MAX_LENGTH,
-    show_default=True,
-    type=int,
-    help="Sequence length used during pretokenization",
-)
-@click.option("--overwrite", is_flag=True, help="Replace an existing output directory")
-@click.option(
-    "--progress_interval",
-    default=DEFAULT_PROGRESS_INTERVAL,
-    show_default=True,
-    type=int,
-    help="Samples between progress logs",
-)
-def main(input_path, output_dir, tokenizer_path, max_length, overwrite, progress_interval):
+def pretokenize(input_path, output_dir, tokenizer_path, max_length, overwrite, progress_interval):
     """Pretokenize MiniMind pretraining JSONL into mmap artifacts."""
 
     started_at = time.perf_counter()
@@ -62,12 +26,45 @@ def main(input_path, output_dir, tokenizer_path, max_length, overwrite, progress
         progress_interval=progress_interval,
     )
     elapsed_s = time.perf_counter() - started_at
-    click.echo(
+    print(
         f"[pretokenize] wrote {metadata['sample_count']} samples / {metadata['token_count']} tokens to {output_dir} "
         f"in {elapsed_s:.2f}s"
     )
 
 
+def main():
+    """Pretokenize pretraining data from a TOML config file."""
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib
+
+    if len(sys.argv) != 2:
+        print("usage: pretokenize_pretrain.py <config.toml>", file=sys.stderr)
+        raise SystemExit(2)
+
+    config_path = sys.argv[1]
+    with open(config_path, "rb") as f:
+        config = tomllib.load(f)
+
+    pretokenize_cfg = config.get("pretokenize", {})
+    recipe_cfg = config.get("recipe", {})
+    dataset_cfg = config.get("dataset", {})
+
+    input_path = Path(pretokenize_cfg.get("input_path", recipe_cfg.get("dataset_path", "")))
+    output_dir = Path(pretokenize_cfg.get("output_dir", str(input_path.parent)))
+    tokenizer_path = Path(pretokenize_cfg.get("tokenizer_path", "../model"))
+    max_length = int(pretokenize_cfg.get("max_length", 340))
+    overwrite = bool(pretokenize_cfg.get("overwrite", False))
+    progress_interval = int(pretokenize_cfg.get("progress_interval", 50000))
+
+    # Set tokenizers parallelism from config
+    tokenizers_parallelism = dataset_cfg.get("tokenizers_parallelism", False)
+    os.environ["TOKENIZERS_PARALLELISM"] = "true" if tokenizers_parallelism else "false"
+
+    # Call the existing pretokenization logic with these parameters
+    pretokenize(input_path, output_dir, tokenizer_path, max_length, overwrite, progress_interval)
+
+
 if __name__ == "__main__":
-    os.environ[TOKENIZERS_PARALLELISM_ENV] = TOKENIZERS_PARALLELISM_DISABLED
     main()

@@ -110,10 +110,13 @@ def test_whitelisted_mounts_only():
         "/var/run/docker.sock",
         "/usr/bin/docker",  # host docker CLI binary (read-only)
         os.path.join(home, ".dstack-cli-venv"),
+        os.path.join(home, ".dstack", "config.yml"),
         os.path.join(home, ".local", "share", "uv", "python"),
         os.path.join(repo_root, "artifacts-pull"),
         os.path.join(repo_root, "data", "seeker"),
         os.path.join(repo_root, ".cf-tunnel.url"),
+        os.path.join(repo_root, "defaults.toml"),
+        os.path.join(repo_root, "examples"),
     )
 
     for m in mounts:

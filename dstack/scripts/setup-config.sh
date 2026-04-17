@@ -114,6 +114,7 @@ if [ -f "$RUNPOD_KEY_FILE" ]; then
     if [ -n "$RUNPOD_API_KEY" ]; then
         cat >> "$tmp_config" <<EOF
       - type: runpod
+        community_cloud: true
         creds:
           type: api_key
           api_key: ${RUNPOD_API_KEY}

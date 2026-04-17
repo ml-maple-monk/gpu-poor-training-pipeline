@@ -118,6 +118,10 @@ def test_dashboard_no_longer_owns_mlflow_assets(repo_path, repo_text):
         (("infrastructure", "dashboard", "compose", "docker-compose.yml"), "name: verda-dashboard\n"),
         (("infrastructure", "local-emulator", "compose", "docker-compose.yml"), "name: verda-local-emulator\n"),
         (("training", "compose", "docker-compose.train.yml"), "name: minimind-training\n"),
+        (
+            ("training", "compose", "docker-compose.train.remote-wrapper.yml"),
+            "name: minimind-remote-wrapper\n",
+        ),
     ],
 )
 def test_each_compose_stack_has_a_distinct_project_name(repo_text, parts, expected_prefix):

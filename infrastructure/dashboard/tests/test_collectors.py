@@ -70,15 +70,21 @@ def test_collect_seeker_state_reads_queue_offer_and_attempt_files(tmp_path, monk
     (seeker_dir / "queue.json").write_text(
         json.dumps(
             {
-                "active": {
-                    "job_id": "job-1",
-                    "config_name": "debug-run",
-                    "submitted_run_name": "debug-run",
-                    "submit_retries": 1,
-                    "last_status": "submitted",
-                    "last_reason": "",
-                    "enqueued_at": "2026-04-16T00:00:00+00:00",
-                },
+                "active": None,
+                "active_jobs": [
+                    {
+                        "job_id": "job-1",
+                        "config_name": "debug-run",
+                        "config_path": "configs/debug-run.toml",
+                        "submitted_run_name": "debug-run",
+                        "state": "submitted",
+                        "submit_retries": 1,
+                        "last_status": "submitted",
+                        "last_reason": "",
+                        "enqueued_at": "2026-04-16T00:00:00+00:00",
+                        "lease_owner": "daemon-a",
+                    }
+                ],
                 "pending": [],
             }
         ),
@@ -107,15 +113,50 @@ def test_collect_seeker_state_reads_queue_offer_and_attempt_files(tmp_path, monk
     monkeypatch.setattr("src.collectors.seeker_state.SEEKER_DATA_DIR", str(seeker_dir))
     from src.collectors.seeker_state import collect_seeker_state
 
-    offers, active, pending, attempts, status = collect_seeker_state()
+    offers, active_jobs, active, pending, attempts, status = collect_seeker_state()
 
     assert status == SourceStatus.OK
     assert len(offers) == 1
     assert offers[0].backend == "runpod"
+    assert len(active_jobs) == 1
     assert active is not None and active.job_id == "job-1"
+    assert active.state == "submitted"
     assert pending == []
     assert len(attempts) == 1
     assert attempts[0].status == "submitted"
+
+
+def test_collect_seeker_state_falls_back_to_legacy_active_field(tmp_path, monkeypatch):
+    seeker_dir = tmp_path / "seeker"
+    seeker_dir.mkdir()
+    (seeker_dir / "queue.json").write_text(
+        json.dumps(
+            {
+                "active": {
+                    "job_id": "job-legacy",
+                    "config_name": "legacy-run",
+                    "submitted_run_name": "legacy-run",
+                    "submit_retries": 0,
+                    "last_status": "submitted",
+                    "last_reason": "",
+                    "enqueued_at": "2026-04-16T00:00:00+00:00",
+                },
+                "pending": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("src.collectors.seeker_state.SEEKER_DATA_DIR", str(seeker_dir))
+    from src.collectors.seeker_state import collect_seeker_state
+
+    offers, active_jobs, active, pending, attempts, status = collect_seeker_state()
+
+    assert status == SourceStatus.OK
+    assert offers == []
+    assert len(active_jobs) == 1
+    assert active is not None and active.job_id == "job-legacy"
+    assert pending == []
+    assert attempts == []
 
 
 @pytest.mark.parametrize(
@@ -256,8 +297,8 @@ def test_collect_verda_offers_targets_five_gpu_specs_and_prefers_a100_80g(monkey
     offers, status = verda_offers.collect_verda_offers()
 
     assert status == SourceStatus.OK
-    assert [spec[0] for spec in verda_offers.GPU_SPECS] == ["A100", "H100", "H200", "B200", "B300"]
-    assert [call[3] for call in calls] == ["A100", "H100", "H200", "B200", "B300"]
+    assert [spec[0] for spec in verda_offers.GPU_SPECS] == ["A100", "H100", "H200", "B200", "RTX 5090"]
+    assert [call[3] for call in calls] == ["A100", "H100", "H200", "B200", "RTX 5090"]
     assert all(call[2] == 15.0 for call in calls)
     assert len(offers) == 1
     assert offers[0].gpu_name == "A100-80G"
@@ -347,14 +388,14 @@ def test_archive_offer_snapshots_uses_cheapest_offer_and_tracks_unavailable_pair
     assert runpod_h100[-1].price_per_hour == 1.9
     assert runpod_h100[-1].count == 1
 
-    unavailable = state.offer_history[("B300", "runpod")]
+    unavailable = state.offer_history[("RTX 5090", "runpod")]
     assert len(unavailable) == 60
     assert unavailable[-1].available is False
     assert unavailable[-1].price_per_hour == 0.0
     assert unavailable[-1].count == 0
 
 
-def test_start_all_collectors_exposes_dstack_offer_worker_at_sixty_seconds(monkeypatch):
+def test_start_all_collectors_exposes_dstack_offer_worker_at_thirty_seconds(monkeypatch):
     """Proves the dstack offer worker cadence was widened to avoid overlapping
     the slower multi-GPU probe sequence."""
     from src import collector_workers
@@ -376,7 +417,7 @@ def test_start_all_collectors_exposes_dstack_offer_worker_at_sixty_seconds(monke
         worker.join(timeout=1.0)
 
     cadence_by_name = {worker.name: worker.cadence for worker in workers}
-    assert cadence_by_name["dstack-offers-60s"] == 60.0
+    assert cadence_by_name["dstack-offers-30s"] == 30.0
 
 
 # ── F6 Test 5: collector timestamps must be timezone-aware UTC ────────────────

@@ -1,4 +1,36 @@
-"""Connector module for shared MLflow, Cloudflare, and artifact wiring."""
+"""Shared connector administration and diagnostics for MLflow, Cloudflare, and R2.
+
+This module is the infrastructure-facing half of the connector/deployer split.
+It owns the repo-managed wiring that makes shared services discoverable and
+observable:
+
+1. Repo defaults and path conventions for connector state, env files, and
+   secret files under ``infrastructure/capacity-seeker``.
+2. Cloudflare tunnel bootstrap helpers used by ``gpupoor connector setup`` to
+   create or reuse a named tunnel, publish ingress rules, and persist the
+   resulting connector metadata into ``.connector.json`` and ``.env.connector``.
+3. R2 credential discovery, normalization, syncing, and diagnostics through
+   ``R2EnvironmentManager``. This consolidates the logic that reads
+   ``r2_credentials`` or falls back to the Cloudflare secret file, derives the
+   R2 endpoint and artifact destination, and reports whether artifact storage is
+   actually ready.
+4. Connector health and observability through ``ConnectorDiagnostics``. That
+   object assembles the operator-facing status payload by checking local MLflow
+   health, public hostname visibility, quick-tunnel state, public MLflow
+   reachability, dashboard reachability, and R2 readiness.
+5. CLI-facing admin flows through ``ConnectorAdmin`` for ``setup``, ``doctor``,
+   and ``status``.
+
+The file is intentionally not responsible for launch-time deployment policy
+anymore. Runtime bundle construction, local-debug vs remote launch readiness,
+and connection env injection moved to ``gpupoor.deployer`` so deployment
+decisions live with the launch orchestration instead of the infrastructure
+admin surface.
+
+The module-level functions near the bottom are thin compatibility wrappers.
+They keep the public ``gpupoor.connector`` API stable for the CLI and tests
+while delegating real work to the service objects above.
+"""
 
 from __future__ import annotations
 
@@ -8,101 +40,113 @@ import os
 import shutil
 import socket
 import subprocess
+import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-try:
-    import tomllib
-except ModuleNotFoundError:  # Python < 3.11
-    tomllib = None  # type: ignore[assignment]
-
-from gpupoor.config import RunConfig, parse_env_file
-from gpupoor.services import dashboard as dashboard_service
-from gpupoor.services import mlflow as mlflow_service
+from gpupoor.config import ConfigError, parse_env_file
 from gpupoor.utils import repo_path
-from gpupoor.utils.http import http_ok, wait_for_health
+from gpupoor.utils.http import http_ok
 
 
 def _load_defaults() -> dict[str, Any]:
     """Load connector defaults from infrastructure/capacity-seeker/defaults.toml."""
-    if tomllib is None:
-        return {}
     defaults_path = repo_path("infrastructure", "capacity-seeker", "defaults.toml")
-    if defaults_path.is_file():
-        return tomllib.loads(defaults_path.read_text(encoding="utf-8"))
-    return {}
+    if not defaults_path.is_file():
+        raise ConfigError(f"Required defaults file not found: {defaults_path}")
+    return tomllib.loads(defaults_path.read_text(encoding="utf-8"))
 
 
-_DEFAULTS = _load_defaults()
-_CONNECTOR = _DEFAULTS.get("connector", {})
-_HOSTNAMES = _CONNECTOR.get("hostnames", {})
-_PORTS = _CONNECTOR.get("ports", {})
-_HEALTH = _CONNECTOR.get("health", {})
-_R2_DEFAULTS = _DEFAULTS.get("r2", {})
+@dataclass(frozen=True, slots=True)
+class ConnectorDefaults:
+    domain: str
+    tunnel_name: str
+    allow_quick_tunnel: bool
+    mlflow_api_host: str
+    mlflow_ui_host: str
+    dashboard_host: str
+    mlflow_port: int
+    dashboard_port: int
+    mlflow_health_url: str
+    mlflow_health_timeout: int
+    r2_endpoint_template: str
+    r2_region: str
+    r2_artifact_suffix: str
+    r2_bucket_name: str
+    zone_id: str
 
-default_connector_domain = _CONNECTOR.get("domain", "mlmonk96.net")
-default_tunnel_name = _CONNECTOR.get("tunnel_name", "capacity-seeker")
-default_allow_quick_tunnel = bool(_CONNECTOR.get("allow_quick_tunnel", False))
-default_mlflow_api_host = _HOSTNAMES.get("mlflow_api", f"mlflow-api.{default_connector_domain}")
-default_mlflow_ui_host = _HOSTNAMES.get("mlflow_ui", f"mlflow-ui.{default_connector_domain}")
-default_dashboard_host = _HOSTNAMES.get("dashboard", f"dashboard.{default_connector_domain}")
-default_mlflow_port = _PORTS.get("mlflow", 5000)
-default_dashboard_port = _PORTS.get("dashboard", 7860)
-default_mlflow_health_url = _HEALTH.get("mlflow_local_url", f"http://127.0.0.1:{default_mlflow_port}/health")
-default_mlflow_health_timeout = _HEALTH.get("mlflow_local_timeout", 2)
-default_r2_endpoint_template = _R2_DEFAULTS.get("endpoint_template", "https://{account_id}.r2.cloudflarestorage.com")
-default_r2_region = _R2_DEFAULTS.get("default_region", "auto")
-default_r2_artifact_suffix = _R2_DEFAULTS.get("artifact_path_suffix", "mlflow-artifacts")
-default_r2_bucket_name = _R2_DEFAULTS.get("bucket_name", "")
-default_zone_id = _CONNECTOR.get("zone_id", "")
+    @classmethod
+    def load(cls) -> ConnectorDefaults:
+        payload = _load_defaults()
+        connector = payload["connector"]
+        hostnames = connector["hostnames"]
+        ports = connector["ports"]
+        health = connector["health"]
+        r2 = payload["r2"]
+        domain = connector["domain"]
+        return cls(
+            domain=domain,
+            tunnel_name=connector["tunnel_name"],
+            allow_quick_tunnel=bool(connector["allow_quick_tunnel"]),
+            mlflow_api_host=hostnames.get("mlflow_api", f"mlflow-api.{domain}"),
+            mlflow_ui_host=hostnames.get("mlflow_ui", f"mlflow-ui.{domain}"),
+            dashboard_host=hostnames.get("dashboard", f"dashboard.{domain}"),
+            mlflow_port=ports["mlflow"],
+            dashboard_port=ports["dashboard"],
+            mlflow_health_url=health.get("mlflow_local_url", f"http://127.0.0.1:{ports['mlflow']}/health"),
+            mlflow_health_timeout=health["mlflow_local_timeout"],
+            r2_endpoint_template=r2["endpoint_template"],
+            r2_region=r2["default_region"],
+            r2_artifact_suffix=r2["artifact_path_suffix"],
+            r2_bucket_name=r2["bucket_name"],
+            zone_id=connector["zone_id"],
+        )
+
+    def hostnames(self, domain: str) -> dict[str, str]:
+        return {
+            "CF_DOMAIN": domain,
+            "CF_TUNNEL_NAME": self.tunnel_name,
+            "CF_MLFLOW_API_HOST": f"mlflow-api.{domain}",
+            "CF_MLFLOW_UI_HOST": f"mlflow-ui.{domain}",
+            "CF_DASHBOARD_HOST": f"dashboard.{domain}",
+        }
+
+    def public_hosts(self, domain: str) -> list[str]:
+        hostnames = self.hostnames(domain)
+        return [
+            hostnames["CF_MLFLOW_API_HOST"],
+            hostnames["CF_MLFLOW_UI_HOST"],
+            hostnames["CF_DASHBOARD_HOST"],
+        ]
+
+
+_SETTINGS = ConnectorDefaults.load()
+
+default_connector_domain = _SETTINGS.domain
+default_tunnel_name = _SETTINGS.tunnel_name
+default_allow_quick_tunnel = _SETTINGS.allow_quick_tunnel
+default_mlflow_api_host = _SETTINGS.mlflow_api_host
+default_mlflow_ui_host = _SETTINGS.mlflow_ui_host
+default_dashboard_host = _SETTINGS.dashboard_host
+default_mlflow_port = _SETTINGS.mlflow_port
+default_dashboard_port = _SETTINGS.dashboard_port
+default_mlflow_health_url = _SETTINGS.mlflow_health_url
+default_mlflow_health_timeout = _SETTINGS.mlflow_health_timeout
+default_r2_endpoint_template = _SETTINGS.r2_endpoint_template
+default_r2_region = _SETTINGS.r2_region
+default_r2_artifact_suffix = _SETTINGS.r2_artifact_suffix
+default_r2_bucket_name = _SETTINGS.r2_bucket_name
+default_zone_id = _SETTINGS.zone_id
 required_r2_keys = (
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "MLFLOW_S3_ENDPOINT_URL",
     "MLFLOW_ARTIFACTS_DESTINATION",
 )
-
-
-@dataclass(slots=True)
-class ConnectionProfileRequest:
-    lane: str
-    config_path: str
-    job_id: str = ""
-    artifact_upload_requested: bool = False
-
-
-@dataclass(slots=True)
-class ConnectionBundle:
-    mlflow_tracking_uri: str
-    mlflow_auth_mode: str
-    mlflow_auth_payload: str
-    artifact_upload_enabled: bool
-    artifact_store_kind: str
-    health_verdict: str
-
-    def to_runtime_env(self) -> dict[str, str]:
-        env = {
-            "MLFLOW_TRACKING_URI": self.mlflow_tracking_uri,
-            "MLFLOW_ARTIFACT_UPLOAD": "1" if self.artifact_upload_enabled else "0",
-            "GPUPOOR_CONNECTOR_ARTIFACT_STORE": self.artifact_store_kind,
-            "GPUPOOR_CONNECTOR_HEALTH": self.health_verdict,
-        }
-        if self.mlflow_auth_mode != "none" and self.mlflow_auth_payload:
-            env["GPUPOOR_MLFLOW_AUTH_MODE"] = self.mlflow_auth_mode
-            env["GPUPOOR_MLFLOW_AUTH_PAYLOAD"] = self.mlflow_auth_payload
-        return env
-
-    def apply_to_config(self, config: RunConfig) -> RunConfig:
-        mlflow = replace(
-            config.mlflow,
-            tracking_uri=self.mlflow_tracking_uri,
-            artifact_upload=self.artifact_upload_enabled,
-        )
-        return replace(config, mlflow=mlflow)
 
 
 def connector_dir() -> Path:
@@ -237,13 +281,7 @@ def cloudflare_request(
 
 
 def connector_hostnames(domain: str) -> dict[str, str]:
-    return {
-        "CF_DOMAIN": domain,
-        "CF_TUNNEL_NAME": default_tunnel_name,
-        "CF_MLFLOW_API_HOST": f"mlflow-api.{domain}",
-        "CF_MLFLOW_UI_HOST": f"mlflow-ui.{domain}",
-        "CF_DASHBOARD_HOST": f"dashboard.{domain}",
-    }
+    return _SETTINGS.hostnames(domain)
 
 
 def cloudflare_credentials() -> tuple[str, str]:
@@ -367,9 +405,123 @@ def write_connector_files(
     )
 
 
-def normalized_r2_values(raw: dict[str, str], connector_env: dict[str, str]) -> dict[str, str]:
-    values = {key: value for key, value in raw.items() if value}
-    aliases = {
+@dataclass(slots=True)
+class R2EnvironmentManager:
+    aliases: dict[str, str]
+    passthrough_keys: frozenset[str]
+    credential_source_keys: frozenset[str]
+    candidate_source_keys: frozenset[str]
+
+    def source_contains_r2_keys(self, raw: dict[str, str], *, allow_bucket_only: bool = False) -> bool:
+        accepted = self.candidate_source_keys if allow_bucket_only else self.credential_source_keys
+        return any(key.lower().replace("-", "_").replace(" ", "_") in accepted for key in raw)
+
+    def normalized_values(self, raw: dict[str, str], connector_env: dict[str, str]) -> dict[str, str]:
+        values = {key: value for key, value in raw.items() if value}
+        normalized: dict[str, str] = {}
+        for key, value in values.items():
+            normalized_key = self.aliases.get(key.lower())
+            if normalized_key is None:
+                if key in self.passthrough_keys:
+                    normalized[key] = value
+                continue
+            normalized[normalized_key] = value
+        account_id = connector_env.get("CF_ACCOUNT_ID", "")
+        if default_r2_bucket_name and not normalized.get("R2_BUCKET_NAME"):
+            normalized["R2_BUCKET_NAME"] = default_r2_bucket_name
+        if not normalized.get("MLFLOW_S3_ENDPOINT_URL") and account_id:
+            normalized["MLFLOW_S3_ENDPOINT_URL"] = default_r2_endpoint_template.format(account_id=account_id)
+        if normalized.get("R2_BUCKET_NAME") and not normalized.get("MLFLOW_ARTIFACTS_DESTINATION"):
+            normalized["MLFLOW_ARTIFACTS_DESTINATION"] = (
+                f"s3://{normalized['R2_BUCKET_NAME']}/{default_r2_artifact_suffix}"
+            )
+        if normalized.get("AWS_ACCESS_KEY_ID") and normalized.get("AWS_SECRET_ACCESS_KEY"):
+            normalized.setdefault("AWS_DEFAULT_REGION", default_r2_region)
+        return normalized
+
+    def sync_env(self) -> dict[str, str]:
+        """Sync R2 credentials to .env.r2 using the repo credential files."""
+        raw = read_mapping_file(r2_credentials_path())
+        if not raw:
+            fallback = read_mapping_file(cloudflare_secret_path())
+            if self.source_contains_r2_keys(fallback):
+                raw = fallback
+        if not raw:
+            return read_r2_env()
+        values = self.normalized_values(raw, read_connector_env())
+        write_env_file(r2_env_path(), values)
+        return values
+
+    def candidate_mapping(self) -> tuple[dict[str, str], str]:
+        raw = read_mapping_file(r2_credentials_path())
+        if raw:
+            return raw, str(r2_credentials_path())
+        fallback = read_mapping_file(cloudflare_secret_path())
+        if self.source_contains_r2_keys(fallback, allow_bucket_only=True):
+            return fallback, str(cloudflare_secret_path())
+        return {}, ""
+
+    def status_payload(self) -> dict[str, Any]:
+        env = read_r2_env()
+        diagnostics: dict[str, Any] = {
+            "r2_status": "missing_credentials",
+            "r2_blocker": "",
+            "r2_api_accessible": None,
+            "r2_bucket_names": [],
+        }
+        if all(env.get(key) for key in required_r2_keys):
+            diagnostics["r2_status"] = "ready"
+            return diagnostics
+
+        raw, source = self.candidate_mapping()
+        if raw:
+            normalized = self.normalized_values(raw, read_connector_env())
+            missing = [key for key in required_r2_keys if not normalized.get(key)]
+            if not missing:
+                diagnostics["r2_status"] = "ready"
+                return diagnostics
+            diagnostics["r2_status"] = "blocked"
+            diagnostics["r2_blocker"] = f"incomplete R2 credentials in {source}; missing {', '.join(missing)}"
+            return diagnostics
+
+        if not cloudflare_secret_path().is_file():
+            diagnostics["r2_blocker"] = (
+                f"missing {r2_credentials_path()} and {cloudflare_secret_path()} does not exist for fallback lookup"
+            )
+            return diagnostics
+
+        try:
+            account_id, api_token = cloudflare_credentials()
+            payload = cloudflare_request(
+                "GET",
+                f"/accounts/{account_id}/r2/buckets",
+                api_token=api_token,
+            )
+        except RuntimeError as exc:
+            diagnostics["r2_status"] = "blocked"
+            diagnostics["r2_api_accessible"] = False
+            diagnostics["r2_blocker"] = (
+                f"no R2 S3 credentials found in {r2_credentials_path()} or {cloudflare_secret_path()}, "
+                f"and Cloudflare token cannot access the R2 buckets API ({exc})"
+            )
+            return diagnostics
+
+        result = payload.get("result", [])
+        diagnostics["r2_api_accessible"] = True
+        if isinstance(result, list):
+            diagnostics["r2_bucket_names"] = [
+                str(bucket.get("name")) for bucket in result if isinstance(bucket, dict) and bucket.get("name")
+            ]
+        diagnostics["r2_status"] = "blocked"
+        diagnostics["r2_blocker"] = (
+            f"R2 buckets API is reachable, but no S3-compatible credentials were found in "
+            f"{r2_credentials_path()} or {cloudflare_secret_path()}"
+        )
+        return diagnostics
+
+
+_R2_MANAGER = R2EnvironmentManager(
+    aliases={
         "access key id": "AWS_ACCESS_KEY_ID",
         "s3 access key": "AWS_ACCESS_KEY_ID",
         "s3 access key id": "AWS_ACCESS_KEY_ID",
@@ -381,8 +533,8 @@ def normalized_r2_values(raw: dict[str, str], connector_env: dict[str, str]) -> 
         "endpoint": "MLFLOW_S3_ENDPOINT_URL",
         "endpoint url": "MLFLOW_S3_ENDPOINT_URL",
         "s3 endpoint": "MLFLOW_S3_ENDPOINT_URL",
-    }
-    _known_output_keys = frozenset(
+    },
+    passthrough_keys=frozenset(
         {
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
@@ -391,77 +543,21 @@ def normalized_r2_values(raw: dict[str, str], connector_env: dict[str, str]) -> 
             "MLFLOW_ARTIFACTS_DESTINATION",
             "R2_BUCKET_NAME",
         }
-    )
-    normalized: dict[str, str] = {}
-    for key, value in values.items():
-        normalized_key = aliases.get(key.lower())
-        if normalized_key is None:
-            # Pass through only if it's already a known R2 output key.
-            if key in _known_output_keys:
-                normalized[key] = value
-            continue
-        normalized[normalized_key] = value
-    account_id = connector_env.get("CF_ACCOUNT_ID", "")
-    if default_r2_bucket_name and not normalized.get("R2_BUCKET_NAME"):
-        normalized["R2_BUCKET_NAME"] = default_r2_bucket_name
-    if not normalized.get("MLFLOW_S3_ENDPOINT_URL") and account_id:
-        normalized["MLFLOW_S3_ENDPOINT_URL"] = default_r2_endpoint_template.format(account_id=account_id)
-    if normalized.get("R2_BUCKET_NAME") and not normalized.get("MLFLOW_ARTIFACTS_DESTINATION"):
-        normalized["MLFLOW_ARTIFACTS_DESTINATION"] = (
-            f"s3://{normalized['R2_BUCKET_NAME']}/{default_r2_artifact_suffix}"
-        )
-    if normalized.get("AWS_ACCESS_KEY_ID") and normalized.get("AWS_SECRET_ACCESS_KEY"):
-        normalized.setdefault("AWS_DEFAULT_REGION", default_r2_region)
-    return normalized
-
-
-def sync_r2_env() -> dict[str, str]:
-    """Sync R2 credentials to .env.r2.
-
-    Reads from r2_credentials first, then falls back to the cloudflare
-    credentials file (which may contain R2 S3-compatible keys alongside
-    the account ID and API token).  The following keys are recognized in
-    either file::
-
-        Access Key ID : <R2 S3 access key>
-        Secret Access Key : <R2 S3 secret key>
-        Bucket : <R2 bucket name>
-    """
-    raw = read_mapping_file(r2_credentials_path())
-    if not raw:
-        # Fall back: check the cloudflare credentials file for R2 keys.
-        cf_raw = read_mapping_file(cloudflare_secret_path())
-        r2_keys_present = any(
-            k.lower().replace("-", "_").replace(" ", "_")
-            in (
-                "access_key_id",
-                "accesskeyid",
-                "secret_access_key",
-                "secretaccesskey",
-                "s3_access_key",
-                "s3_secret_key",
-                "s3_access_key_id",
-                "s3_secret_access_key",
-            )
-            for k in cf_raw
-        )
-        if r2_keys_present:
-            raw = cf_raw
-    if not raw:
-        return read_r2_env()
-    values = normalized_r2_values(raw, read_connector_env())
-    write_env_file(r2_env_path(), values)
-    return values
-
-
-def r2_candidate_mapping() -> tuple[dict[str, str], str]:
-    raw = read_mapping_file(r2_credentials_path())
-    if raw:
-        return raw, str(r2_credentials_path())
-    cf_raw = read_mapping_file(cloudflare_secret_path())
-    r2_keys_present = any(
-        key.lower().replace("-", "_").replace(" ", "_")
-        in (
+    ),
+    credential_source_keys=frozenset(
+        {
+            "access_key_id",
+            "accesskeyid",
+            "secret_access_key",
+            "secretaccesskey",
+            "s3_access_key",
+            "s3_secret_key",
+            "s3_access_key_id",
+            "s3_secret_access_key",
+        }
+    ),
+    candidate_source_keys=frozenset(
+        {
             "access_key_id",
             "accesskeyid",
             "secret_access_key",
@@ -472,98 +568,25 @@ def r2_candidate_mapping() -> tuple[dict[str, str], str]:
             "s3_secret_access_key",
             "bucket",
             "bucket_name",
-        )
-        for key in cf_raw
-    )
-    if r2_keys_present:
-        return cf_raw, str(cloudflare_secret_path())
-    return {}, ""
+        }
+    ),
+)
+
+
+def normalized_r2_values(raw: dict[str, str], connector_env: dict[str, str]) -> dict[str, str]:
+    return _R2_MANAGER.normalized_values(raw, connector_env)
+
+
+def sync_r2_env() -> dict[str, str]:
+    return _R2_MANAGER.sync_env()
+
+
+def r2_candidate_mapping() -> tuple[dict[str, str], str]:
+    return _R2_MANAGER.candidate_mapping()
 
 
 def r2_status_payload() -> dict[str, Any]:
-    env = read_r2_env()
-    diagnostics: dict[str, Any] = {
-        "r2_status": "missing_credentials",
-        "r2_blocker": "",
-        "r2_api_accessible": None,
-        "r2_bucket_names": [],
-    }
-    if all(env.get(key) for key in required_r2_keys):
-        diagnostics["r2_status"] = "ready"
-        return diagnostics
-
-    raw, source = r2_candidate_mapping()
-    if raw:
-        normalized = normalized_r2_values(raw, read_connector_env())
-        missing = [key for key in required_r2_keys if not normalized.get(key)]
-        if not missing:
-            diagnostics["r2_status"] = "ready"
-            return diagnostics
-        diagnostics["r2_status"] = "blocked"
-        diagnostics["r2_blocker"] = f"incomplete R2 credentials in {source}; missing {', '.join(missing)}"
-        return diagnostics
-
-    if not cloudflare_secret_path().is_file():
-        diagnostics["r2_blocker"] = (
-            f"missing {r2_credentials_path()} and {cloudflare_secret_path()} does not exist for fallback lookup"
-        )
-        return diagnostics
-
-    try:
-        account_id, api_token = cloudflare_credentials()
-        payload = cloudflare_request(
-            "GET",
-            f"/accounts/{account_id}/r2/buckets",
-            api_token=api_token,
-        )
-    except RuntimeError as exc:
-        diagnostics["r2_status"] = "blocked"
-        diagnostics["r2_api_accessible"] = False
-        diagnostics["r2_blocker"] = (
-            f"no R2 S3 credentials found in {r2_credentials_path()} or {cloudflare_secret_path()}, "
-            f"and Cloudflare token cannot access the R2 buckets API ({exc})"
-        )
-        return diagnostics
-
-    result = payload.get("result", [])
-    diagnostics["r2_api_accessible"] = True
-    if isinstance(result, list):
-        diagnostics["r2_bucket_names"] = [
-            str(bucket.get("name")) for bucket in result if isinstance(bucket, dict) and bucket.get("name")
-        ]
-    diagnostics["r2_status"] = "blocked"
-    diagnostics["r2_blocker"] = (
-        f"R2 buckets API is reachable, but no S3-compatible credentials were found in "
-        f"{r2_credentials_path()} or {cloudflare_secret_path()}"
-    )
-    return diagnostics
-
-
-def stable_tracking_uri() -> str:
-    state = connector_state()
-    env = read_connector_env()
-    if state.get("mlflow_tracking_uri"):
-        return str(state["mlflow_tracking_uri"])
-    host = env.get("CF_MLFLOW_API_HOST") or default_mlflow_api_host
-    return f"https://{host}"
-
-
-def stable_dashboard_uri() -> str:
-    state = connector_state()
-    env = read_connector_env()
-    if state.get("dashboard_uri"):
-        return str(state["dashboard_uri"])
-    host = env.get("CF_DASHBOARD_HOST") or default_dashboard_host
-    return f"https://{host}"
-
-
-def connector_public_hosts(domain: str) -> list[str]:
-    hostnames = connector_hostnames(domain)
-    return [
-        hostnames["CF_MLFLOW_API_HOST"],
-        hostnames["CF_MLFLOW_UI_HOST"],
-        hostnames["CF_DASHBOARD_HOST"],
-    ]
+    return _R2_MANAGER.status_payload()
 
 
 def hostname_resolves(hostname: str) -> bool:
@@ -574,135 +597,360 @@ def hostname_resolves(hostname: str) -> bool:
     return True
 
 
-def public_hostname_status(domain: str) -> dict[str, Any]:
-    hosts = connector_public_hosts(domain)
-    diagnostics: dict[str, Any] = {
-        "cloudflare_zone_visible": None,
-        "public_hostname_status": "unknown",
-        "public_hostname_blocker": "",
-        "public_hostnames": hosts,
-        "public_hostnames_resolve": False,
-        "unresolved_public_hostnames": hosts,
-    }
-    if not cloudflare_secret_path().is_file():
-        diagnostics["public_hostname_status"] = "missing_credentials"
-        diagnostics["public_hostname_blocker"] = f"missing {cloudflare_secret_path()}"
+@dataclass(slots=True)
+class ConnectorDiagnostics:
+    def stable_tracking_uri(self) -> str:
+        state = connector_state()
+        env = read_connector_env()
+        if state.get("mlflow_tracking_uri"):
+            return str(state["mlflow_tracking_uri"])
+        host = env.get("CF_MLFLOW_API_HOST") or default_mlflow_api_host
+        return f"https://{host}"
+
+    def stable_dashboard_uri(self) -> str:
+        state = connector_state()
+        env = read_connector_env()
+        if state.get("dashboard_uri"):
+            return str(state["dashboard_uri"])
+        host = env.get("CF_DASHBOARD_HOST") or default_dashboard_host
+        return f"https://{host}"
+
+    def public_hostname_status(self, domain: str) -> dict[str, Any]:
+        hosts = connector_public_hosts(domain)
+        diagnostics: dict[str, Any] = {
+            "cloudflare_zone_visible": None,
+            "public_hostname_status": "unknown",
+            "public_hostname_blocker": "",
+            "public_hostnames": hosts,
+            "public_hostnames_resolve": False,
+            "unresolved_public_hostnames": hosts,
+        }
+        if not cloudflare_secret_path().is_file():
+            diagnostics["public_hostname_status"] = "missing_credentials"
+            diagnostics["public_hostname_blocker"] = f"missing {cloudflare_secret_path()}"
+            return diagnostics
+        zone_id = default_zone_id or read_connector_env().get("CF_ZONE_ID", "") or cloudflare_zone_id()
+        try:
+            _, api_token = cloudflare_credentials()
+            dns_token = cloudflare_dns_token() or api_token
+            if zone_id:
+                diagnostics["cloudflare_zone_visible"] = True
+            else:
+                payload = cloudflare_request("GET", f"/zones?name={domain}", api_token=dns_token)
+                result = payload.get("result", [])
+                if not isinstance(result, list):
+                    diagnostics["public_hostname_status"] = "cloudflare_error"
+                    diagnostics["public_hostname_blocker"] = "Cloudflare zone lookup did not return a list"
+                    return diagnostics
+                if not result:
+                    diagnostics["cloudflare_zone_visible"] = False
+                    diagnostics["public_hostname_status"] = "blocked"
+                    diagnostics["public_hostname_blocker"] = (
+                        f"Cloudflare token cannot access zone {domain}; "
+                        "add zone_id to defaults.toml or grant Zone:Read to the API token"
+                    )
+                    return diagnostics
+                diagnostics["cloudflare_zone_visible"] = True
+        except RuntimeError as exc:
+            diagnostics["public_hostname_status"] = "cloudflare_error"
+            diagnostics["public_hostname_blocker"] = str(exc)
+            return diagnostics
+        unresolved = [host for host in hosts if not hostname_resolves(host)]
+        diagnostics["public_hostnames_resolve"] = not unresolved
+        diagnostics["unresolved_public_hostnames"] = unresolved
+        if unresolved:
+            diagnostics["public_hostname_status"] = "blocked"
+            diagnostics["public_hostname_blocker"] = (
+                f"Cloudflare zone {domain} is visible but DNS does not resolve for: {', '.join(unresolved)}"
+            )
+            return diagnostics
+        diagnostics["public_hostname_status"] = "ready"
         return diagnostics
-    zone_id = default_zone_id or read_connector_env().get("CF_ZONE_ID", "") or cloudflare_zone_id()
-    try:
-        _, api_token = cloudflare_credentials()
-        dns_token = cloudflare_dns_token() or api_token
-        if zone_id:
-            # Zone ID known — skip zone lookup, verify via DNS record list.
-            diagnostics["cloudflare_zone_visible"] = True
-        else:
-            payload = cloudflare_request("GET", f"/zones?name={domain}", api_token=dns_token)
-            result = payload.get("result", [])
-            if not isinstance(result, list):
-                diagnostics["public_hostname_status"] = "cloudflare_error"
-                diagnostics["public_hostname_blocker"] = "Cloudflare zone lookup did not return a list"
-                return diagnostics
-            if not result:
-                diagnostics["cloudflare_zone_visible"] = False
-                diagnostics["public_hostname_status"] = "blocked"
-                diagnostics["public_hostname_blocker"] = (
-                    f"Cloudflare token cannot access zone {domain}; "
-                    "add zone_id to defaults.toml or grant Zone:Read to the API token"
-                )
-                return diagnostics
-            diagnostics["cloudflare_zone_visible"] = True
-            zone_id = result[0].get("id", "")
-    except RuntimeError as exc:
-        diagnostics["public_hostname_status"] = "cloudflare_error"
-        diagnostics["public_hostname_blocker"] = str(exc)
-        return diagnostics
-    unresolved = [host for host in hosts if not hostname_resolves(host)]
-    diagnostics["public_hostnames_resolve"] = not unresolved
-    diagnostics["unresolved_public_hostnames"] = unresolved
-    if unresolved:
-        diagnostics["public_hostname_status"] = "blocked"
-        diagnostics["public_hostname_blocker"] = (
-            f"Cloudflare zone {domain} is visible but DNS does not resolve for: {', '.join(unresolved)}"
+
+    def read_public_tracking_uri(self) -> str:
+        path = tunnel_url_path()
+        if path.is_file():
+            url = path.read_text(encoding="utf-8").strip()
+            if url:
+                return url
+        return stable_tracking_uri()
+
+    def mlflow_public_mode(self, tracking_uri: str) -> str:
+        if not tracking_uri:
+            return "unavailable"
+        if is_quick_tunnel_uri(tracking_uri):
+            return "quick"
+        return "stable"
+
+    def public_mlflow_health_uri(self, tracking_uri: str) -> str:
+        return tracking_uri.rstrip("/") + "/health" if tracking_uri else ""
+
+    def public_http_ok(self, url: str, *, timeout_seconds: int = 5) -> bool:
+        if http_ok(url, timeout_seconds=timeout_seconds):
+            return True
+        parsed = urllib.parse.urlparse(url)
+        host = parsed.hostname or ""
+        if parsed.scheme != "https" or not host:
+            return False
+        if shutil.which("curl") is None or shutil.which("nslookup") is None:
+            return False
+        try:
+            lookup = subprocess.run(
+                ["nslookup", host, "8.8.8.8"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        resolved_ip = ""
+        for raw_line in lookup.stdout.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("Address:"):
+                continue
+            candidate = line.split(":", 1)[1].strip()
+            try:
+                ipaddress.ip_address(candidate)
+            except ValueError:
+                continue
+            resolved_ip = candidate
+            break
+        if not resolved_ip:
+            return False
+        try:
+            curl = subprocess.run(
+                [
+                    "curl",
+                    "-fsS",
+                    "--resolve",
+                    f"{host}:443:{resolved_ip}",
+                    "--max-time",
+                    str(timeout_seconds),
+                    url,
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=timeout_seconds,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return curl.returncode == 0
+
+    def remote_mlflow_status(
+        self,
+        *,
+        tracking_uri: str,
+        mlflow_local_healthy: bool,
+        quick_tunnel_allowed: bool,
+        quick_tunnel_active: bool,
+        public_hostname_status: str,
+        public_hostname_blocker: str,
+    ) -> tuple[str, bool, str]:
+        mode = mlflow_public_mode(tracking_uri)
+        public_health_uri = public_mlflow_health_uri(tracking_uri)
+        if not tracking_uri:
+            return mode, False, "Connector did not produce a public MLflow tracking URI"
+        if not mlflow_local_healthy:
+            return mode, False, f"MLflow is not healthy at {default_mlflow_health_url}"
+        if mode == "quick":
+            if not quick_tunnel_allowed:
+                return mode, False, "Quick Tunnel is active but bootstrap mode is disabled"
+            if not quick_tunnel_active:
+                return mode, False, "Quick Tunnel URL is configured but not active"
+            if not public_http_ok(public_health_uri, timeout_seconds=5):
+                return mode, False, f"Quick Tunnel MLflow URL is not reachable at {tracking_uri}"
+            return mode, True, ""
+        if public_hostname_status != "ready":
+            blocker = public_hostname_blocker or "public MLflow hostnames are not ready"
+            return mode, False, blocker
+        if not public_http_ok(public_health_uri, timeout_seconds=5):
+            return mode, False, f"Stable MLflow URL is not reachable at {tracking_uri}"
+        return mode, True, ""
+
+    def public_dashboard_status(
+        self,
+        *,
+        public_hostname_status: str,
+        public_hostname_blocker: str,
+    ) -> tuple[bool, str, str]:
+        if public_hostname_status != "ready":
+            blocker = public_hostname_blocker or "stable public dashboard hostnames are not ready"
+            return False, "unavailable", blocker
+        local_dashboard_url = f"http://127.0.0.1:{default_dashboard_port}"
+        if not http_ok(local_dashboard_url, timeout_seconds=default_mlflow_health_timeout):
+            return False, "unavailable", f"dashboard is not healthy at {local_dashboard_url}"
+        return True, stable_dashboard_uri(), ""
+
+    def remote_runtime_blockers(self, payload: dict[str, Any]) -> list[str]:
+        blockers: list[str] = []
+        if not payload.get("remote_mlflow_ready", False):
+            blocker = str(payload.get("remote_mlflow_blocker") or "remote MLflow is not ready")
+            blockers.append(blocker)
+        if payload.get("r2_status") != "ready":
+            blocker = str(payload.get("r2_blocker") or "R2 is not ready")
+            blockers.append(blocker)
+        return blockers
+
+    def status_payload(self) -> dict[str, Any]:
+        state = connector_state()
+        env = read_connector_env()
+        r2 = read_r2_env()
+        tracking_uri = read_public_tracking_uri()
+        quick_tunnel_allowed = allow_quick_tunnel()
+        quick_tunnel_active = is_quick_tunnel_uri(tracking_uri)
+        domain = str(state.get("domain") or env.get("CF_DOMAIN") or default_connector_domain)
+        hostname_diagnostics = public_hostname_status(domain)
+        r2_diagnostics = r2_status_payload()
+        mlflow_local_healthy = http_ok(default_mlflow_health_url, timeout_seconds=default_mlflow_health_timeout)
+        mlflow_mode, remote_mlflow_ready, remote_mlflow_blocker = remote_mlflow_status(
+            tracking_uri=tracking_uri,
+            mlflow_local_healthy=mlflow_local_healthy,
+            quick_tunnel_allowed=quick_tunnel_allowed,
+            quick_tunnel_active=quick_tunnel_active,
+            public_hostname_status=str(hostname_diagnostics.get("public_hostname_status") or ""),
+            public_hostname_blocker=str(hostname_diagnostics.get("public_hostname_blocker") or ""),
         )
-        return diagnostics
-    diagnostics["public_hostname_status"] = "ready"
-    diagnostics["public_hostname_blocker"] = ""
-    return diagnostics
+        public_dashboard_ready, dashboard_uri, public_dashboard_blocker = public_dashboard_status(
+            public_hostname_status=str(hostname_diagnostics.get("public_hostname_status") or ""),
+            public_hostname_blocker=str(hostname_diagnostics.get("public_hostname_blocker") or ""),
+        )
+        return {
+            "domain": domain,
+            "tracking_uri": tracking_uri,
+            "mlflow_public_mode": mlflow_mode,
+            "remote_mlflow_ready": remote_mlflow_ready,
+            "remote_mlflow_blocker": remote_mlflow_blocker,
+            "dashboard_uri": dashboard_uri,
+            "public_dashboard_ready": public_dashboard_ready,
+            "public_dashboard_blocker": public_dashboard_blocker,
+            "artifact_store_kind": artifact_store_kind(),
+            "mlflow_local_healthy": mlflow_local_healthy,
+            "connector_bootstrapped": connector_env_path().is_file(),
+            "r2_configured": bool(r2),
+            "cloudflared_available": shutil.which("cloudflared") is not None,
+            "quick_tunnel_allowed": quick_tunnel_allowed,
+            "quick_tunnel_active": quick_tunnel_active,
+            **hostname_diagnostics,
+            **r2_diagnostics,
+        }
+
+
+@dataclass(slots=True)
+class ConnectorAdmin:
+    def setup(self) -> None:
+        account_id, api_token = cloudflare_credentials()
+        current_env = read_connector_env()
+        domain = os.environ.get("CF_DOMAIN") or current_env.get("CF_DOMAIN") or default_connector_domain
+        tunnel = ensure_named_tunnel(account_id, api_token, default_tunnel_name)
+        tunnel_id = str(tunnel.get("id") or "")
+        if not tunnel_id:
+            raise RuntimeError("Cloudflare tunnel response did not include an id")
+        publish_tunnel_config(account_id, api_token, tunnel_id, domain)
+        tunnel_token = named_tunnel_token(account_id, api_token, tunnel_id)
+        write_connector_files(
+            account_id=account_id,
+            tunnel_id=tunnel_id,
+            tunnel_token=tunnel_token,
+            domain=domain,
+        )
+        sync_r2_env()
+        payload = status_payload()
+        print(f"Connector domain: {payload['domain']}")
+        print(f"MLflow API: {payload['tracking_uri']}")
+        print(f"Dashboard: {payload['dashboard_uri']}")
+        print(f"Public hostnames: {payload['public_hostname_status']}")
+        if payload["public_hostname_blocker"]:
+            print(f"Public hostname blocker: {payload['public_hostname_blocker']}")
+        print(f"R2 status: {payload['r2_status']}")
+        if payload["r2_blocker"]:
+            print(f"R2 blocker: {payload['r2_blocker']}")
+
+    def doctor(self) -> None:
+        payload = status_payload()
+        missing: list[str] = []
+        if not cloudflare_secret_path().is_file():
+            missing.append(f"missing {cloudflare_secret_path()}")
+        if not payload["cloudflared_available"]:
+            missing.append("cloudflared is not on PATH")
+        if not connector_env_path().is_file():
+            missing.append(f"missing {connector_env_path()} (run `gpupoor connector setup`)")
+        if not payload.get("remote_mlflow_ready", False):
+            missing.append(
+                "remote MLflow is not ready"
+                + (f" ({payload.get('remote_mlflow_blocker', '')})" if payload.get("remote_mlflow_blocker") else "")
+            )
+        if payload["r2_status"] != "ready":
+            missing.append("R2 is not ready" + (f" ({payload['r2_blocker']})" if payload["r2_blocker"] else ""))
+        if missing:
+            raise RuntimeError("; ".join(missing))
+        if not payload.get("public_dashboard_ready", False) and payload.get("public_dashboard_blocker"):
+            print(f"Info: public dashboard remains blocked ({payload['public_dashboard_blocker']})")
+        print_status_payload(payload)
+
+    def print_status_payload(self, payload: dict[str, Any]) -> None:
+        print(f"Domain: {payload['domain']}")
+        print(f"Tracking URI: {payload['tracking_uri']}")
+        print(f"MLflow public mode: {payload.get('mlflow_public_mode', 'unavailable')}")
+        print(f"Remote MLflow ready: {'yes' if payload.get('remote_mlflow_ready', False) else 'no'}")
+        if payload.get("remote_mlflow_blocker"):
+            print(f"Remote MLflow blocker: {payload['remote_mlflow_blocker']}")
+        print(f"Dashboard URI: {payload.get('dashboard_uri', 'unavailable')}")
+        print(f"Public dashboard ready: {'yes' if payload.get('public_dashboard_ready', False) else 'no'}")
+        if payload.get("public_dashboard_blocker"):
+            print(f"Public dashboard blocker: {payload['public_dashboard_blocker']}")
+        print(f"Artifact store: {payload['artifact_store_kind']}")
+        print(f"MLflow local health: {'ok' if payload.get('mlflow_local_healthy', False) else 'down'}")
+        print(f"Connector bootstrap: {'yes' if payload.get('connector_bootstrapped', False) else 'no'}")
+        print(f"Quick tunnel allowed: {'yes' if payload.get('quick_tunnel_allowed', False) else 'no'}")
+        print(f"Quick tunnel active: {'yes' if payload.get('quick_tunnel_active', False) else 'no'}")
+        print(f"Public hostnames: {payload.get('public_hostname_status', 'unknown')}")
+        if payload.get("public_hostname_blocker"):
+            print(f"Public hostname blocker: {payload['public_hostname_blocker']}")
+        print(f"R2 configured: {'yes' if payload.get('r2_configured', False) else 'no'}")
+        print(f"R2 status: {payload['r2_status']}")
+        if payload.get("r2_blocker"):
+            print(f"R2 blocker: {payload['r2_blocker']}")
+
+    def status(self) -> None:
+        print_status_payload(status_payload())
+
+
+_DIAGNOSTICS = ConnectorDiagnostics()
+_ADMIN = ConnectorAdmin()
+
+
+def stable_tracking_uri() -> str:
+    return _DIAGNOSTICS.stable_tracking_uri()
+
+
+def stable_dashboard_uri() -> str:
+    return _DIAGNOSTICS.stable_dashboard_uri()
+
+
+def connector_public_hosts(domain: str) -> list[str]:
+    return _SETTINGS.public_hosts(domain)
+
+
+def public_hostname_status(domain: str) -> dict[str, Any]:
+    return _DIAGNOSTICS.public_hostname_status(domain)
 
 
 def read_public_tracking_uri() -> str:
-    path = tunnel_url_path()
-    if path.is_file():
-        url = path.read_text(encoding="utf-8").strip()
-        if url:
-            return url
-    return stable_tracking_uri()
+    return _DIAGNOSTICS.read_public_tracking_uri()
 
 
 def mlflow_public_mode(tracking_uri: str) -> str:
-    if not tracking_uri:
-        return "unavailable"
-    if is_quick_tunnel_uri(tracking_uri):
-        return "quick"
-    return "stable"
+    return _DIAGNOSTICS.mlflow_public_mode(tracking_uri)
 
 
 def public_mlflow_health_uri(tracking_uri: str) -> str:
-    return tracking_uri.rstrip("/") + "/health" if tracking_uri else ""
+    return _DIAGNOSTICS.public_mlflow_health_uri(tracking_uri)
 
 
 def public_http_ok(url: str, *, timeout_seconds: int = 5) -> bool:
-    if http_ok(url, timeout_seconds=timeout_seconds):
-        return True
-    parsed = urllib.parse.urlparse(url)
-    host = parsed.hostname or ""
-    if parsed.scheme != "https" or not host:
-        return False
-    if shutil.which("curl") is None or shutil.which("nslookup") is None:
-        return False
-    try:
-        lookup = subprocess.run(
-            ["nslookup", host, "8.8.8.8"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    resolved_ip = ""
-    for raw_line in lookup.stdout.splitlines():
-        line = raw_line.strip()
-        if not line.startswith("Address:"):
-            continue
-        candidate = line.split(":", 1)[1].strip()
-        try:
-            ipaddress.ip_address(candidate)
-        except ValueError:
-            continue
-        resolved_ip = candidate
-        break
-    if not resolved_ip:
-        return False
-    try:
-        curl = subprocess.run(
-            [
-                "curl",
-                "-fsS",
-                "--resolve",
-                f"{host}:443:{resolved_ip}",
-                "--max-time",
-                str(timeout_seconds),
-                url,
-            ],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=timeout_seconds,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return curl.returncode == 0
+    return _DIAGNOSTICS.public_http_ok(url, timeout_seconds=timeout_seconds)
 
 
 def remote_mlflow_status(
@@ -714,26 +962,14 @@ def remote_mlflow_status(
     public_hostname_status: str,
     public_hostname_blocker: str,
 ) -> tuple[str, bool, str]:
-    mode = mlflow_public_mode(tracking_uri)
-    public_health_uri = public_mlflow_health_uri(tracking_uri)
-    if not tracking_uri:
-        return mode, False, "Connector did not produce a public MLflow tracking URI"
-    if not mlflow_local_healthy:
-        return mode, False, f"MLflow is not healthy at {default_mlflow_health_url}"
-    if mode == "quick":
-        if not quick_tunnel_allowed:
-            return mode, False, "Quick Tunnel is active but bootstrap mode is disabled"
-        if not quick_tunnel_active:
-            return mode, False, "Quick Tunnel URL is configured but not active"
-        if not public_http_ok(public_health_uri, timeout_seconds=5):
-            return mode, False, f"Quick Tunnel MLflow URL is not reachable at {tracking_uri}"
-        return mode, True, ""
-    if public_hostname_status != "ready":
-        blocker = public_hostname_blocker or "public MLflow hostnames are not ready"
-        return mode, False, blocker
-    if not public_http_ok(public_health_uri, timeout_seconds=5):
-        return mode, False, f"Stable MLflow URL is not reachable at {tracking_uri}"
-    return mode, True, ""
+    return _DIAGNOSTICS.remote_mlflow_status(
+        tracking_uri=tracking_uri,
+        mlflow_local_healthy=mlflow_local_healthy,
+        quick_tunnel_allowed=quick_tunnel_allowed,
+        quick_tunnel_active=quick_tunnel_active,
+        public_hostname_status=public_hostname_status,
+        public_hostname_blocker=public_hostname_blocker,
+    )
 
 
 def public_dashboard_status(
@@ -741,224 +977,31 @@ def public_dashboard_status(
     public_hostname_status: str,
     public_hostname_blocker: str,
 ) -> tuple[bool, str, str]:
-    if public_hostname_status != "ready":
-        blocker = public_hostname_blocker or "stable public dashboard hostnames are not ready"
-        return False, "unavailable", blocker
-    local_dashboard_url = f"http://127.0.0.1:{default_dashboard_port}"
-    if not http_ok(local_dashboard_url, timeout_seconds=default_mlflow_health_timeout):
-        return False, "unavailable", f"dashboard is not healthy at {local_dashboard_url}"
-    return True, stable_dashboard_uri(), ""
+    return _DIAGNOSTICS.public_dashboard_status(
+        public_hostname_status=public_hostname_status,
+        public_hostname_blocker=public_hostname_blocker,
+    )
 
 
 def remote_runtime_blockers(payload: dict[str, Any]) -> list[str]:
-    blockers: list[str] = []
-    if not payload.get("remote_mlflow_ready", False):
-        blocker = str(payload.get("remote_mlflow_blocker") or "remote MLflow is not ready")
-        blockers.append(blocker)
-    if payload.get("r2_status") != "ready":
-        blocker = str(payload.get("r2_blocker") or "R2 is not ready")
-        blockers.append(blocker)
-    return blockers
-
-
-def ensure_mlflow_runtime(health_url: str) -> None:
-    if http_ok(health_url, timeout_seconds=5):
-        return
-    mlflow_service.up()
-    if not wait_for_health(
-        health_url,
-        total_timeout_seconds=120,
-        per_check_timeout_seconds=5,
-    ):
-        raise RuntimeError(f"MLflow did not become healthy at {health_url}")
-
-
-def ensure_remote_runtime(config: RunConfig) -> ConnectionBundle:
-    ensure_mlflow_runtime(config.remote.mlflow_health_url)
-    payload = status_payload()
-    if not payload.get("remote_mlflow_ready", False):
-        mlflow_service.tunnel()
-    dashboard_service.up()
-    payload = status_payload()
-    blockers = remote_runtime_blockers(payload)
-    if blockers:
-        raise RuntimeError("Connector remote lane is not ready: " + "; ".join(blockers))
-    tracking_uri = str(payload.get("tracking_uri") or stable_tracking_uri())
-    return ConnectionBundle(
-        mlflow_tracking_uri=tracking_uri,
-        mlflow_auth_mode="none",
-        mlflow_auth_payload="",
-        artifact_upload_enabled=config.mlflow.artifact_upload,
-        artifact_store_kind=str(payload.get("artifact_store_kind", artifact_store_kind())),
-        health_verdict="healthy",
-    )
-
-
-def ensure_local_debug_runtime(config: RunConfig) -> ConnectionBundle:
-    local_mlflow = replace(config.mlflow, artifact_upload=False)
-    ensure_mlflow_runtime(config.remote.mlflow_health_url)
-    return ConnectionBundle(
-        mlflow_tracking_uri=local_mlflow.tracking_uri,
-        mlflow_auth_mode="none",
-        mlflow_auth_payload="",
-        artifact_upload_enabled=False,
-        artifact_store_kind="local",
-        health_verdict="healthy" if http_ok(config.remote.mlflow_health_url, timeout_seconds=5) else "degraded",
-    )
-
-
-def connection_bundle_for_request(
-    request: ConnectionProfileRequest,
-    config: RunConfig,
-    *,
-    ensure_ready: bool = False,
-) -> ConnectionBundle:
-    if request.lane == "local-debug":
-        if ensure_ready:
-            return ensure_local_debug_runtime(config)
-        return ConnectionBundle(
-            mlflow_tracking_uri=config.mlflow.tracking_uri,
-            mlflow_auth_mode="none",
-            mlflow_auth_payload="",
-            artifact_upload_enabled=False,
-            artifact_store_kind="local",
-            health_verdict="healthy" if http_ok(config.remote.mlflow_health_url, timeout_seconds=5) else "degraded",
-        )
-    if request.lane != "remote":
-        raise RuntimeError(f"Unsupported connector lane: {request.lane}")
-    if ensure_ready:
-        return ensure_remote_runtime(config)
-    payload = status_payload()
-    return ConnectionBundle(
-        mlflow_tracking_uri=str(payload.get("tracking_uri") or stable_tracking_uri()),
-        mlflow_auth_mode="none",
-        mlflow_auth_payload="",
-        artifact_upload_enabled=request.artifact_upload_requested,
-        artifact_store_kind=str(payload.get("artifact_store_kind", artifact_store_kind())),
-        health_verdict="healthy" if not remote_runtime_blockers(payload) else "degraded",
-    )
+    return _DIAGNOSTICS.remote_runtime_blockers(payload)
 
 
 def status_payload() -> dict[str, Any]:
-    state = connector_state()
-    env = read_connector_env()
-    r2 = read_r2_env()
-    tunnel_url = read_public_tracking_uri()
-    quick_tunnel_allowed = allow_quick_tunnel()
-    quick_tunnel_active = is_quick_tunnel_uri(tunnel_url)
-    domain = str(state.get("domain") or env.get("CF_DOMAIN") or default_connector_domain)
-    hostname_diagnostics = public_hostname_status(domain)
-    r2_diagnostics = r2_status_payload()
-    mlflow_local_healthy = http_ok(default_mlflow_health_url, timeout_seconds=default_mlflow_health_timeout)
-    mlflow_mode, remote_mlflow_ready, remote_mlflow_blocker = remote_mlflow_status(
-        tracking_uri=tunnel_url,
-        mlflow_local_healthy=mlflow_local_healthy,
-        quick_tunnel_allowed=quick_tunnel_allowed,
-        quick_tunnel_active=quick_tunnel_active,
-        public_hostname_status=str(hostname_diagnostics.get("public_hostname_status") or ""),
-        public_hostname_blocker=str(hostname_diagnostics.get("public_hostname_blocker") or ""),
-    )
-    public_dashboard_ready, dashboard_uri, public_dashboard_blocker = public_dashboard_status(
-        public_hostname_status=str(hostname_diagnostics.get("public_hostname_status") or ""),
-        public_hostname_blocker=str(hostname_diagnostics.get("public_hostname_blocker") or ""),
-    )
-    return {
-        "domain": domain,
-        "tracking_uri": tunnel_url,
-        "mlflow_public_mode": mlflow_mode,
-        "remote_mlflow_ready": remote_mlflow_ready,
-        "remote_mlflow_blocker": remote_mlflow_blocker,
-        "dashboard_uri": dashboard_uri,
-        "public_dashboard_ready": public_dashboard_ready,
-        "public_dashboard_blocker": public_dashboard_blocker,
-        "artifact_store_kind": artifact_store_kind(),
-        "mlflow_local_healthy": mlflow_local_healthy,
-        "connector_bootstrapped": connector_env_path().is_file(),
-        "r2_configured": bool(r2),
-        "cloudflared_available": shutil.which("cloudflared") is not None,
-        "quick_tunnel_allowed": quick_tunnel_allowed,
-        "quick_tunnel_active": quick_tunnel_active,
-        **hostname_diagnostics,
-        **r2_diagnostics,
-    }
+    return _DIAGNOSTICS.status_payload()
 
 
 def setup() -> None:
-    account_id, api_token = cloudflare_credentials()
-    current_env = read_connector_env()
-    domain = os.environ.get("CF_DOMAIN") or current_env.get("CF_DOMAIN") or default_connector_domain
-    tunnel = ensure_named_tunnel(account_id, api_token, default_tunnel_name)
-    tunnel_id = str(tunnel.get("id") or "")
-    if not tunnel_id:
-        raise RuntimeError("Cloudflare tunnel response did not include an id")
-    publish_tunnel_config(account_id, api_token, tunnel_id, domain)
-    tunnel_token = named_tunnel_token(account_id, api_token, tunnel_id)
-    write_connector_files(
-        account_id=account_id,
-        tunnel_id=tunnel_id,
-        tunnel_token=tunnel_token,
-        domain=domain,
-    )
-    sync_r2_env()
-    payload = status_payload()
-    print(f"Connector domain: {payload['domain']}")
-    print(f"MLflow API: {payload['tracking_uri']}")
-    print(f"Dashboard: {payload['dashboard_uri']}")
-    print(f"Public hostnames: {payload['public_hostname_status']}")
-    if payload["public_hostname_blocker"]:
-        print(f"Public hostname blocker: {payload['public_hostname_blocker']}")
-    print(f"R2 status: {payload['r2_status']}")
-    if payload["r2_blocker"]:
-        print(f"R2 blocker: {payload['r2_blocker']}")
+    _ADMIN.setup()
 
 
 def doctor() -> None:
-    payload = status_payload()
-    missing: list[str] = []
-    if not cloudflare_secret_path().is_file():
-        missing.append(f"missing {cloudflare_secret_path()}")
-    if not payload["cloudflared_available"]:
-        missing.append("cloudflared is not on PATH")
-    if not connector_env_path().is_file():
-        missing.append(f"missing {connector_env_path()} (run `gpupoor connector setup`)")
-    if not payload.get("remote_mlflow_ready", False):
-        missing.append(
-            "remote MLflow is not ready"
-            + (f" ({payload.get('remote_mlflow_blocker', '')})" if payload.get("remote_mlflow_blocker") else "")
-        )
-    if payload["r2_status"] != "ready":
-        missing.append("R2 is not ready" + (f" ({payload['r2_blocker']})" if payload["r2_blocker"] else ""))
-    if missing:
-        raise RuntimeError("; ".join(missing))
-    if not payload.get("public_dashboard_ready", False) and payload.get("public_dashboard_blocker"):
-        print(f"Info: public dashboard remains blocked ({payload['public_dashboard_blocker']})")
-    print_status_payload(payload)
+    _ADMIN.doctor()
 
 
 def print_status_payload(payload: dict[str, Any]) -> None:
-    print(f"Domain: {payload['domain']}")
-    print(f"Tracking URI: {payload['tracking_uri']}")
-    print(f"MLflow public mode: {payload.get('mlflow_public_mode', 'unavailable')}")
-    print(f"Remote MLflow ready: {'yes' if payload.get('remote_mlflow_ready', False) else 'no'}")
-    if payload.get("remote_mlflow_blocker"):
-        print(f"Remote MLflow blocker: {payload['remote_mlflow_blocker']}")
-    print(f"Dashboard URI: {payload.get('dashboard_uri', 'unavailable')}")
-    print(f"Public dashboard ready: {'yes' if payload.get('public_dashboard_ready', False) else 'no'}")
-    if payload.get("public_dashboard_blocker"):
-        print(f"Public dashboard blocker: {payload['public_dashboard_blocker']}")
-    print(f"Artifact store: {payload['artifact_store_kind']}")
-    print(f"MLflow local health: {'ok' if payload.get('mlflow_local_healthy', False) else 'down'}")
-    print(f"Connector bootstrap: {'yes' if payload.get('connector_bootstrapped', False) else 'no'}")
-    print(f"Quick tunnel allowed: {'yes' if payload.get('quick_tunnel_allowed', False) else 'no'}")
-    print(f"Quick tunnel active: {'yes' if payload.get('quick_tunnel_active', False) else 'no'}")
-    print(f"Public hostnames: {payload.get('public_hostname_status', 'unknown')}")
-    if payload.get("public_hostname_blocker"):
-        print(f"Public hostname blocker: {payload['public_hostname_blocker']}")
-    print(f"R2 configured: {'yes' if payload.get('r2_configured', False) else 'no'}")
-    print(f"R2 status: {payload['r2_status']}")
-    if payload.get("r2_blocker"):
-        print(f"R2 blocker: {payload['r2_blocker']}")
+    _ADMIN.print_status_payload(payload)
 
 
 def status() -> None:
-    print_status_payload(status_payload())
+    _ADMIN.status()

@@ -16,6 +16,7 @@ from typing import Any
 
 import httpx
 
+from .config import DSTACK_SERVER_URL, TIMEOUT_DSTACK_REST, TIMEOUT_DSTACK_STREAM
 from .dstack_project import infer_dstack_project
 
 # doc-anchor: safe-exec-allowlist
@@ -53,7 +54,7 @@ def safe_docker(argv: list[str]) -> subprocess.Popen:
 
 
 def _get_base_url() -> str:
-    return os.environ.get("DSTACK_SERVER_URL", "http://localhost:3000")
+    return DSTACK_SERVER_URL
 
 
 def _get_token() -> str:
@@ -83,7 +84,7 @@ def safe_dstack_rest(
     *,
     method: str = "GET",
     json: dict[str, Any] | None = None,
-    timeout: float = 10.0,
+    timeout: float = TIMEOUT_DSTACK_REST,
 ) -> httpx.Response:
     """Execute a single (non-streaming) dstack REST request.
 
@@ -102,7 +103,7 @@ def safe_dstack_stream(
     endpoint: str,
     *,
     json: dict[str, Any] | None = None,
-    timeout: float = 30.0,
+    timeout: float = TIMEOUT_DSTACK_STREAM,
 ) -> Iterator[httpx.Response]:
     """Yield a streaming httpx response for dstack log streaming.
 

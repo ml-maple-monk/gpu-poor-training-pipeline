@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from dataclasses import replace
 
 from gpupoor import __version__, ops
 from gpupoor import connector as connector_module
@@ -13,7 +12,6 @@ from gpupoor.backends import dstack as dstack_backend
 from gpupoor.backends.local import run_training as run_local_training
 from gpupoor.config import (
     ConfigError,
-    DoctorConfig,
     RunConfig,
     SmokeConfig,
     load_run_config,
@@ -35,27 +33,10 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser = subparsers.add_parser("doctor", help="Run preflight checks")
     doctor_parser.add_argument("config", nargs="?", help="Optional TOML run config with doctor/remote defaults")
     doctor_parser.add_argument("--remote", action="store_true", help="Include remote-path checks")
-    doctor_parser.add_argument("--skip-preflight", action="store_true", default=None, help="Skip preflight checks")
-    doctor_parser.add_argument("--max-clock-skew-seconds", type=int, help="Override the WSL clock skew budget")
 
     smoke_parser = subparsers.add_parser("smoke", help="Run repo smoke checks")
     smoke_parser.add_argument("config", nargs="?", help="Optional TOML run config with smoke defaults")
-    smoke_parser.add_argument("--cpu", action="store_true", default=None, help="Use the CPU emulator overlay")
-    smoke_parser.add_argument("--base-image", help="Override the emulator base image build arg")
-    smoke_parser.add_argument("--health-port", type=int, help="Port to probe for the main /health check")
-    smoke_parser.add_argument("--health-timeout-seconds", type=int, help="Timeout for /health probes")
-    smoke_parser.add_argument("--strict-port", type=int, help="Port for the strict degraded-mode probe")
-    smoke_parser.add_argument("--degraded-port", type=int, help="Port for the degraded-mode probe")
-    smoke_parser.add_argument("--sigterm-timeout-seconds", type=int, help="SIGTERM exit budget for the emulator")
-    smoke_parser.add_argument("--data-wait-timeout-seconds", type=int, help="WAIT_DATA_TIMEOUT value for probe F")
-    smoke_parser.add_argument(
-        "--prune-volumes",
-        action="store_true",
-        default=None,
-        help="Pass `-v` to `docker compose down` to wipe named volumes (destroys user data)",
-    )
-    smoke_parser.add_argument("--skip-preflight", action="store_true", default=None, help="Skip preflight checks")
-    smoke_parser.add_argument("--max-clock-skew-seconds", type=int, help="Override the WSL clock skew budget")
+    smoke_parser.add_argument("--health-port", type=int, help="Override the smoke /health port")
 
     fix_clock_parser = subparsers.add_parser("fix-clock", help="Sync the WSL2 clock from Windows")
     fix_clock_parser.add_argument("config", nargs="?", help="Optional TOML run config with doctor defaults")
@@ -93,7 +74,10 @@ def build_parser() -> argparse.ArgumentParser:
     deploy_remote.add_argument("config", help="Path to a TOML run config")
     deploy_remote.add_argument("--skip-build", action="store_true", default=None, help="Skip image build and push")
     deploy_remote.add_argument("--dry-run", action="store_true", help="Print the remote plan without mutating")
-    deploy_local = deploy_subparsers.add_parser("local-emulator", help="Deploy a fast local debug run")
+    deploy_local = deploy_subparsers.add_parser(
+        "local-emulator",
+        help="Run the canonical local pre-remote wrapper validation path",
+    )
     deploy_local.add_argument("config", help="Path to a TOML run config")
 
     connector_parser = subparsers.add_parser("connector", help="Manage shared MLflow/tunnel/storage wiring")
@@ -114,12 +98,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     infra_parser = subparsers.add_parser("infra", help="Manage local debug/runtime services")
     infra_subparsers = infra_parser.add_subparsers(dest="infra_target", required=True)
-    for service, actions in {
-        "mlflow": ("up", "down", "logs", "tunnel"),
-        "dashboard": ("up", "down", "logs"),
-        "emulator": ("up", "cpu", "nvcr", "down", "logs", "shell", "health"),
-    }.items():
-        service_parser = infra_subparsers.add_parser(service)
+    for service, help_text, actions in (
+        ("mlflow", "Manage local MLflow/tunnel services", ("up", "down", "logs", "tunnel")),
+        ("dashboard", "Manage the local dashboard service", ("up", "down", "logs")),
+        (
+            "emulator",
+            "Manage the non-canonical pseudo-Verda smoke harness",
+            ("up", "cpu", "nvcr", "down", "logs", "shell", "health"),
+        ),
+    ):
+        service_parser = infra_subparsers.add_parser(service, help=help_text)
         service_parser.add_argument("action", choices=actions)
         service_parser.add_argument("extra_args", nargs=argparse.REMAINDER)
 
@@ -158,44 +146,10 @@ def _load_optional_run_config(path: str | None) -> RunConfig | None:
     return load_run_config(path) if path else None
 
 
-_DOCTOR_OVERRIDE_KEYS = ("skip_preflight", "max_clock_skew_seconds")
-_SMOKE_OVERRIDE_KEYS = (
-    "cpu",
-    "base_image",
-    "health_port",
-    "health_timeout_seconds",
-    "strict_port",
-    "degraded_port",
-    "sigterm_timeout_seconds",
-    "data_wait_timeout_seconds",
-    "prune_volumes",
-)
-
-
-def _override_kwargs(args: argparse.Namespace, keys: tuple[str, ...]) -> dict[str, object]:
-    return {key: getattr(args, key) for key in keys if getattr(args, key, None) is not None}
-
-
-def _resolve_doctor_config(run_config: RunConfig | None, args: argparse.Namespace) -> DoctorConfig | None:
-    base = run_config.doctor if run_config else None
-    overrides = _override_kwargs(args, _DOCTOR_OVERRIDE_KEYS)
-    if base is None and not overrides:
-        return None
-    return replace(base or DoctorConfig(), **overrides)
-
-
-def _resolve_smoke_config(run_config: RunConfig | None, args: argparse.Namespace) -> SmokeConfig | None:
-    base = run_config.smoke if run_config else None
-    overrides = _override_kwargs(args, _SMOKE_OVERRIDE_KEYS)
-    if base is None and not overrides:
-        return None
-    return replace(base or SmokeConfig(), **overrides)
-
-
 def dispatch(args: argparse.Namespace) -> None:
     if args.command == "doctor":
         config = _load_optional_run_config(args.config)
-        doctor = _resolve_doctor_config(config, args)
+        doctor = config.doctor if config else None
         remote_config = config.remote if config else None
         run_non_mutating(
             "doctor",
@@ -205,14 +159,17 @@ def dispatch(args: argparse.Namespace) -> None:
 
     if args.command == "smoke":
         config = _load_optional_run_config(args.config)
-        smoke_config = _resolve_smoke_config(config, args)
-        doctor = _resolve_doctor_config(config, args)
+        smoke_config = config.smoke if config else None
+        if args.health_port is not None:
+            smoke_config = smoke_config or SmokeConfig()
+            smoke_config.health_port = args.health_port
+        doctor = config.doctor if config else None
         run_non_mutating("smoke", lambda: ops.run_smoke(smoke_config, doctor=doctor))
         return
 
     if args.command == "fix-clock":
         config = _load_optional_run_config(args.config)
-        doctor = _resolve_doctor_config(config, args)
+        doctor = config.doctor if config else None
         ops.fix_wsl_clock(doctor=doctor, max_skew_seconds=args.max_clock_skew_seconds)
         return
 

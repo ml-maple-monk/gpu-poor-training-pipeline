@@ -5,6 +5,21 @@ from __future__ import annotations
 import pytest
 import torch
 
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+
+import os
+import pathlib
+
+# Repo root is three levels up from this test file (training/tests/ -> training/ -> repo/).
+_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+_DEFAULTS_PATH = pathlib.Path(_TESTS_DIR).parent.parent / "defaults.toml"
+with open(_DEFAULTS_PATH, "rb") as _f:
+    _DEFAULTS = tomllib.load(_f)
+_GPU_PROFILES = _DEFAULTS.get("gpu_profiles", [])
+
 
 def test_count_valid_tokens_ignores_padding(benchmark_metrics):
     labels = torch.tensor([[1, 2, -100], [3, -100, -100]])
@@ -52,7 +67,7 @@ def test_resolve_peak_flops_profile_covers_verda_catalog_and_fp8(
     expected_training_tflops,
     expected_fp8_tflops,
 ):
-    profile = benchmark_metrics.resolve_peak_flops_profile(gpu_name)
+    profile = benchmark_metrics.resolve_peak_flops_profile(gpu_name, _GPU_PROFILES)
 
     assert profile is not None
     assert profile.training_tflops_per_gpu == expected_training_tflops
@@ -60,7 +75,7 @@ def test_resolve_peak_flops_profile_covers_verda_catalog_and_fp8(
 
 
 def test_resolve_peak_flops_profile_returns_none_for_unknown_gpu(benchmark_metrics):
-    assert benchmark_metrics.resolve_peak_flops_profile("mystery accelerator") is None
+    assert benchmark_metrics.resolve_peak_flops_profile("mystery accelerator", _GPU_PROFILES) is None
 
 
 def test_split_validation_indices_is_deterministic_and_small(benchmark_metrics):

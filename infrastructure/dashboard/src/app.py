@@ -15,18 +15,31 @@ from typing import TYPE_CHECKING
 
 from .bootstrap import choose_access_path
 from .collector_workers import start_all_collectors
-from .config import GRADIO_PORT, GRADIO_QUEUE_MAX_SIZE, TRAINER_CONTAINER
+from .config import (
+    GRADIO_PORT,
+    GRADIO_QUEUE_MAX_SIZE,
+    MIN_WORKER_JOIN_TIMEOUT,
+    SHUTDOWN_GRACE_SECONDS,
+    TIMER_DETAIL,
+    TIMER_DSTACK_LOG,
+    TIMER_FAST,
+    TIMER_LOG,
+    TIMER_MEDIUM,
+    TIMER_SEEKER,
+    TIMER_SLOW,
+    TRAINER_CONTAINER,
+)
 from .log_tailer import LogTailer
 from .panels.footer import format_footer_html
 from .panels.local_logs import get_log_snapshot
 from .panels.mlflow_summary import format_mlflow_table
 from .panels.overview import (
     format_alert_feed_html,
+    format_availability_matrix_html,
     format_hero_html,
     format_market_grid_html,
     format_metrics_html,
     format_mlflow_feed_html,
-    format_resource_gauges_html,
     format_runs_feed_html,
     format_seeker_attempt_table,
     format_seeker_offer_table,
@@ -50,7 +63,6 @@ _state: AppState | None = None
 _docker_tailer: LogTailer | None = None
 _dstack_tailer: LogTailer | None = None
 _workers: list = []
-_MIN_WORKER_JOIN_TIMEOUT_SECONDS = 1.0
 
 # Grace budget derivation:
 #   max in-flight collector today is the 60s dstack offer probe, which may
@@ -59,7 +71,7 @@ _MIN_WORKER_JOIN_TIMEOUT_SECONDS = 1.0
 #   once the event is set, so the grace window primarily covers one in-flight
 #   collect() call that may already be mid-probe. Keep a small buffer above the
 #   worst-case probe path to avoid routine shutdown warnings during normal ops.
-_DEFAULT_SHUTDOWN_GRACE_SECONDS = 80.0
+#   See SHUTDOWN_GRACE_SECONDS and MIN_WORKER_JOIN_TIMEOUT in config.
 
 
 def _shutdown_sequence(
@@ -67,7 +79,7 @@ def _shutdown_sequence(
     workers: Sequence[CollectorWorker],
     *,
     shutdown_event: threading.Event,
-    grace_seconds: float = _DEFAULT_SHUTDOWN_GRACE_SECONDS,
+    grace_seconds: float = SHUTDOWN_GRACE_SECONDS,
 ) -> int:
     """Run the graceful shutdown sequence. Pure function — signal-free.
 
@@ -105,7 +117,7 @@ def _shutdown_sequence(
     # slow worker can't starve the rest. Floor at 1s to avoid zero-timeout
     # spin-polling when the worker list is long.
     if workers:
-        per_worker_timeout = max(_MIN_WORKER_JOIN_TIMEOUT_SECONDS, grace_seconds / len(workers))
+        per_worker_timeout = max(MIN_WORKER_JOIN_TIMEOUT, grace_seconds / len(workers))
     else:
         per_worker_timeout = grace_seconds
 
@@ -199,7 +211,10 @@ def build_app() -> gr.Blocks:
         with gr.Column(elem_id="dashboard-shell"):
             statusbar_html = gr.HTML(value=format_statusbar_html(state))
             hero_html = gr.HTML(value=format_hero_html(state))
-            gauges_html = gr.HTML(value=format_resource_gauges_html(state))
+
+            # ── Availability matrix (large, focal) ──────────────────────
+            gr.HTML('<div class="vd-section-hdr">GPU AVAILABILITY — CAN I DEPLOY?</div>')
+            avail_matrix_html = gr.HTML(value=format_availability_matrix_html(state))
 
             # ── Metrics row ──────────────────────────────────────────────
             gr.HTML('<div class="vd-section-hdr">LIVE METRICS</div>')
@@ -272,7 +287,7 @@ def build_app() -> gr.Blocks:
             return (
                 gr.update(value=format_statusbar_html(state)),
                 gr.update(value=format_hero_html(state)),
-                gr.update(value=format_resource_gauges_html(state)),
+                gr.update(value=format_availability_matrix_html(state)),
             )
 
         def read_medium_state():
@@ -328,35 +343,35 @@ def build_app() -> gr.Blocks:
             return gr.update(), seq_state
 
         # Wire timers
-        fast_timer = gr.Timer(value=2.0)
+        fast_timer = gr.Timer(value=TIMER_FAST)
         fast_timer.tick(
             read_fast_state,
             inputs=None,
-            outputs=[statusbar_html, hero_html, gauges_html],
+            outputs=[statusbar_html, hero_html, avail_matrix_html],
         )
 
-        medium_timer = gr.Timer(value=5.0)
+        medium_timer = gr.Timer(value=TIMER_MEDIUM)
         medium_timer.tick(
             read_medium_state,
             inputs=None,
             outputs=[market_html, alert_html, runs_html, footer_html],
         )
 
-        slow_timer = gr.Timer(value=10.0)
+        slow_timer = gr.Timer(value=TIMER_SLOW)
         slow_timer.tick(
             read_slow_state,
             inputs=None,
             outputs=[metrics_html, mlflow_html],
         )
 
-        seeker_timer = gr.Timer(value=10.0)
+        seeker_timer = gr.Timer(value=TIMER_SEEKER)
         seeker_timer.tick(
             read_seeker_state,
             inputs=None,
             outputs=[hero_html, market_html, alert_html],
         )
 
-        detail_timer = gr.Timer(value=30.0)
+        detail_timer = gr.Timer(value=TIMER_DETAIL)
         detail_timer.tick(
             read_detail_state,
             inputs=None,
@@ -364,14 +379,14 @@ def build_app() -> gr.Blocks:
         )
 
         # Log timers — 2s cadence with per-session delta
-        log_timer = gr.Timer(value=2.0)
+        log_timer = gr.Timer(value=TIMER_LOG)
         log_timer.tick(
             stream_local_log,
             inputs=[local_log_seq],
             outputs=[local_log_box, local_log_seq],
         )
 
-        dstack_log_timer = gr.Timer(value=2.0)
+        dstack_log_timer = gr.Timer(value=TIMER_DSTACK_LOG)
         dstack_log_timer.tick(
             stream_dstack_log,
             inputs=[dstack_log_seq],

@@ -5,6 +5,32 @@ from __future__ import annotations
 import pytest
 import torch
 
+datasets = pytest.importorskip("datasets", reason="datasets is required for lm_dataset import")
+transformers = pytest.importorskip("transformers", reason="transformers is required for model_minimind import")
+
+
+def _tiny_model_config(model_minimind_module):
+    return model_minimind_module.MiniMindConfig(
+        hidden_size=32,
+        num_hidden_layers=1,
+        dropout=0.0,
+        vocab_size=128,
+        flash_attn=False,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        hidden_act="silu",
+        intermediate_size=64,
+        max_position_embeddings=64,
+        rms_norm_eps=1e-6,
+        rope_theta=10000.0,
+        inference_rope_scaling=False,
+        num_experts=4,
+        num_experts_per_tok=1,
+        norm_topk_prob=True,
+        router_aux_loss_coef=0.0005,
+        head_dim=8,
+    )
+
 
 def test_pretrain_data_collator_stacks_inputs_and_builds_position_ids(lm_dataset_module, packed_eos_features) -> None:
     collator = lm_dataset_module.PretrainDataCollator(eos_token_id=3, max_seq_len=6)
@@ -41,15 +67,7 @@ def test_pretrain_data_collator_stacks_inputs_and_builds_position_ids(lm_dataset
 
 
 def test_minimind_requires_explicit_position_ids(model_minimind_module) -> None:
-    model = model_minimind_module.MiniMindForCausalLM(
-        model_minimind_module.MiniMindConfig(
-            hidden_size=32,
-            num_hidden_layers=1,
-            num_attention_heads=4,
-            num_key_value_heads=4,
-            head_dim=8,
-        )
-    )
+    model = model_minimind_module.MiniMindForCausalLM(_tiny_model_config(model_minimind_module))
     input_ids = torch.tensor([[1, 2, 3]])
 
     with pytest.raises(ValueError, match="position_ids"):
@@ -62,15 +80,7 @@ def test_minimind_accepts_packed_attention_mask(
     packed_eos_features,
 ) -> None:
     collator = lm_dataset_module.PretrainDataCollator(eos_token_id=3, max_seq_len=6)
-    model = model_minimind_module.MiniMindForCausalLM(
-        model_minimind_module.MiniMindConfig(
-            hidden_size=32,
-            num_hidden_layers=1,
-            num_attention_heads=4,
-            num_key_value_heads=4,
-            head_dim=8,
-        )
-    )
+    model = model_minimind_module.MiniMindForCausalLM(_tiny_model_config(model_minimind_module))
     batch = collator(packed_eos_features)
 
     output = model(

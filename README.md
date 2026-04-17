@@ -95,12 +95,12 @@ Prints the resolved `dstack apply` shape (image, env, GPU filter, time cap) with
 ## Architecture
 
 <p align="center">
-  <img src="docs/diagrams/architecture.png" alt="gpupoor architecture — CLI dispatches one TOML RunConfig through ops, services, and one of the two backends (local or dstack)" width="820">
+  <img src="docs/diagrams/architecture.png" alt="gpupoor architecture — CLI and wrapper entrypoints feed typed config, seeker, deployer, and connector control-plane modules, then branch into local or dstack execution with MLflow, Cloudflare, R2, and training runtime dependencies" width="820">
 </p>
 
 <sub><a href="./docs/diagrams/architecture.mmd">source (Mermaid)</a></sub>
 
-**Core contract:** the CLI loads one TOML into a `RunConfig` dataclass, resolves the `backend.kind`, and hands off to either the local or dstack backend. Everything else — MLflow, the dashboard, secrets scanning — is an `ops` or `services` helper invocable from the same CLI.
+**Core contract:** the CLI loads one TOML into a `RunConfig` dataclass, resolves the `backend.kind`, and hands off through the current control-plane seams: `seeker` for queued remote placement, `deployer` for launch gating, `connector` for MLflow/tunnel/R2 readiness, and then the local or dstack execution backends. Everything else — MLflow, the dashboard, emulator flows, and repo checks — stays reachable from the same CLI surface.
 
 ---
 
@@ -166,10 +166,11 @@ gpupoor <command> [flags]
 | `gpupoor check-anchors`                                     | Verify doc-anchor cross-refs between code and docs                  | —                                            |
 | `gpupoor train <config.toml>`                               | Run the training recipe against the selected backend                | —                                            |
 | `gpupoor launch dstack <config.toml>`                       | Launch the remote backend                                           | `--skip-build`, `--dry-run`                  |
+| `gpupoor deploy local-emulator <config.toml>`               | Canonical local pre-remote validation via the remote wrapper contract | —                                          |
 | `gpupoor dstack <setup\|registry-login\|fleet-apply\|teardown>` | dstack lifecycle helpers                                            | `--dry-run` (`registry-login`)               |
 | `gpupoor infra mlflow <up\|down\|logs\|tunnel>`             | MLflow + Cloudflare tunnel                                          | —                                            |
 | `gpupoor infra dashboard <up\|down\|logs>`                  | Live dashboard service                                              | —                                            |
-| `gpupoor infra emulator <up\|cpu\|nvcr\|down\|logs\|shell\|health>` | Local emulator (smoke harness)                                     | —                                            |
+| `gpupoor infra emulator <up\|cpu\|nvcr\|down\|logs\|shell\|health>` | Pseudo-Verda smoke harness (non-canonical for training validation) | —                                            |
 
 `doctor`, `smoke`, and `launch dstack` resolve operational defaults from the typed TOML config first; CLI flags are one-off overrides.
 
@@ -201,6 +202,10 @@ Full schema + validators live in [`src/gpupoor/config.py`](./src/gpupoor/config.
 | `examples/verda_a100x2_10m.toml`         | `dstack` | 2× A100, 10-minute cap         |
 | `examples/verda_b300_10m.toml`           | `dstack` | Single B300, 10-minute cap     |
 | `examples/verda_b300x2_10m.toml`         | `dstack` | 2× B300, 10-minute cap         |
+
+Use `examples/verda_remote.toml` as the canonical `gpupoor deploy local-emulator ...` example when you want wrapper parity with the remote lane. `examples/tiny_local.toml` remains supported as the migration-compatible `backend.kind="local"` escape hatch.
+
+The canonical local-emulator path now pulls the published remote image from `remote.vcr_image_base` plus `backend.remote_image_tag`/the cached remote tag and runs that image locally with the same `remote-entrypoint.sh` wrapper contract.
 
 `examples/verda_a100_10m.toml` and `examples/verda_a100x2_10m.toml` now opt into a 1% held-out validation split and 100-update validation cadence. Peak TFLOPs are auto-detected at runtime for supported Verda GPUs, while `[mlflow].peak_tflops_per_gpu` remains available as a manual override.
 

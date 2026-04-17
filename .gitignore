@@ -39,6 +39,7 @@ data/*
 __pycache__/
 .pytest_cache/
 .artifacts/
+.omc/
 .omx/
 dstack/.*rendered*.yml
 *.egg-info/

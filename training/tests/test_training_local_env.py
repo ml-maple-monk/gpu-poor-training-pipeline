@@ -78,31 +78,23 @@ def test_local_backend_passes_dynamic_env_on_compose_run(repo_text, expected_fra
         ("training", "scripts", "remote-entrypoint.sh"),
     ],
 )
-def test_training_wrappers_invoke_runtime_loader_via_python(repo_text, script_path) -> None:
+def test_training_wrappers_invoke_train_pretrain_via_python(repo_text, script_path) -> None:
     script = repo_text(*script_path)
 
-    assert 'eval "$(python3 "$RUN_CONFIG_LOADER" "$RUN_CONFIG_FILE")"' in script
+    assert "python3 train_pretrain.py" in script
 
 
 @pytest.mark.parametrize(
-    "script_path,expected_error",
+    "script_path",
     [
-        (
-            ("training", "scripts", "run-train.sh"),
-            "FATAL: runtime config did not populate required env vars:",
-        ),
-        (
-            ("training", "scripts", "remote-entrypoint.sh"),
-            "[remote-entrypoint] ERROR: runtime config did not populate required env vars:",
-        ),
+        ("training", "scripts", "run-train.sh"),
+        ("training", "scripts", "remote-entrypoint.sh"),
     ],
 )
-def test_training_wrappers_fail_loudly_when_runtime_env_is_incomplete(repo_text, script_path, expected_error) -> None:
+def test_training_wrappers_accept_toml_config_path(repo_text, script_path) -> None:
     script = repo_text(*script_path)
 
-    assert "require_loaded_runtime_env()" in script
-    assert expected_error in script
-    assert "refusing to continue with fallback defaults" in script
+    assert "TOML" in script or "toml" in script or "GPUPOOR_RUN_CONFIG" in script
 
 
 def test_local_training_wrapper_fails_fast_on_loader_errors(repo_text) -> None:

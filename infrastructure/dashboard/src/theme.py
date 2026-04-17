@@ -399,64 +399,110 @@ DASHBOARD_CSS = r"""
     gap: 10px;
 }
 .vd-gpu-backend-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto 112px;
-    gap: 10px;
+    display: flex;
     align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    background: #0d1117;
+    margin-bottom: 6px;
+    transition: background 0.15s;
 }
+.vd-gpu-backend-row:hover {
+    background: #1c2128;
+}
+.vd-gpu-backend-row:last-child { margin-bottom: 0; }
 .vd-gpu-backend-meta {
+    flex: 1;
     min-width: 0;
 }
 .vd-gpu-backend-name {
-    color: #e6edf3;
-    font-size: 12px;
-    font-weight: 600;
-    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.vd-gpu-backend-context {
+    font-size: 11px;
+    color: #8b949e;
+    margin-top: 2px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.vd-gpu-backend-context {
-    color: #8b949e;
-    font-size: 11px;
-    line-height: 1.4;
-    margin-top: 3px;
-}
 .vd-gpu-backend-price {
-    color: #3fb950;
-    font-size: 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 15px;
+    white-space: nowrap;
+    min-width: 80px;
+    text-align: right;
+}
+
+/* ── Heatmap availability bars ────────────────────────────────────── */
+.vd-heatmap-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+}
+.vd-heatmap-svg {
+    flex: 1;
+    height: 14px;
+    min-width: 60px;
+    border-radius: 2px;
+}
+.vd-heatmap-pct {
+    font-size: 11px;
     font-weight: 700;
     font-family: 'JetBrains Mono', monospace;
-    white-space: nowrap;
+    min-width: 32px;
+    text-align: right;
 }
-.vd-gpu-chart-wrap {
-    width: 112px;
+
+/* ── Stacked availability chart (bottom of GPU card) ──────────────── */
+.vd-stacked-chart {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #21262d;
 }
-.vd-avail-chart {
-    display: block;
-    width: 112px;
-    height: 24px;
+.vd-stacked-title {
+    font-size: 10px;
+    text-transform: uppercase;
+    color: #484f58;
+    letter-spacing: 1px;
+    font-weight: 600;
+    margin-bottom: 6px;
 }
-.vd-chart-label {
-    fill: #484f58;
-    font-size: 7px;
+.vd-stacked-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.vd-stacked-row:last-child { margin-bottom: 0; }
+.vd-stacked-label {
+    font-size: 10px;
+    font-weight: 600;
     font-family: 'JetBrains Mono', monospace;
+    min-width: 48px;
+    text-transform: lowercase;
 }
+
 .vd-gpu-card-empty-copy {
-    color: #8b949e;
-    font-size: 12px;
-    margin-bottom: 10px;
+    color: #484f58;
+    font-style: italic;
+    font-size: 13px;
+    padding: 16px 0;
+    text-align: center;
 }
 @media (max-width: 700px) {
     .vd-market-row {
         grid-template-columns: 1fr;
     }
     .vd-gpu-backend-row {
-        grid-template-columns: 1fr;
-    }
-    .vd-gpu-chart-wrap,
-    .vd-avail-chart {
-        width: 100%;
+        flex-wrap: wrap;
     }
 }
 
@@ -989,5 +1035,149 @@ DASHBOARD_CSS = r"""
     color: #484f58;
     margin-top: 2px;
     font-family: 'JetBrains Mono', monospace;
+}
+
+/* ── GPU Status Blocks (5 large lit/dim blocks) ─────────────────── */
+.vd-gpu-blocks {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    margin-bottom: 12px;
+}
+@media (max-width: 900px) {
+    .vd-gpu-blocks { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 520px) {
+    .vd-gpu-blocks { grid-template-columns: repeat(2, 1fr); }
+}
+.vd-gpu-block {
+    background: #161b22;
+    border: 2px solid #30363d;
+    border-radius: 12px;
+    padding: 20px 16px;
+    text-align: center;
+    transition: border-color 0.3s, box-shadow 0.3s, opacity 0.3s;
+    min-height: 120px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 6px;
+}
+.vd-gpu-block-lit {
+    background: #0d1117;
+}
+.vd-gpu-block-dim {
+    opacity: 0.45;
+    border-color: #21262d;
+}
+.vd-block-name {
+    font-size: 22px;
+    font-weight: 800;
+    font-family: 'JetBrains Mono', monospace;
+    color: #484f58;
+    letter-spacing: -0.5px;
+}
+.vd-gpu-block-lit .vd-block-name {
+    color: inherit;
+}
+.vd-block-status {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: #3fb950;
+}
+.vd-block-status-off {
+    color: #f85149;
+}
+.vd-block-count {
+    font-size: 12px;
+    color: #8b949e;
+    font-family: 'JetBrains Mono', monospace;
+}
+.vd-block-backends {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin-top: 2px;
+}
+.vd-block-chip {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 8px;
+    border: 1px solid;
+}
+.vd-block-last {
+    font-size: 11px;
+    color: #484f58;
+    font-family: 'JetBrains Mono', monospace;
+    margin-top: 2px;
+}
+
+/* ── Historical Line Charts ─────────────────────────────────────── */
+.vd-history-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    margin-bottom: 8px;
+}
+@media (max-width: 1100px) {
+    .vd-history-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 700px) {
+    .vd-history-grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+    .vd-history-grid { grid-template-columns: 1fr; }
+}
+.vd-history-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    padding: 12px 14px;
+    transition: border-color 0.2s;
+}
+.vd-history-card:hover {
+    border-color: #484f58;
+}
+.vd-history-title {
+    font-size: 13px;
+    font-weight: 700;
+    font-family: 'JetBrains Mono', monospace;
+    margin-bottom: 8px;
+}
+.vd-history-svg {
+    display: block;
+    width: 100%;
+    height: 60px;
+    border-radius: 4px;
+    background: #0d1117;
+}
+.vd-chart-axis-label {
+    fill: #484f58;
+    font-size: 7px;
+    font-family: 'JetBrains Mono', monospace;
+}
+.vd-chart-legend {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+    flex-wrap: wrap;
+}
+.vd-chart-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: #8b949e;
+}
+.vd-chart-legend-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
 }
 """

@@ -1,3 +1,4 @@
+[gpupoor] Dry-run connector verdict: healthy (tracking_uri=https://violations-portsmouth-easier-lincoln.trycloudflare.com artifact_store=r2)
 PREFLIGHT WARN: jq not found — python3 fallback will be used for JSON parsing (safe, but slower)
 PREFLIGHT WARN: gh_token is not used by the default remote path anymore; GHCR is optional fallback only
 Preflight OK
@@ -9,6 +10,7 @@ Remote preflight OK (VCR_IMAGE_BASE=vccr.io/f53909d3-a071-4826-8635-a62417ffc867
 [dstack-setup] Written: <HOME>/.dstack/server/config.yml (mode 600)
 [dstack-setup] Configured backends: verda runpod vastai
 [STEP 4] dstack server config ready
+[DRY-RUN] Would restart dstack server because <HOME>/.dstack/server/.restart-required exists
 [gpupoor] dstack server already running
 [DRY-RUN] Would start the MLflow Cloudflare tunnel
 [gpupoor] Skipping dataset preparation (prepare_data=false)

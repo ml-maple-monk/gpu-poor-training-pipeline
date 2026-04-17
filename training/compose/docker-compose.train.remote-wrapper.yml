@@ -1,0 +1,29 @@
+name: minimind-remote-wrapper
+
+services:
+  minimind-remote-wrapper:
+    image: "${REMOTE_WRAPPER_IMAGE:?REMOTE_WRAPPER_IMAGE must be set}"
+    init: true
+    environment:
+      HF_HOME: /workspace/hf_cache
+      TOKENIZERS_PARALLELISM: "false"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ../../data:/workspace/data
+      - ../../data/minimind-out:/workspace/out
+    working_dir: /opt/training/minimind
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    shm_size: "4gb"
+    command: ["bash", "/opt/training/scripts/remote-entrypoint.sh"]
+    labels:
+      com.verda.emulation: "true"
+      com.verda.profile: "local-emulator"
+      com.verda.wrapper: "remote"

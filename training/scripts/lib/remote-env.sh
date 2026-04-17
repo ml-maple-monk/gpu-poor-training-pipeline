@@ -2,15 +2,14 @@
 
 # Shared remote pipeline environment helpers.
 #
-# Loads optional operator-local settings from .env.remote and normalizes the
-# default VCR image/login paths used by the remote training pipeline.
+# Loads secrets from .env.remote. Non-secret config (VCR_IMAGE_BASE) must be
+# set by the caller from TOML — .env.remote is for credentials only.
 
 _remote_env_repo_root() {
     cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd
 }
 
 REMOTE_ENV_FILE_DEFAULT="$(_remote_env_repo_root)/.env.remote"
-VCR_IMAGE_BASE_DEFAULT="vccr.io/f53909d3-a071-4826-8635-a62417ffc867/verda-minimind"
 
 load_remote_env() {
     local env_file="${REMOTE_ENV_FILE:-$REMOTE_ENV_FILE_DEFAULT}"
@@ -22,7 +21,8 @@ load_remote_env() {
         set +a
     fi
 
-    VCR_IMAGE_BASE="${VCR_IMAGE_BASE:-$VCR_IMAGE_BASE_DEFAULT}"
+    # VCR_IMAGE_BASE must be set by caller (from TOML config)
+    : "${VCR_IMAGE_BASE:?VCR_IMAGE_BASE must be set by caller (from TOML config)}"
     VCR_LOGIN_REGISTRY="${VCR_LOGIN_REGISTRY:-${VCR_IMAGE_BASE%/*}}"
 }
 

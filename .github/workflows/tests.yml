@@ -12,6 +12,20 @@ jobs:
     name: tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      seeker-postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mlflow
+          POSTGRES_PASSWORD: mlflow
+          POSTGRES_DB: mlflow
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U mlflow -d mlflow"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,7 +33,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install test dependencies
         run: |

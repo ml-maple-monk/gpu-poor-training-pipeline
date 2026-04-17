@@ -7,7 +7,7 @@ from html import escape
 from urllib.parse import urlparse
 
 from ..collectors.verda_offers import GPU_SPECS
-from ..config import MLFLOW_URL
+from ..config import DEFAULT_PLATFORM_COLOR, GPU_COLORS, MLFLOW_URL, PLATFORM_COLORS
 from ..state import AppState
 
 TARGET_GPUS = [display_name for _, display_name, _ in GPU_SPECS]
@@ -76,49 +76,68 @@ def _safe(text: str | int | float | None) -> str:
     return escape("" if text is None else str(text))
 
 
-def _render_availability_sparkline(history: list, *, points: int = 30) -> str:
+# Platform-specific brand colors for visual differentiation
+_PLATFORM_COLORS = PLATFORM_COLORS
+_DEFAULT_PLATFORM_COLOR = DEFAULT_PLATFORM_COLOR
+
+
+def _platform_color(backend: str) -> tuple[str, str, str]:
+    return _PLATFORM_COLORS.get(backend.lower().strip(), _DEFAULT_PLATFORM_COLOR)
+
+
+def _render_availability_heatmap(history: list, *, points: int = 30, color: str = "#3fb950") -> str:
+    """Render a horizontal heatmap bar: colored blocks = available, dark = unavailable."""
     samples = history[-points:] if history else []
-    if not samples:
-        values = [0.0] * points
-    else:
-        values = [1.0 if sample.available else 0.0 for sample in samples]
-        if len(values) < points:
-            values = ([0.0] * (points - len(values))) + values
+    available_flags = [s.available for s in samples] if samples else []
+    # Pad left with False if not enough data
+    if len(available_flags) < points:
+        available_flags = ([False] * (points - len(available_flags))) + available_flags
 
-    width = 112
-    height = 24
-    step = width / max(points - 1, 1)
-    coords = []
-    has_capacity = False
-    for idx, value in enumerate(values):
-        x = idx * step
-        y = 4 if value else height - 4
-        if value:
-            has_capacity = True
-        coords.append(f"{x:.2f},{y:.2f}")
+    bar_w = 4
+    bar_h = 14
+    gap = 1
+    total_w = points * (bar_w + gap)
 
-    stroke = "#3fb950" if has_capacity else "#484f58"
+    rects = []
+    for idx, avail in enumerate(available_flags):
+        x = idx * (bar_w + gap)
+        fill = color if avail else "#21262d"
+        opacity = "1" if avail else "0.4"
+        rects.append(
+            f"<rect x='{x}' y='0' width='{bar_w}' height='{bar_h}' rx='1' fill='{fill}' opacity='{opacity}'/>"
+        )
+
+    avail_count = sum(available_flags)
+    pct = int(avail_count / points * 100) if points else 0
+
     return (
-        "<div class='vd-gpu-chart-wrap'>"
-        f"<svg class='vd-avail-chart' viewBox='0 0 {width} {height}' preserveAspectRatio='none' role='img' aria-label='availability sparkline'>"
-        f"<polyline points='{' '.join(coords)}' fill='none' stroke='{stroke}' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'></polyline>"
-        "</svg>"
-        "</div>"
+        f"<div class='vd-heatmap-row'>"
+        f"<svg class='vd-heatmap-svg' viewBox='0 0 {total_w} {bar_h}' preserveAspectRatio='none'>"
+        f"{''.join(rects)}</svg>"
+        f"<span class='vd-heatmap-pct' style='color:{color}'>{pct}%</span>"
+        f"</div>"
     )
 
 
 def _render_backend_row(offer, history: list) -> str:
-    status = offer.availability or "availability n/a"
-    return f"""
-    <div class="vd-gpu-backend-row">
-      <div class="vd-gpu-backend-meta">
-        <div class="vd-gpu-backend-name"><span class="vd-dot {_dot_class(status)}"></span>{_safe(offer.backend)}</div>
-        <div class="vd-gpu-backend-context">{_safe(offer.region or "region n/a")} · {_safe(offer.mode or "mode n/a")} · {_safe(offer.instance_type or "instance n/a")}</div>
-      </div>
-      <div class="vd-gpu-backend-price">{_safe(_fmt_money(offer.price_per_hour))}</div>
-      {_render_availability_sparkline(history)}
-    </div>
-    """
+    status = offer.availability or "unknown"
+    primary, _, label = _platform_color(offer.backend)
+    dot = "vd-dot-ok" if status == "available" else "vd-dot-idle"
+
+    return (
+        f"<div class='vd-gpu-backend-row' style='border-left: 3px solid {primary}'>"
+        f"<div class='vd-gpu-backend-meta'>"
+        f"<div class='vd-gpu-backend-name' style='color:{primary}'>"
+        f"<span class='vd-dot {dot}' style='background:{primary};box-shadow:0 0 6px {primary}40'></span>"
+        f"{_safe(label)}</div>"
+        f"<div class='vd-gpu-backend-context'>"
+        f"{_safe(offer.region or 'n/a')} · {_safe(offer.mode or 'n/a')} · {_safe(offer.instance_type or 'n/a')}"
+        f"</div>"
+        f"</div>"
+        f"<div class='vd-gpu-backend-price' style='color:{primary}'>{_safe(_fmt_money(offer.price_per_hour))}</div>"
+        f"{_render_availability_heatmap(history, color=primary)}"
+        f"</div>"
+    )
 
 
 def _render_gpu_card(gpu_name: str, offers: list, history_by_backend: dict[str, list]) -> str:
@@ -127,27 +146,201 @@ def _render_gpu_card(gpu_name: str, offers: list, history_by_backend: dict[str, 
     card_class = "vd-gpu-card" if offers else "vd-gpu-card vd-gpu-card-empty"
 
     if not offers:
-        return f"""
-        <div class="{card_class}">
-          <div class="vd-gpu-card-header">
-            <div class="vd-gpu-card-name">{_safe(gpu_name)}</div>
-            <div class="vd-gpu-card-count">{_safe(header)}</div>
-          </div>
-          <div class="vd-gpu-card-empty-copy">No availability</div>
-          {_render_availability_sparkline([])}
-        </div>
-        """
+        return (
+            f"<div class='{card_class}'>"
+            f"<div class='vd-gpu-card-header'>"
+            f"<div class='vd-gpu-card-name'>{_safe(gpu_name)}</div>"
+            f"<div class='vd-gpu-card-count'>{_safe(header)}</div>"
+            f"</div>"
+            f"<div class='vd-gpu-card-empty-copy'>No availability</div>"
+            f"{_render_availability_heatmap([])}"
+            f"</div>"
+        )
 
     rows = [_render_backend_row(offer, history_by_backend.get(offer.backend, [])) for offer in offers]
-    return f"""
-    <div class="{card_class}">
-      <div class="vd-gpu-card-header">
-        <div class="vd-gpu-card-name">{_safe(gpu_name)}</div>
-        <div class="vd-gpu-card-count">{_safe(header)}</div>
-      </div>
-      <div class="vd-gpu-backend-list">{"".join(rows)}</div>
-    </div>
+
+    # Build stacked availability chart
+    chart_rows = []
+    all_backends = sorted(set(o.backend for o in offers))
+    for backend in all_backends:
+        primary, _, label = _platform_color(backend)
+        hist = history_by_backend.get(backend, [])
+        chart_rows.append(
+            f"<div class='vd-stacked-row'>"
+            f"<span class='vd-stacked-label' style='color:{primary}'>{_safe(label)}</span>"
+            f"{_render_availability_heatmap(hist, color=primary)}"
+            f"</div>"
+        )
+
+    return (
+        f"<div class='{card_class}'>"
+        f"<div class='vd-gpu-card-header'>"
+        f"<div class='vd-gpu-card-name'>{_safe(gpu_name)}</div>"
+        f"<div class='vd-gpu-card-count'>{_safe(header)}</div>"
+        f"</div>"
+        f"<div class='vd-gpu-backend-list'>{''.join(rows)}</div>"
+        f"<div class='vd-stacked-chart'>"
+        f"<div class='vd-stacked-title'>Availability (last 30 min)</div>"
+        f"{''.join(chart_rows)}"
+        f"</div>"
+        f"</div>"
+    )
+
+
+def format_availability_matrix_html(state: AppState, *, slots: int = 30) -> str:
+    """Render two sections:
+    1. Five large status blocks — lit up if at least 1 GPU is deployable, dimmed otherwise
+    2. Five SVG line charts — one per GPU showing per-platform availability over time
     """
+    with state.lock:
+        history = {k: list(v) for k, v in state.offer_history.items()}
+        all_offers = list(state.seeker_offers) + list(state.dstack_probe_offers)
+
+    # ── Section 1: Status blocks ─────────────────────────────────────
+    # GPU-specific colors for the blocks
+    _GPU_COLORS = GPU_COLORS
+
+    blocks = []
+    for gpu_name in TARGET_GPUS:
+        color = _GPU_COLORS.get(gpu_name, "#8b949e")
+
+        # Check current availability: any offer with this gpu_name that is available?
+        available_offers = [o for o in all_offers if o.gpu_name == gpu_name and o.availability == "available"]
+        is_available = len(available_offers) > 0
+        offer_count = len(available_offers)
+
+        # Find available backends
+        avail_backends = sorted(set(o.backend for o in available_offers))
+        backend_chips = ""
+        for b in avail_backends:
+            b_color, _, b_label = _platform_color(b)
+            backend_chips += (
+                f"<span class='vd-block-chip' style='color:{b_color};border-color:{b_color}40'>{_safe(b_label)}</span>"
+            )
+
+        # Find last-available timestamp if currently unavailable
+        last_available_text = ""
+        if not is_available:
+            # Search history for the most recent available snapshot
+            backend_keys = [k for k in history if k[0] == gpu_name]
+            latest_ts = None
+            for k in backend_keys:
+                for snap in reversed(history[k]):
+                    if snap.available:
+                        if latest_ts is None or snap.timestamp > latest_ts:
+                            latest_ts = snap.timestamp
+                        break
+            if latest_ts is not None:
+                last_available_text = (
+                    f"<div class='vd-block-last'>Last seen: {_safe(latest_ts.strftime('%H:%M:%S UTC'))}</div>"
+                )
+            else:
+                last_available_text = "<div class='vd-block-last'>No recent availability</div>"
+
+        if is_available:
+            blocks.append(
+                f"<div class='vd-gpu-block vd-gpu-block-lit' style='border-color:{color};box-shadow:0 0 20px {color}30'>"
+                f"<div class='vd-block-name' style='color:{color}'>{_safe(gpu_name)}</div>"
+                f"<div class='vd-block-status'>AVAILABLE</div>"
+                f"<div class='vd-block-count'>{offer_count} instance{'s' if offer_count != 1 else ''}</div>"
+                f"<div class='vd-block-backends'>{backend_chips}</div>"
+                f"</div>"
+            )
+        else:
+            blocks.append(
+                f"<div class='vd-gpu-block vd-gpu-block-dim'>"
+                f"<div class='vd-block-name'>{_safe(gpu_name)}</div>"
+                f"<div class='vd-block-status vd-block-status-off'>UNAVAILABLE</div>"
+                f"{last_available_text}"
+                f"</div>"
+            )
+
+    status_section = f"<div class='vd-gpu-blocks'>{''.join(blocks)}</div>"
+
+    # ── Section 2: Historical line charts ────────────────────────────
+    # One chart per GPU, showing availability count per platform over time
+    charts = []
+    all_backends = sorted({k[1] for k in history})
+
+    for gpu_name in TARGET_GPUS:
+        color = _GPU_COLORS.get(gpu_name, "#8b949e")
+
+        # Build per-backend time series
+        chart_w = 300
+        chart_h = 60
+        pad_left = 4
+        pad_bottom = 12
+
+        plot_w = chart_w - pad_left
+        plot_h = chart_h - pad_bottom
+
+        lines_svg = []
+        legend_items = []
+
+        for backend in all_backends:
+            key = (gpu_name, backend)
+            snaps = history.get(key, [])
+            b_color, _, b_label = _platform_color(backend)
+
+            if not snaps:
+                continue
+
+            # Build points: y=1 if available, y=0 if not
+            recent = snaps[-slots:]
+            if len(recent) < 2:
+                continue
+
+            coords = []
+            for i, snap in enumerate(recent):
+                x = pad_left + (i / max(len(recent) - 1, 1)) * plot_w
+                y = 4 if snap.available else plot_h - 2
+                coords.append(f"{x:.1f},{y:.1f}")
+
+            # Area fill under the line
+            area_coords = list(coords)
+            area_coords.append(f"{pad_left + plot_w:.1f},{plot_h:.1f}")
+            area_coords.append(f"{pad_left:.1f},{plot_h:.1f}")
+
+            lines_svg.append(f"<polygon points='{' '.join(area_coords)}' fill='{b_color}' opacity='0.08'/>")
+            lines_svg.append(
+                f"<polyline points='{' '.join(coords)}' "
+                f"fill='none' stroke='{b_color}' stroke-width='2' "
+                f"stroke-linecap='round' stroke-linejoin='round'/>"
+            )
+
+            legend_items.append(
+                f"<span class='vd-chart-legend-item'>"
+                f"<span class='vd-chart-legend-dot' style='background:{b_color}'></span>"
+                f"{_safe(b_label)}</span>"
+            )
+
+        # Time axis
+        lines_svg.append(
+            f"<line x1='{pad_left}' y1='{plot_h}' x2='{pad_left + plot_w}' y2='{plot_h}' "
+            f"stroke='#30363d' stroke-width='0.5'/>"
+        )
+        # "available" / "unavailable" labels
+        lines_svg.append(f"<text x='{pad_left + plot_w + 2}' y='8' class='vd-chart-axis-label'>avail</text>")
+
+        legend_html = f"<div class='vd-chart-legend'>{''.join(legend_items)}</div>" if legend_items else ""
+
+        charts.append(
+            f"<div class='vd-history-card'>"
+            f"<div class='vd-history-title' style='color:{color}'>{_safe(gpu_name)}</div>"
+            f"<svg class='vd-history-svg' viewBox='0 0 {chart_w} {chart_h}' preserveAspectRatio='none'>"
+            f"{''.join(lines_svg)}"
+            f"</svg>"
+            f"{legend_html}"
+            f"</div>"
+        )
+
+    history_section = (
+        f"<div class='vd-history-grid'>{''.join(charts)}</div>"
+        if charts
+        else "<div class='vd-empty'>Collecting availability history...</div>"
+    )
+
+    return f"{status_section}{history_section}"
 
 
 def format_statusbar_html(state: AppState) -> str:
@@ -224,6 +417,7 @@ def format_hero_html(state: AppState) -> str:
                 item.region,
             ),
         )
+        active_jobs = list(state.seeker_active_jobs)
         active_job = state.seeker_active
         pending_count = len(state.seeker_pending)
         attempts = list(state.seeker_attempts)
@@ -269,6 +463,7 @@ def format_hero_html(state: AppState) -> str:
       <div class="vd-card-title">Seeker Queue</div>
       <div class="vd-card-value">{_safe(pending_count)}</div>
       <div class="vd-card-sub">{_safe(seeker_title)}</div>
+      <div class="vd-card-sub">{_safe(len(active_jobs))} active jobs</div>
       <div class="vd-card-sub"><span class="vd-badge {_badge_class(seeker_status)}">{_safe(seeker_status or "idle")}</span> · retries {_safe(seeker_retries)}</div>
       <div class="vd-progress vd-progress-lg"><div class="vd-progress-fill vd-progress-blue" style="width: {seeker_progress}%"></div></div>
     </div>
@@ -414,6 +609,7 @@ def format_alert_feed_html(state: AppState, limit: int = 6) -> str:
         attempts = list(state.seeker_attempts)
         health = dict(state.collector_health)
         refreshed = dict(state.last_refreshed_at)
+        active_jobs = list(state.seeker_active_jobs)
         active_job = state.seeker_active
         pending_count = len(state.seeker_pending)
 
@@ -448,7 +644,7 @@ def format_alert_feed_html(state: AppState, limit: int = 6) -> str:
             <div class="vd-feed-item">
               <span class="vd-dot vd-dot-warn"></span>
               <div class="vd-feed-name">queue</div>
-              <div class="vd-feed-detail">{_safe(pending_count)} jobs still waiting for capacity</div>
+              <div class="vd-feed-detail">{_safe(pending_count)} pending · {_safe(len(active_jobs))} active</div>
             </div>
             """
         )
