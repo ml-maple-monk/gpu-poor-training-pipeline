@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-import plotly.graph_objects as go
 import psycopg
 from psycopg.rows import dict_row
 
@@ -965,53 +964,62 @@ def build_dashboard_snapshot(config: DashboardConfig) -> DashboardSnapshot:
     return snapshot
 
 
-def build_history_figure(card: GpuCard) -> go.Figure:
+def build_history_figure(card: GpuCard) -> dict[str, Any]:
     rows = list(card.rows)
     if not rows:
-        figure = go.Figure()
-        figure.add_annotation(
-            text="No history yet",
-            x=0.5,
-            y=0.5,
-            xref="paper",
-            yref="paper",
-            showarrow=False,
-            font={"size": 14, "color": "#8B949E"},
-        )
-        figure.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            margin={"l": 0, "r": 0, "t": 0, "b": 0},
-            xaxis={"visible": False},
-            yaxis={"visible": False},
-        )
-        return figure
+        return {
+            "data": [],
+            "layout": {
+                "paper_bgcolor": "rgba(0,0,0,0)",
+                "plot_bgcolor": "rgba(0,0,0,0)",
+                "margin": {"l": 0, "r": 0, "t": 0, "b": 0},
+                "xaxis": {"visible": False},
+                "yaxis": {"visible": False},
+                "annotations": [
+                    {
+                        "text": "No history yet",
+                        "x": 0.5,
+                        "y": 0.5,
+                        "xref": "paper",
+                        "yref": "paper",
+                        "showarrow": False,
+                        "font": {"size": 14, "color": "#8B949E"},
+                    }
+                ],
+            },
+        }
 
-    figure = go.Figure(
-        go.Bar(
-            x=[row.availability_percent for row in rows],
-            y=[row.provider_label for row in rows],
-            orientation="h",
-            marker={"color": [row.provider_color for row in rows]},
-            text=[f"{row.availability_percent:.0f}%" for row in rows],
-            textposition="outside",
-            hovertemplate="%{y}: %{x:.1f}%<extra></extra>",
-        )
-    )
-    figure.update_layout(
-        height=max(180, 48 * len(rows)),
-        margin={"l": 0, "r": 16, "t": 4, "b": 8},
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        showlegend=False,
-        xaxis={
-            "range": [0, 100],
-            "showgrid": True,
-            "gridcolor": "rgba(255,255,255,0.08)",
-            "ticksuffix": "%",
-            "color": "#8B949E",
+    return {
+        "data": [
+            {
+                "type": "bar",
+                "x": [row.availability_percent for row in rows],
+                "y": [row.provider_label for row in rows],
+                "orientation": "h",
+                "marker": {"color": [row.provider_color for row in rows]},
+                "text": [f"{row.availability_percent:.0f}%" for row in rows],
+                "textposition": "outside",
+                "hovertemplate": "%{y}: %{x:.1f}%<extra></extra>",
+            }
+        ],
+        "layout": {
+            "height": max(180, 48 * len(rows)),
+            "margin": {"l": 0, "r": 16, "t": 4, "b": 8},
+            "paper_bgcolor": "rgba(0,0,0,0)",
+            "plot_bgcolor": "rgba(0,0,0,0)",
+            "showlegend": False,
+            "xaxis": {
+                "range": [0, 100],
+                "showgrid": True,
+                "gridcolor": "rgba(255,255,255,0.08)",
+                "ticksuffix": "%",
+                "color": "#8B949E",
+            },
+            "yaxis": {
+                "color": "#E6EDF3",
+                "automargin": True,
+                "categoryorder": "total ascending",
+            },
+            "bargap": 0.32,
         },
-        yaxis={"color": "#E6EDF3", "automargin": True, "categoryorder": "total ascending"},
-        bargap=0.32,
-    )
-    return figure
+    }

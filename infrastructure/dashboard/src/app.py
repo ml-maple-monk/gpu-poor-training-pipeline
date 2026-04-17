@@ -3,14 +3,23 @@
 from __future__ import annotations
 
 from datetime import UTC
+from typing import Any
 
-import dash_mantine_components as dmc
-from dash import Dash, dcc, html
-from dash import Input as DashIn
-from dash import Output as DashOut
+try:
+    import dash_mantine_components as dmc
+    from dash import Dash, dcc, html
+    from dash import Input as DashIn
+    from dash import Output as DashOut
+except ModuleNotFoundError:  # pragma: no cover - exercised in repo-wide CI without dashboard extras
+    Dash = Any  # type: ignore[assignment]
+    DashIn = DashOut = dcc = dmc = html = None  # type: ignore[assignment]
 
 from .models import DashboardConfig, DashboardSnapshot, GpuCard, LaneSnapshot, ProviderRow, SweepStatus
 from .utils import build_dashboard_snapshot, build_history_figure, load_dashboard_config, start_sweep_scheduler
+
+
+def dash_runtime_available() -> bool:
+    return all(component is not None for component in (dcc, dmc, html))
 
 
 def money_label(value: float | None) -> str:
@@ -303,6 +312,17 @@ def lane_component(lane: LaneSnapshot):
 
 
 def render_dashboard(snapshot: DashboardSnapshot, config: DashboardConfig):
+    if not dash_runtime_available():
+        return {
+            "title": "Verda Capacity Board",
+            "refreshed_at": snapshot.generated_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC"),
+            "poll_seconds": int(config.poll_seconds),
+            "sweep_state": snapshot.sweep.state,
+            "preemptible_cards": len(snapshot.preemptible.cards),
+            "on_demand_cards": len(snapshot.on_demand.cards),
+            "hidden_unknown_count": snapshot.hidden_unknown_count,
+        }
+
     refreshed = snapshot.generated_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
     header = dmc.AppShellHeader(
         p="md",
@@ -369,6 +389,11 @@ def render_dashboard(snapshot: DashboardSnapshot, config: DashboardConfig):
 
 
 def build_app() -> Dash:
+    if not dash_runtime_available():
+        raise RuntimeError(
+            "Dash dashboard dependencies are missing. Install infrastructure/dashboard/config/requirements.txt."
+        )
+
     config = load_dashboard_config()
     initial_snapshot = build_dashboard_snapshot(config)
     app = Dash(__name__, external_stylesheets=dmc.styles.ALL)
@@ -393,13 +418,14 @@ def build_app() -> Dash:
     return app
 
 
-app = build_app()
+app = build_app() if dash_runtime_available() else None
 
 
 def main() -> None:
     config = load_dashboard_config()
     start_sweep_scheduler(config)
-    app.run(host="0.0.0.0", port=config.dashboard_port, debug=False)
+    dashboard_app = build_app()
+    dashboard_app.run(host="0.0.0.0", port=config.dashboard_port, debug=False)
 
 
 if __name__ == "__main__":
