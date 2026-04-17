@@ -608,6 +608,12 @@ def launch_remote(
 
     settings = load_remote_settings(config.remote)
     require_remote_settings(settings)
+    # TOML vcr_image_base takes precedence over .env.remote for ALL steps
+    # (build, push, render). Without this, .env.remote's vccr.io overrides
+    # the TOML's Docker Hub setting and pushes to the wrong registry.
+    if config.remote.vcr_image_base:
+        settings["VCR_IMAGE_BASE"] = config.remote.vcr_image_base
+        os.environ["VCR_IMAGE_BASE"] = config.remote.vcr_image_base
     dstack_bin = find_dstack_bin()
 
     ops.run_preflight(remote=True, doctor=config.doctor, remote_config=config.remote)
