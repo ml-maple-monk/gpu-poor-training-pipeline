@@ -95,12 +95,12 @@ Prints the resolved `dstack apply` shape (image, env, GPU filter, time cap) with
 ## Architecture
 
 <p align="center">
-  <img src="docs/diagrams/architecture.png" alt="gpupoor architecture — CLI dispatches one TOML RunConfig through ops, services, and one of the two backends (local or dstack)" width="820">
+  <img src="docs/diagrams/architecture.png" alt="gpupoor architecture — CLI and wrapper entrypoints feed typed config, seeker, deployer, and connector control-plane modules, then branch into local or dstack execution with MLflow, Cloudflare, R2, and training runtime dependencies" width="820">
 </p>
 
 <sub><a href="./docs/diagrams/architecture.mmd">source (Mermaid)</a></sub>
 
-**Core contract:** the CLI loads one TOML into a `RunConfig` dataclass, resolves the `backend.kind`, and hands off to either the local or dstack backend. Everything else — MLflow, the dashboard, secrets scanning — is an `ops` or `services` helper invocable from the same CLI.
+**Core contract:** the CLI loads one TOML into a `RunConfig` dataclass, resolves the `backend.kind`, and hands off through the current control-plane seams: `seeker` for queued remote placement, `deployer` for launch gating, `connector` for MLflow/tunnel/R2 readiness, and then the local or dstack execution backends. Everything else — MLflow, the dashboard, emulator flows, and repo checks — stays reachable from the same CLI surface.
 
 ---
 
