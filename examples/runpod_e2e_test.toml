@@ -49,8 +49,7 @@ lr_min_ratio = 0.1
 
 [backend]
 kind = "dstack"
-skip_build = true
-remote_image_tag = "1d2662a"
+skip_build = false
 
 [mlflow]
 experiment_name = "e2e-runpod-test"
