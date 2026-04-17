@@ -64,6 +64,7 @@ ${_REGISTRY_AUTH}
 env:
   - HF_TOKEN
   - GPUPOOR_RUN_CONFIG_B64
+  - MLFLOW_TRACKING_URI
 
 commands:
   - bash /opt/training/scripts/remote-entrypoint.sh
