@@ -12,8 +12,8 @@ from gpupoor.backends.dstack import read_cached_remote_image_tag, remote_image_t
 from gpupoor.config import (
     DEFAULT_HF_DATASET_REPO,
     DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME,
-    load_remote_settings,
     RunConfig,
+    load_remote_settings,
 )
 from gpupoor.recipes.minimind import ensure_local_dataset
 from gpupoor.runtime_config import merged_toml_b64, write_merged_toml

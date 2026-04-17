@@ -31,4 +31,4 @@ def test_local_backend_canonical_emulator_keeps_preflight_and_b64_contract(repo_
     assert 'raise RuntimeError(f"Local-emulator preflight failed: {script_name}")' in backend_py
     assert '"prepare-data.sh"' in backend_py
     assert 'run_command(["docker", "pull", image_ref])' in backend_py
-    assert 'env={_REMOTE_WRAPPER_IMAGE_ENV: image_ref}' in backend_py
+    assert "env={_REMOTE_WRAPPER_IMAGE_ENV: image_ref}" in backend_py

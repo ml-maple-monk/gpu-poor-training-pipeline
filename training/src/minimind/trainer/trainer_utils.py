@@ -76,7 +76,7 @@ def _resolve_autocast_dtype(dtype_name: str):
         return torch.float16
     if dtype_name == "float32":
         return None
-    raise ValueError(f"Unsupported dtype: {dtype_name}")
+    raise ValueError(f"Unsupported autocast dtype: {dtype_name}")
 
 
 def build_autocast_context(device_type_name: str, dtype_name: str):

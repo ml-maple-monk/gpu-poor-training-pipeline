@@ -191,9 +191,7 @@ def test_run_remote_wrapper_aborts_on_remote_image_pull_failure_before_compose(m
 
     monkeypatch.setattr(local, "_ensure_local_emulator_dataset", lambda: None)
     monkeypatch.setattr(
-        local,
-        "run_command",
-        lambda command, **kwargs: (_ for _ in ()).throw(CommandError(command, 9))
+        local, "run_command", lambda command, **kwargs: (_ for _ in ()).throw(CommandError(command, 9))
     )
 
     with pytest.raises(CommandError, match="docker pull"):

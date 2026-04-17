@@ -49,6 +49,8 @@ def test_remote_image_bakes_runtime_loader_and_pretokenized_dataset() -> None:
     build_script = _repo_text("training", "scripts", "build-and-push.sh")
 
     assert "COPY data/datasets/pretrain_t2t_mini/" in dockerfile
-    assert "COPY training/scripts/lib/load-run-config-env.py" in dockerfile
+    assert "COPY src/gpupoor/ /opt/training/shared/gpupoor/" in dockerfile
+    assert "COPY defaults.toml /opt/training/defaults.toml" in dockerfile
+    assert "COPY training/scripts/lib/load-run-config-env.py" not in dockerfile
     assert "ensure_pretokenized_dataset()" in build_script
     assert "PRETOKENIZED_DATASET_REQUIRED_FILES" in build_script

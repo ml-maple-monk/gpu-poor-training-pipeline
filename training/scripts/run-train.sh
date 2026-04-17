@@ -25,12 +25,16 @@ cd "$TRAIN_SCRIPT_DIR"
 echo "=== Starting training with config: $TOML_CONFIG ==="
 echo "    Time cap: ${TIME_CAP_SECONDS}s"
 
-EXIT_CODE=0
-timeout "${TIME_CAP_SECONDS}" python3 train_pretrain.py "$TOML_CONFIG" || EXIT_CODE=$?
+set +e
+timeout --signal=SIGTERM --kill-after=30 "${TIME_CAP_SECONDS}" \
+    python3 train_pretrain.py "$TOML_CONFIG"
+RC=$?
+set -e
 
-if [ "$EXIT_CODE" -eq 124 ]; then
+echo "Training exit code: $RC  (124 = reached ${TIME_CAP_SECONDS}s cap)"
+if [ "$RC" -eq 124 ]; then
     echo "Training reached time cap (${TIME_CAP_SECONDS}s) — this is expected."
     exit 0
 fi
 
-exit "$EXIT_CODE"
+exit "$RC"
