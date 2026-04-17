@@ -181,7 +181,9 @@ def start(runtime_args, model_config, mlflow_config: dict) -> None:
     _metric_queue_poll_seconds = float(mlflow_config.get("metric_queue_poll_seconds", 0.2))
     _metric_flush_timeout_seconds = float(mlflow_config.get("metric_flush_timeout_seconds", 5.0))
 
-    uri = str(mlflow_config.get("tracking_uri", "")).strip()
+    # Prefer MLFLOW_TRACKING_URI env var (set by launch code with tunnel URL)
+    # over TOML tracking_uri (which has the local-only host.docker.internal).
+    uri = os.environ.get("MLFLOW_TRACKING_URI", "").strip() or str(mlflow_config.get("tracking_uri", "")).strip()
     if not uri:
         print("[mlflow] tracking_uri not set — skipping integration", flush=True)
         return
