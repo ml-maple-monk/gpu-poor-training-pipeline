@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import tempfile
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 from gpupoor.backends import dstack as dstack_backend
 from gpupoor.backends.local import run_training as run_local_training
@@ -41,6 +44,7 @@ class DeploymentRequest:
     count: int
     mode: str
     price_cap: float | None = None
+    frozen_config_b64: str = ""
 
 
 def validate_remote_registry_auth(remote: RemoteConfig) -> None:
@@ -75,6 +79,26 @@ def apply_remote_request(config: RunConfig, request: DeploymentRequest) -> RunCo
     return replace(config, remote=remote)
 
 
+def _load_frozen_config(request: DeploymentRequest) -> RunConfig:
+    """Materialize a frozen config snapshot into a RunConfig.
+
+    The seeker stores the merged run config as base64 TOML at enqueue time so
+    later edits to the source TOML do not rewrite queued work. We decode that
+    snapshot into a temporary file and then reuse the existing loader so the
+    downstream validation path stays consistent with file-backed configs.
+    """
+    if not request.frozen_config_b64:
+        return load_run_config(request.config_path)
+
+    frozen_toml = base64.b64decode(request.frozen_config_b64).decode("utf-8")
+    with tempfile.TemporaryDirectory(prefix="gpupoor-seeker-config-") as temp_dir:
+        snapshot_path = Path(temp_dir) / "frozen-run-config.toml"
+        snapshot_path.write_text(frozen_toml, encoding="utf-8")
+        config = load_run_config(snapshot_path)
+    # Preserve the original config path for traceability and existing logs.
+    return replace(config, source=Path(request.config_path))
+
+
 def deploy_remote_request(
     request: DeploymentRequest,
     *,
@@ -83,7 +107,7 @@ def deploy_remote_request(
 ) -> None:
     if request.deployment_target != DEPLOY_TARGET_REMOTE:
         raise RuntimeError("deploy_remote_request only accepts deployment_target='remote'")
-    config = load_run_config(request.config_path)
+    config = _load_frozen_config(request)
     if config.backend.kind != BACKEND_DSTACK:
         raise RuntimeError("remote deployment requires backend.kind='dstack'")
     launch_config = apply_remote_request(config, request)
@@ -96,6 +120,7 @@ def deploy_remote_request(
             lane=LANE_REMOTE,
             config_path=str(launch_config.source),
             job_id=request.job_id,
+            # We should always upload artifact
             artifact_upload_requested=launch_config.mlflow.artifact_upload,
         ),
         launch_config,

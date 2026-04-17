@@ -7,7 +7,7 @@ from html import escape
 from urllib.parse import urlparse
 
 from ..collectors.verda_offers import GPU_SPECS
-from ..config import GPU_COLORS, MLFLOW_URL, PLATFORM_COLORS, DEFAULT_PLATFORM_COLOR
+from ..config import DEFAULT_PLATFORM_COLOR, GPU_COLORS, MLFLOW_URL, PLATFORM_COLORS
 from ..state import AppState
 
 TARGET_GPUS = [display_name for _, display_name, _ in GPU_SPECS]
@@ -432,6 +432,7 @@ def format_hero_html(state: AppState) -> str:
                 item.region,
             ),
         )
+        active_jobs = list(state.seeker_active_jobs)
         active_job = state.seeker_active
         pending_count = len(state.seeker_pending)
         attempts = list(state.seeker_attempts)
@@ -477,6 +478,7 @@ def format_hero_html(state: AppState) -> str:
       <div class="vd-card-title">Seeker Queue</div>
       <div class="vd-card-value">{_safe(pending_count)}</div>
       <div class="vd-card-sub">{_safe(seeker_title)}</div>
+      <div class="vd-card-sub">{_safe(len(active_jobs))} active jobs</div>
       <div class="vd-card-sub"><span class="vd-badge {_badge_class(seeker_status)}">{_safe(seeker_status or 'idle')}</span> · retries {_safe(seeker_retries)}</div>
       <div class="vd-progress vd-progress-lg"><div class="vd-progress-fill vd-progress-blue" style="width: {seeker_progress}%"></div></div>
     </div>
@@ -626,6 +628,7 @@ def format_alert_feed_html(state: AppState, limit: int = 6) -> str:
         attempts = list(state.seeker_attempts)
         health = dict(state.collector_health)
         refreshed = dict(state.last_refreshed_at)
+        active_jobs = list(state.seeker_active_jobs)
         active_job = state.seeker_active
         pending_count = len(state.seeker_pending)
 
@@ -660,7 +663,7 @@ def format_alert_feed_html(state: AppState, limit: int = 6) -> str:
             <div class="vd-feed-item">
               <span class="vd-dot vd-dot-warn"></span>
               <div class="vd-feed-name">queue</div>
-              <div class="vd-feed-detail">{_safe(pending_count)} jobs still waiting for capacity</div>
+              <div class="vd-feed-detail">{_safe(pending_count)} pending · {_safe(len(active_jobs))} active</div>
             </div>
             """
         )

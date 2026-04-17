@@ -36,6 +36,7 @@ def _sorted_offers(state: AppState):
 def format_seeker_summary_md(state: AppState) -> str:
     """Return a compact seeker mission summary card."""
     with state.lock:
+        active_jobs = list(state.seeker_active_jobs)
         active = state.seeker_active
         pending_count = len(state.seeker_pending)
         attempts = list(state.seeker_attempts)
@@ -51,6 +52,7 @@ def format_seeker_summary_md(state: AppState) -> str:
         '<div class="section-title">Seeker status</div>',
         '<div class="chip-strip compact">',
         badge(f"{len(available_gpu)} GPU offers live", tone="good" if available_gpu else "neutral"),
+        badge(f"{len(active_jobs)} active", tone="good" if active_jobs else "neutral"),
         badge(f"{pending_count} queued", tone="warn" if pending_count else "neutral"),
         badge(f"{len(attempts)} recent attempts", tone="neutral"),
         "</div>",

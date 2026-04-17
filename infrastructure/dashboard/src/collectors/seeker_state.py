@@ -40,11 +40,19 @@ def parse_job(item: dict[str, Any]) -> SeekerJob:
     return SeekerJob(
         job_id=str(item.get("job_id", "")),
         config_name=str(item.get("config_name", "")),
+        config_path=str(item.get("config_path", "")),
         submitted_run_name=str(item.get("submitted_run_name", "")),
+        state=str(item.get("state", "")),
         submit_retries=int(item.get("submit_retries", 0) or 0),
         last_status=str(item.get("last_status", "")),
         last_reason=str(item.get("last_reason", "")),
         enqueued_at=str(item.get("enqueued_at", "")),
+        next_poll_at=str(item.get("next_poll_at", "")),
+        claimed_at=str(item.get("claimed_at", "")),
+        lease_owner=str(item.get("lease_owner", "")),
+        lease_expires_at=str(item.get("lease_expires_at", "")),
+        updated_at=str(item.get("updated_at", "")),
+        last_probe_error=str(item.get("last_probe_error", "")),
     )
 
 
@@ -60,19 +68,20 @@ def parse_attempt(item: dict[str, Any]) -> SeekerAttempt:
         price_per_hour=float(item.get("price_per_hour", 0.0) or 0.0),
         status=str(item.get("status", "")),
         reason=str(item.get("reason", "")),
+        probe_error=str(item.get("probe_error", "")),
         started_at=str(item.get("started_at", "")),
         ended_at=str(item.get("ended_at", "")),
     )
 
 
 def collect_seeker_state() -> tuple[
-    list[SeekerOffer], SeekerJob | None, list[SeekerJob], list[SeekerAttempt], SourceStatus
+    list[SeekerOffer], list[SeekerJob], SeekerJob | None, list[SeekerJob], list[SeekerAttempt], SourceStatus
 ]:
     offers_file = seeker_dir() / "latest_offers.json"
     queue_file = seeker_dir() / "queue.json"
     attempts_file = seeker_dir() / "attempts.jsonl"
     if not offers_file.is_file() and not queue_file.is_file() and not attempts_file.is_file():
-        return [], None, [], [], SourceStatus.STALE
+        return [], [], None, [], [], SourceStatus.STALE
     try:
         offers_payload = load_json(offers_file) if offers_file.is_file() else {"offers": []}
         queue_payload = load_json(queue_file) if queue_file.is_file() else {"active": None, "pending": []}
@@ -83,11 +92,15 @@ def collect_seeker_state() -> tuple[
                 if line:
                     attempts_rows.append(json.loads(line))
         offers = [parse_offer(item) for item in offers_payload.get("offers", []) if isinstance(item, dict)]
-        active_raw = queue_payload.get("active")
-        active = parse_job(active_raw) if isinstance(active_raw, dict) else None
+        active_jobs_raw = queue_payload.get("active_jobs", [])
+        active_jobs = [parse_job(item) for item in active_jobs_raw if isinstance(item, dict)]
+        if not active_jobs:
+            active_raw = queue_payload.get("active")
+            active_jobs = [parse_job(active_raw)] if isinstance(active_raw, dict) else []
+        active = active_jobs[0] if active_jobs else None
         pending = [parse_job(item) for item in queue_payload.get("pending", []) if isinstance(item, dict)]
         attempts = [parse_attempt(item) for item in attempts_rows[-10:] if isinstance(item, dict)]
-        return offers, active, pending, attempts, SourceStatus.OK
+        return offers, active_jobs, active, pending, attempts, SourceStatus.OK
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         log.warning("seeker state collect failed: %s", exc)
-        return [], None, [], [], SourceStatus.ERROR
+        return [], [], None, [], [], SourceStatus.ERROR

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -70,15 +70,21 @@ def test_collect_seeker_state_reads_queue_offer_and_attempt_files(tmp_path, monk
     (seeker_dir / "queue.json").write_text(
         json.dumps(
             {
-                "active": {
-                    "job_id": "job-1",
-                    "config_name": "debug-run",
-                    "submitted_run_name": "debug-run",
-                    "submit_retries": 1,
-                    "last_status": "submitted",
-                    "last_reason": "",
-                    "enqueued_at": "2026-04-16T00:00:00+00:00",
-                },
+                "active": None,
+                "active_jobs": [
+                    {
+                        "job_id": "job-1",
+                        "config_name": "debug-run",
+                        "config_path": "configs/debug-run.toml",
+                        "submitted_run_name": "debug-run",
+                        "state": "submitted",
+                        "submit_retries": 1,
+                        "last_status": "submitted",
+                        "last_reason": "",
+                        "enqueued_at": "2026-04-16T00:00:00+00:00",
+                        "lease_owner": "daemon-a",
+                    }
+                ],
                 "pending": [],
             }
         ),
@@ -107,15 +113,50 @@ def test_collect_seeker_state_reads_queue_offer_and_attempt_files(tmp_path, monk
     monkeypatch.setattr("src.collectors.seeker_state.SEEKER_DATA_DIR", str(seeker_dir))
     from src.collectors.seeker_state import collect_seeker_state
 
-    offers, active, pending, attempts, status = collect_seeker_state()
+    offers, active_jobs, active, pending, attempts, status = collect_seeker_state()
 
     assert status == SourceStatus.OK
     assert len(offers) == 1
     assert offers[0].backend == "runpod"
+    assert len(active_jobs) == 1
     assert active is not None and active.job_id == "job-1"
+    assert active.state == "submitted"
     assert pending == []
     assert len(attempts) == 1
     assert attempts[0].status == "submitted"
+
+
+def test_collect_seeker_state_falls_back_to_legacy_active_field(tmp_path, monkeypatch):
+    seeker_dir = tmp_path / "seeker"
+    seeker_dir.mkdir()
+    (seeker_dir / "queue.json").write_text(
+        json.dumps(
+            {
+                "active": {
+                    "job_id": "job-legacy",
+                    "config_name": "legacy-run",
+                    "submitted_run_name": "legacy-run",
+                    "submit_retries": 0,
+                    "last_status": "submitted",
+                    "last_reason": "",
+                    "enqueued_at": "2026-04-16T00:00:00+00:00",
+                },
+                "pending": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("src.collectors.seeker_state.SEEKER_DATA_DIR", str(seeker_dir))
+    from src.collectors.seeker_state import collect_seeker_state
+
+    offers, active_jobs, active, pending, attempts, status = collect_seeker_state()
+
+    assert status == SourceStatus.OK
+    assert offers == []
+    assert len(active_jobs) == 1
+    assert active is not None and active.job_id == "job-legacy"
+    assert pending == []
+    assert attempts == []
 
 
 @pytest.mark.parametrize(
@@ -304,7 +345,7 @@ def test_archive_offer_snapshots_uses_cheapest_offer_and_tracks_unavailable_pair
     from src.state import SeekerOffer, reset_state
 
     state = reset_state()
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     offers = [
         SeekerOffer(
             gpu_name="H100",

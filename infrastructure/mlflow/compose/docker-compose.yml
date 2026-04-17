@@ -33,6 +33,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    ports:
+      - "127.0.0.1:55432:5432"
     labels:
       com.verda.emulation: "true"
       com.verda.profile: "mlflow-meta"

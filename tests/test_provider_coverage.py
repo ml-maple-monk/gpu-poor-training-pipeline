@@ -92,6 +92,32 @@ def test_fetch_targeted_offers_uses_backend_filters_without_gpu_flag(monkeypatch
     assert captured["timeout"] == 30
 
 
+def test_fetch_targeted_offers_omits_region_flags_for_all_region_targets(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_load_offer_payload(command, *, timeout=60):
+        captured["command"] = command
+        captured["timeout"] = timeout
+        return {"offers": []}
+
+    monkeypatch.setattr(dstack, "_load_offer_payload", fake_load_offer_payload)
+
+    payload = dstack.fetch_targeted_offers(
+        "dstack",
+        backend="runpod",
+        gpu="H100",
+        count=1,
+        mode="spot",
+        regions=(),
+        max_price=None,
+        max_offers=10,
+    )
+
+    assert payload == {"offers": []}
+    assert "--region" not in captured["command"]
+    assert captured["timeout"] == 30
+
+
 def test_restart_dstack_server_if_needed_restarts_and_clears_marker(tmp_path: Path, monkeypatch) -> None:
     marker = tmp_path / ".restart-required"
     marker.write_text("", encoding="utf-8")
