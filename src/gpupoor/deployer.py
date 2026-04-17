@@ -1,4 +1,4 @@
-"""Deployer module for remote dstack launches and local debug runs."""
+"""Deployer module for remote launches and canonical local-emulator runs."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 
 from gpupoor import connector as connector_service
 from gpupoor.backends import dstack as dstack_backend
-from gpupoor.backends.local import run_training as run_local_training
+from gpupoor.backends.local import run_remote_wrapper as run_local_emulator
 from gpupoor.config import (
     RemoteConfig,
     RunConfig,
@@ -245,19 +245,25 @@ class LaunchOrchestrator:
 
     def deploy_local_emulator(self, config_path_text: str) -> None:
         config = load_run_config(config_path_text)
-        if config.backend.kind != BACKEND_LOCAL:
-            raise RuntimeError("gpupoor deploy local-emulator requires backend.kind='local'")
+        if config.backend.kind not in {BACKEND_DSTACK, BACKEND_LOCAL}:
+            raise RuntimeError("gpupoor deploy local-emulator requires backend.kind='dstack' or 'local'")
         bundle = connection_bundle_for_request(
             ConnectionProfileRequest(
-                lane=LANE_LOCAL_DEBUG,
+                lane=LANE_REMOTE,
                 config_path=str(config.source),
-                job_id=LANE_LOCAL_DEBUG,
+                job_id="local-emulator",
                 artifact_upload_requested=config.mlflow.artifact_upload,
             ),
             config,
             ensure_ready=True,
         )
-        run_local_training(bundle.apply_to_config(config))
+        if bundle.health_verdict != HEALTH_OK:
+            raise RuntimeError(f"connector health is {bundle.health_verdict}; refusing local-emulator launch")
+        run_local_emulator(
+            config,
+            bundle.to_runtime_env(),
+            remote_settings=load_remote_settings(config.remote),
+        )
 
     def _warn_manual_target_truncation(self, config: RunConfig) -> None:
         truncated_fields: list[str] = []
