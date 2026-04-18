@@ -197,7 +197,7 @@ class _ResponseStub:
     def __init__(self, payload: dict[str, object]) -> None:
         self._payload = payload
 
-    def __enter__(self) -> "_ResponseStub":
+    def __enter__(self) -> _ResponseStub:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -211,9 +211,7 @@ def test_assert_experiment_supports_artifact_mode_rejects_legacy_location(monkey
     monkeypatch.setattr(
         mlflow.urllib_request,
         "urlopen",
-        lambda request, timeout=10: _ResponseStub(
-            {"experiment": {"artifact_location": "mlflow-artifacts:/1"}}
-        ),
+        lambda request, timeout=10: _ResponseStub({"experiment": {"artifact_location": "mlflow-artifacts:/1"}}),
     )
 
     with pytest.raises(RuntimeError, match="legacy proxied/local artifact routing"):

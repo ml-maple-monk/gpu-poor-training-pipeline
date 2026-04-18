@@ -35,8 +35,8 @@ def test_remote_entrypoint_banner_uses_resolved_run_config_mlflow_values() -> No
     assert "RESOLVED_MLFLOW_ARTIFACT_UPLOAD" in script
     assert 'mlflow.get("experiment_name", "minimind-pretrain")' in script
     assert 'print("1" if mlflow.get("artifact_upload", False) else "0")' in script
-    assert '${MLFLOW_EXPERIMENT_NAME:-minimind-pretrain}' not in script
-    assert '${MLFLOW_ARTIFACT_UPLOAD:-0}' not in script
+    assert "${MLFLOW_EXPERIMENT_NAME:-minimind-pretrain}" not in script
+    assert "${MLFLOW_ARTIFACT_UPLOAD:-0}" not in script
 
 
 def test_prepare_data_can_trigger_pretokenized_dataset_upload() -> None:

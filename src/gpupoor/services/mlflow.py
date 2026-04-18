@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib import error as urllib_error
 from urllib import parse as urllib_parse
@@ -294,7 +294,7 @@ def resolve_artifact_experiment_name(
     if not _uses_legacy_artifact_location(candidate_location):
         return candidate
 
-    timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(tz=UTC).strftime("%Y%m%d-%H%M%S")
     attempt = 0
     while True:
         suffix = timestamp if attempt == 0 else f"{timestamp}-{attempt}"
