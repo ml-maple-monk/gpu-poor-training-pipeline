@@ -25,17 +25,6 @@ if [ ! -f "$RUN_CONFIG_FILE" ]; then
     exit 2
 fi
 
-# ── Extract time cap from TOML config ────────────────────────────────────────
-TIME_CAP_SECONDS=$(python3 -c "
-try:
-    import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib
-with open('$RUN_CONFIG_FILE', 'rb') as f:
-    cfg = tomllib.load(f)
-print(cfg.get('recipe', {}).get('time_cap_seconds', 600))
-")
-
 DATA_DIR="/workspace/data/datasets"
 RAW_DATASET_FILE="$DATA_DIR/pretrain_t2t_mini.jsonl"
 DATASET_FILE="$RAW_DATASET_FILE"
@@ -50,6 +39,34 @@ HF_PRETOKENIZED_DATASET_FILENAME="${HF_PRETOKENIZED_DATASET_FILENAME:-pretokeniz
 HF_PRETOKENIZED_DATASET_MIN_BYTES="${HF_PRETOKENIZED_DATASET_MIN_BYTES:-1048576}"
 HF_BOOTSTRAP_HELPER="/opt/training/scripts/lib/hf-dataset-bootstrap.sh"
 PRETOKENIZE_SCRIPT="/opt/training/scripts/pretokenize-data.sh"
+
+mapfile -t RUN_CONFIG_VALUES < <(
+    python3 - "$RUN_CONFIG_FILE" "$TOKENIZED_DATASET_DIR" <<'PY'
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+
+import sys
+
+config_path = sys.argv[1]
+default_dataset_path = sys.argv[2]
+with open(config_path, "rb") as f:
+    cfg = tomllib.load(f)
+
+recipe = cfg.get("recipe", {})
+mlflow = cfg.get("mlflow", {})
+
+print(recipe.get("time_cap_seconds", 600))
+print(mlflow.get("experiment_name", "minimind-pretrain"))
+print("1" if mlflow.get("artifact_upload", False) else "0")
+print(recipe.get("dataset_path", default_dataset_path))
+PY
+)
+TIME_CAP_SECONDS="${RUN_CONFIG_VALUES[0]}"
+RESOLVED_MLFLOW_EXPERIMENT_NAME="${RUN_CONFIG_VALUES[1]}"
+RESOLVED_MLFLOW_ARTIFACT_UPLOAD="${RUN_CONFIG_VALUES[2]}"
+TOML_DATASET_PATH="${RUN_CONFIG_VALUES[3]}"
 
 if [ ! -f "$HF_BOOTSTRAP_HELPER" ]; then
     echo "[remote-entrypoint] ERROR: $HF_BOOTSTRAP_HELPER not found — image is missing shared dataset bootstrap helper" >&2
@@ -69,8 +86,12 @@ echo "================================================================"
 echo "[remote-entrypoint] Verda/dstack remote training container"
 echo "================================================================"
 echo "  MLFLOW_TRACKING_URI      = ${MLFLOW_TRACKING_URI:-<not set>}"
-echo "  MLFLOW_EXPERIMENT_NAME   = ${MLFLOW_EXPERIMENT_NAME:-minimind-pretrain}"
-echo "  MLFLOW_ARTIFACT_UPLOAD   = ${MLFLOW_ARTIFACT_UPLOAD:-0}"
+echo "  MLFLOW_EXPERIMENT_NAME   = ${RESOLVED_MLFLOW_EXPERIMENT_NAME}"
+echo "  MLFLOW_ARTIFACT_UPLOAD   = ${RESOLVED_MLFLOW_ARTIFACT_UPLOAD}"
+echo "  ARTIFACT_TRANSPORT_MODE  = ${GPUPOOR_CONNECTOR_ARTIFACT_MODE:-<not set>}"
+echo "  MLFLOW_S3_ENDPOINT_URL   = ${MLFLOW_S3_ENDPOINT_URL:-<not set>}"
+echo "  AWS_ACCESS_KEY_ID        = $( [ -n \"${AWS_ACCESS_KEY_ID:-}\" ] && printf 'set' || printf 'not set' )"
+echo "  AWS_SESSION_TOKEN        = $( [ -n \"${AWS_SESSION_TOKEN:-}\" ] && printf 'set' || printf 'not set' )"
 echo "  VERDA_PROFILE            = ${VERDA_PROFILE:-remote}"
 echo "  DSTACK_RUN_NAME          = ${DSTACK_RUN_NAME:-<not set>}"
 echo "  HF_TOKEN                 = ${HF_TOKEN:+set (${#HF_TOKEN} chars)}"
@@ -135,15 +156,6 @@ if ! download_pretokenized_dataset; then
 fi
 
 # ── Early dataset validation ──────────────────────────────────────────────────
-TOML_DATASET_PATH=$(python3 -c "
-try:
-    import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib
-with open('$RUN_CONFIG_FILE', 'rb') as f:
-    cfg = tomllib.load(f)
-print(cfg.get('recipe', {}).get('dataset_path', '$TOKENIZED_DATASET_DIR'))
-")
 echo "[remote-entrypoint] TOML dataset_path = $TOML_DATASET_PATH"
 echo "[remote-entrypoint] Baked dataset dir = $TOKENIZED_DATASET_DIR"
 if [ -d "$TOML_DATASET_PATH" ]; then

@@ -65,6 +65,11 @@ env:
   - HF_TOKEN
   - GPUPOOR_RUN_CONFIG_B64
   - MLFLOW_TRACKING_URI
+  - AWS_ACCESS_KEY_ID
+  - AWS_SECRET_ACCESS_KEY
+  - AWS_SESSION_TOKEN
+  - AWS_DEFAULT_REGION
+  - MLFLOW_S3_ENDPOINT_URL
 
 commands:
   - bash /opt/training/scripts/remote-entrypoint.sh

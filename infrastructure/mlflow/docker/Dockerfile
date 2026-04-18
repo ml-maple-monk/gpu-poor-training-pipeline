@@ -23,10 +23,20 @@ EXPOSE 5000
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
     CMD curl -fsS http://127.0.0.1:5000/health || exit 1
 
-CMD ["sh", "-c", "mlflow server \
-        --host 0.0.0.0 \
-        --port 5000 \
-        --backend-store-uri ${MLFLOW_BACKEND_STORE_URI} \
-        --artifacts-destination ${MLFLOW_ARTIFACTS_DESTINATION} \
-        --serve-artifacts \
-        --gunicorn-opts \"--workers ${MLFLOW_WORKERS:-4} --timeout ${MLFLOW_TIMEOUT:-120} --keep-alive 15 --log-level info --access-logfile -\""]
+CMD ["sh", "-c", "if [ \"${MLFLOW_SERVER_ARTIFACT_MODE:-proxy}\" = \"direct\" ]; then \
+        exec mlflow server \
+            --host 0.0.0.0 \
+            --port 5000 \
+            --backend-store-uri ${MLFLOW_BACKEND_STORE_URI} \
+            --default-artifact-root ${MLFLOW_ARTIFACTS_DESTINATION} \
+            --no-serve-artifacts \
+            --gunicorn-opts \"--workers ${MLFLOW_WORKERS:-4} --timeout ${MLFLOW_TIMEOUT:-120} --keep-alive 15 --log-level info --access-logfile -\"; \
+    else \
+        exec mlflow server \
+            --host 0.0.0.0 \
+            --port 5000 \
+            --backend-store-uri ${MLFLOW_BACKEND_STORE_URI} \
+            --artifacts-destination ${MLFLOW_ARTIFACTS_DESTINATION} \
+            --serve-artifacts \
+            --gunicorn-opts \"--workers ${MLFLOW_WORKERS:-4} --timeout ${MLFLOW_TIMEOUT:-120} --keep-alive 15 --log-level info --access-logfile -\"; \
+    fi"]

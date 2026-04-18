@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import base64
+import os
 import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from gpupoor import connector as connector_service
@@ -35,6 +36,8 @@ LANE_REMOTE = "remote"
 LANE_LOCAL_DEBUG = "local-debug"
 HEALTH_OK = "healthy"
 MANUAL_JOB_ID = "manual"
+ARTIFACT_MODE_DIRECT = "direct"
+QUICK_TUNNEL_ARTIFACT_UPLOAD_OVERRIDE_ENV = "GPUPOOR_ALLOW_QUICK_TUNNEL_ARTIFACT_UPLOAD"
 
 log = get_logger(__name__)
 
@@ -67,14 +70,23 @@ class ConnectionBundle:
     artifact_upload_enabled: bool
     artifact_store_kind: str
     health_verdict: str
+    artifact_transport_mode: str = "proxy"
+    artifact_runtime_env: dict[str, str] = field(default_factory=dict)
 
     def to_runtime_env(self) -> dict[str, str]:
-        return {
+        env = {
             "MLFLOW_TRACKING_URI": self.mlflow_tracking_uri,
             "MLFLOW_ARTIFACT_UPLOAD": "1" if self.artifact_upload_enabled else "0",
             "GPUPOOR_CONNECTOR_ARTIFACT_STORE": self.artifact_store_kind,
+            "GPUPOOR_CONNECTOR_ARTIFACT_MODE": self.artifact_transport_mode,
             "GPUPOOR_CONNECTOR_HEALTH": self.health_verdict,
         }
+        env.update(self.artifact_runtime_env)
+        if self.artifact_transport_mode == ARTIFACT_MODE_DIRECT:
+            # dstack validates listed env names at apply time, so keep the
+            # optional session token present even for long-lived R2 keys.
+            env.setdefault("AWS_SESSION_TOKEN", "")
+        return env
 
     def apply_to_config(self, config: RunConfig) -> RunConfig:
         mlflow = replace(config.mlflow, tracking_uri=self.mlflow_tracking_uri)
@@ -106,6 +118,10 @@ class ConnectorRuntime:
             artifact_upload_enabled=config.mlflow.artifact_upload,
             artifact_store_kind=str(payload.get("artifact_store_kind", connector_service.artifact_store_kind())),
             health_verdict=HEALTH_OK,
+            artifact_transport_mode=str(
+                payload.get("artifact_transport_mode", connector_service.artifact_transport_mode())
+            ),
+            artifact_runtime_env=connector_service.runtime_artifact_env(),
         )
 
     def ensure_local_debug_runtime(self, config: RunConfig) -> ConnectionBundle:
@@ -115,6 +131,8 @@ class ConnectorRuntime:
             artifact_upload_enabled=config.mlflow.artifact_upload,
             artifact_store_kind="local",
             health_verdict=HEALTH_OK if http_ok(config.remote.mlflow_health_url, timeout_seconds=5) else "degraded",
+            artifact_transport_mode=connector_service.artifact_transport_mode(),
+            artifact_runtime_env=connector_service.runtime_artifact_env(),
         )
 
     def connection_bundle_for_request(
@@ -134,6 +152,8 @@ class ConnectorRuntime:
                 health_verdict=HEALTH_OK
                 if http_ok(config.remote.mlflow_health_url, timeout_seconds=5)
                 else "degraded",
+                artifact_transport_mode=connector_service.artifact_transport_mode(),
+                artifact_runtime_env=connector_service.runtime_artifact_env(),
             )
         if request.lane != LANE_REMOTE:
             raise RuntimeError(f"Unsupported connector lane: {request.lane}")
@@ -145,6 +165,10 @@ class ConnectorRuntime:
             artifact_upload_enabled=request.artifact_upload_requested,
             artifact_store_kind=str(payload.get("artifact_store_kind", connector_service.artifact_store_kind())),
             health_verdict=HEALTH_OK if not connector_service.remote_runtime_blockers(payload) else "degraded",
+            artifact_transport_mode=str(
+                payload.get("artifact_transport_mode", connector_service.artifact_transport_mode())
+            ),
+            artifact_runtime_env=connector_service.runtime_artifact_env(),
         )
 
 
@@ -171,6 +195,60 @@ def connection_bundle_for_request(
         config,
         ensure_ready=ensure_ready,
     )
+
+
+def _truthy_env(name: str) -> bool:
+    raw = os.environ.get(name, "")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _enforce_remote_artifact_guardrails(config: RunConfig, bundle: ConnectionBundle) -> None:
+    if not bundle.artifact_upload_enabled:
+        return
+
+    quick_tunnel_active = connector_service.is_quick_tunnel_uri(bundle.mlflow_tracking_uri)
+    if quick_tunnel_active and bundle.artifact_transport_mode != ARTIFACT_MODE_DIRECT:
+        message = (
+            "artifact_upload=true is blocked over Cloudflare Quick Tunnel. "
+            "Use a named tunnel or set "
+            f"{QUICK_TUNNEL_ARTIFACT_UPLOAD_OVERRIDE_ENV}=1 for temporary migration/debug override."
+        )
+        if _truthy_env(QUICK_TUNNEL_ARTIFACT_UPLOAD_OVERRIDE_ENV):
+            log.warning("%s", message + " Proceeding because the override is set.")
+        else:
+            raise RuntimeError(message)
+
+    if bundle.artifact_transport_mode != ARTIFACT_MODE_DIRECT:
+        return
+
+    if not bundle.artifact_runtime_env:
+        raise RuntimeError(
+            "artifact_upload=true requires direct artifact runtime credentials, but none were prepared "
+            "for the remote worker"
+        )
+
+
+def _rewrite_legacy_experiment_name(config: RunConfig, bundle: ConnectionBundle) -> RunConfig:
+    if not bundle.artifact_upload_enabled:
+        return config
+    if bundle.artifact_transport_mode != ARTIFACT_MODE_DIRECT:
+        return config
+
+    effective_name = mlflow_service.resolve_artifact_experiment_name(
+        config.remote.mlflow_health_url,
+        experiment_name=config.mlflow.experiment_name,
+        artifact_mode=bundle.artifact_transport_mode,
+    )
+    if effective_name == config.mlflow.experiment_name:
+        return config
+
+    log.warning(
+        "Experiment '%s' uses legacy artifact routing; redirecting this launch to '%s' so artifact uploads stay "
+        "on the direct R2 path.",
+        config.mlflow.experiment_name,
+        effective_name,
+    )
+    return replace(config, mlflow=replace(config.mlflow, experiment_name=effective_name))
 
 
 class LaunchOrchestrator:
@@ -212,6 +290,8 @@ class LaunchOrchestrator:
         )
         if bundle.health_verdict != HEALTH_OK:
             raise RuntimeError(f"connector health is {bundle.health_verdict}; refusing remote launch")
+        _enforce_remote_artifact_guardrails(launch_config, bundle)
+        launch_config = _rewrite_legacy_experiment_name(launch_config, bundle)
         dstack_backend.launch_remote(
             launch_config,
             skip_build=skip_build,

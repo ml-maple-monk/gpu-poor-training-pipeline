@@ -137,6 +137,37 @@ def _load_mlflow_module():
     return mlflow
 
 
+def _best_effort_end_active_run(mlflow, *, status: str, reason: str) -> None:
+    active_run_fn = getattr(mlflow, "active_run", None)
+    if not callable(active_run_fn):
+        return
+
+    try:
+        active_run = active_run_fn()
+    except Exception as exc:
+        print(f"[mlflow] could not inspect active run during {reason}: {exc}", flush=True)
+        return
+
+    if active_run is None:
+        return
+
+    run_info = getattr(active_run, "info", None)
+    run_id = getattr(run_info, "run_id", "<unknown>")
+    end_run_fn = getattr(mlflow, "end_run", None)
+    if not callable(end_run_fn):
+        print(f"[mlflow] active run {run_id} leaked during {reason}, but mlflow.end_run is unavailable", flush=True)
+        return
+
+    try:
+        try:
+            end_run_fn(status=status)
+        except TypeError:
+            end_run_fn()
+        print(f"[mlflow] closed active run {run_id} during {reason} with status={status}", flush=True)
+    except Exception as exc:
+        print(f"[mlflow] failed to close active run {run_id} during {reason}: {exc}", flush=True)
+
+
 def _drain_metrics() -> None:
     global _dropped_metric_events
 
@@ -219,6 +250,7 @@ def start(runtime_args, model_config, mlflow_config: dict) -> None:
         attempt += 1
         try:
             mlflow.set_tracking_uri(uri)
+            _best_effort_end_active_run(mlflow, status="FAILED", reason="mlflow bootstrap")
             exp_name = str(mlflow_config.get("experiment_name", "minimind-pretrain"))
             mlflow.set_experiment(exp_name)
             script_name = str(mlflow_config.get("script_name", "train_pretrain"))
@@ -258,6 +290,7 @@ def start(runtime_args, model_config, mlflow_config: dict) -> None:
         except Exception as exc:
             traceback.print_exc()
             _active = False
+            _best_effort_end_active_run(mlflow, status="FAILED", reason=f"failed start attempt {attempt}")
             if time.time() >= deadline:
                 print(
                     f"[mlflow] giving up after {attempt} attempts over {timeout_seconds}s: {exc}",

@@ -63,6 +63,7 @@ def test_status_payload_marks_quick_tunnel_active(monkeypatch) -> None:
     assert payload["remote_mlflow_ready"] is True
     assert payload["dashboard_uri"] == "unavailable"
     assert payload["public_dashboard_ready"] is False
+    assert payload["artifact_transport_mode"] == "proxy"
 
 
 def test_sync_r2_env_derives_endpoint_and_artifact_destination(
@@ -95,6 +96,31 @@ def test_sync_r2_env_derives_endpoint_and_artifact_destination(
     assert values["MLFLOW_S3_ENDPOINT_URL"] == "https://acct-123.r2.cloudflarestorage.com"
     assert values["MLFLOW_ARTIFACTS_DESTINATION"] == "s3://bucket-1/mlflow-artifacts"
     assert connector.r2_env_path().is_file()
+
+
+def test_runtime_artifact_env_returns_direct_runtime_keys(monkeypatch) -> None:
+    monkeypatch.setattr(
+        connector,
+        "read_r2_env",
+        lambda: {
+            "AWS_ACCESS_KEY_ID": "key-1",
+            "AWS_SECRET_ACCESS_KEY": "secret-1",
+            "AWS_SESSION_TOKEN": "session-1",
+            "AWS_DEFAULT_REGION": "auto",
+            "MLFLOW_S3_ENDPOINT_URL": "https://acct-123.r2.cloudflarestorage.com",
+            "MLFLOW_ARTIFACTS_DESTINATION": "s3://bucket-1/mlflow-artifacts",
+        },
+    )
+
+    values = connector.runtime_artifact_env()
+
+    assert values == {
+        "AWS_ACCESS_KEY_ID": "key-1",
+        "AWS_SECRET_ACCESS_KEY": "secret-1",
+        "AWS_SESSION_TOKEN": "session-1",
+        "AWS_DEFAULT_REGION": "auto",
+        "MLFLOW_S3_ENDPOINT_URL": "https://acct-123.r2.cloudflarestorage.com",
+    }
 
 
 def test_sync_r2_env_falls_back_to_cloudflare_s3_keys_and_default_bucket(
