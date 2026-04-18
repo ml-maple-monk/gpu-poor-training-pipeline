@@ -40,13 +40,17 @@ import os
 import shutil
 import socket
 import subprocess
-import tomllib
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
+    import tomli as tomllib  # type: ignore[no-redef]
 
 from gpupoor.config import ConfigError, parse_env_file
 from gpupoor.utils import repo_path
@@ -147,6 +151,13 @@ required_r2_keys = (
     "MLFLOW_S3_ENDPOINT_URL",
     "MLFLOW_ARTIFACTS_DESTINATION",
 )
+runtime_artifact_env_keys = (
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_DEFAULT_REGION",
+    "MLFLOW_S3_ENDPOINT_URL",
+    "AWS_SESSION_TOKEN",
+)
 
 
 def connector_dir() -> Path:
@@ -225,6 +236,24 @@ def artifact_store_kind() -> str:
     if destination.startswith("s3://") and endpoint:
         return "r2"
     return "local"
+
+
+def artifact_transport_mode() -> str:
+    env = read_r2_env()
+    destination = env.get("MLFLOW_ARTIFACTS_DESTINATION", "")
+    endpoint = env.get("MLFLOW_S3_ENDPOINT_URL", "")
+    if destination.startswith("s3://") and endpoint and all(env.get(key) for key in required_r2_keys):
+        return "direct"
+    return "proxy"
+
+
+def runtime_artifact_env() -> dict[str, str]:
+    if artifact_transport_mode() != "direct":
+        return {}
+    env = read_r2_env()
+    values = {key: env.get(key, "") for key in runtime_artifact_env_keys if env.get(key)}
+    values.setdefault("AWS_DEFAULT_REGION", default_r2_region)
+    return values
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -528,6 +557,8 @@ _R2_MANAGER = R2EnvironmentManager(
         "secret access key": "AWS_SECRET_ACCESS_KEY",
         "s3 secret key": "AWS_SECRET_ACCESS_KEY",
         "s3 secret access key": "AWS_SECRET_ACCESS_KEY",
+        "session token": "AWS_SESSION_TOKEN",
+        "aws session token": "AWS_SESSION_TOKEN",
         "bucket": "R2_BUCKET_NAME",
         "bucket name": "R2_BUCKET_NAME",
         "endpoint": "MLFLOW_S3_ENDPOINT_URL",
@@ -538,6 +569,7 @@ _R2_MANAGER = R2EnvironmentManager(
         {
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
+            "AWS_SESSION_TOKEN",
             "AWS_DEFAULT_REGION",
             "MLFLOW_S3_ENDPOINT_URL",
             "MLFLOW_ARTIFACTS_DESTINATION",
@@ -826,6 +858,7 @@ class ConnectorDiagnostics:
             "public_dashboard_ready": public_dashboard_ready,
             "public_dashboard_blocker": public_dashboard_blocker,
             "artifact_store_kind": artifact_store_kind(),
+            "artifact_transport_mode": artifact_transport_mode(),
             "mlflow_local_healthy": mlflow_local_healthy,
             "connector_bootstrapped": connector_env_path().is_file(),
             "r2_configured": bool(r2),

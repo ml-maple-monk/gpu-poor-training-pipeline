@@ -151,6 +151,63 @@ def test_mlflow_start_logs_recipe_and_runtime_config(
     assert "config/mlflow_config.json" in logged_paths
 
 
+def test_mlflow_start_cleans_up_leaked_active_run_before_retry(
+    mlflow_helper,
+    build_mlflow_module,
+    fake_torch_module,
+    fake_train_args,
+    fake_model_config,
+    monkeypatch,
+):
+    log_dict_calls = {"count": 0}
+    active_state = {"run": None}
+    run_statuses = []
+
+    def start_run(**kwargs) -> None:
+        del kwargs
+        if active_state["run"] is not None:
+            raise Exception("Run with UUID run-123 is already active")
+        active_state["run"] = SimpleNamespace(info=SimpleNamespace(run_id="run-123"))
+
+    def active_run():
+        return active_state["run"]
+
+    def end_run(status="FINISHED") -> None:
+        run_statuses.append(status)
+        active_state["run"] = None
+
+    def log_dict(payload, path) -> None:
+        del payload, path
+        log_dict_calls["count"] += 1
+        if log_dict_calls["count"] == 2:
+            raise RuntimeError("temporary mlflow artifact write failure")
+
+    mlflow_module = build_mlflow_module(
+        active_run=active_run,
+        start_run=start_run,
+        end_run=end_run,
+        log_dict=log_dict,
+    )
+
+    monkeypatch.setitem(sys.modules, "mlflow", mlflow_module)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch_module())
+
+    mlflow_config = {
+        "tracking_uri": "https://mlflow.example",
+        "experiment_name": "minimind-pretrain-remote",
+        "start_timeout_seconds": 30,
+        "start_retry_seconds": 0,
+    }
+    mlflow_helper.start(fake_train_args, fake_model_config, mlflow_config)
+
+    assert run_statuses[0] == "FAILED"
+    assert mlflow_helper._active is True
+
+    mlflow_helper.finish()
+
+    assert run_statuses[-1] == "FINISHED"
+
+
 def test_mlflow_finish_tolerates_metric_drain_failures(mlflow_helper, monkeypatch, capsys):
     run_status = []
 

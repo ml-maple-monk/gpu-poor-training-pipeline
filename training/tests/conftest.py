@@ -308,6 +308,7 @@ def build_mlflow_module():
         defaults = {
             "set_tracking_uri": lambda uri: None,
             "set_experiment": lambda name: None,
+            "active_run": lambda: None,
             "start_run": lambda **kwargs: None,
             "log_params": lambda params: None,
             "log_dict": lambda payload, path: None,

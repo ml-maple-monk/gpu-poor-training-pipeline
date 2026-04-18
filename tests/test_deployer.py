@@ -65,7 +65,7 @@ def test_deploy_remote_request_fails_fast_when_registry_auth_missing(monkeypatch
 def test_deploy_remote_request_passes_connector_bundle_through_unchanged(monkeypatch) -> None:
     config = load_run_config(REPO_ROOT / "examples" / "runpod_e2e_test.toml")
     request = make_remote_request(config.source)
-    bundle = SimpleNamespace(health_verdict="healthy")
+    bundle = SimpleNamespace(health_verdict="healthy", artifact_upload_enabled=False)
     launches: list[dict[str, object]] = []
 
     monkeypatch.setattr(deployer, "load_run_config", lambda _path: config)
@@ -91,6 +91,70 @@ def test_deploy_remote_request_passes_connector_bundle_through_unchanged(monkeyp
     assert len(launches) == 1
     assert launches[0]["connection_bundle"] is bundle
     assert launches[0]["dry_run"] is False
+
+
+def test_deploy_remote_request_redirects_legacy_experiment_name_without_blocking(monkeypatch) -> None:
+    config = load_run_config(REPO_ROOT / "examples" / "runpod_e2e_test.toml")
+    request = make_remote_request(config.source)
+    warnings: list[str] = []
+    launches: list[dict[str, object]] = []
+    bundle = SimpleNamespace(
+        health_verdict="healthy",
+        artifact_upload_enabled=True,
+        artifact_transport_mode="direct",
+        artifact_runtime_env={"AWS_ACCESS_KEY_ID": "key-1"},
+        mlflow_tracking_uri="https://mlflow-api.example.test",
+    )
+
+    monkeypatch.setattr(deployer, "load_run_config", lambda _path: config)
+    monkeypatch.setattr(
+        deployer,
+        "load_remote_settings",
+        lambda remote: {
+            "VCR_IMAGE_BASE": "docker.io/alextay96/gpupoor",
+            "VCR_LOGIN_REGISTRY": "docker.io",
+            "VCR_USERNAME": "user",
+            "VCR_PASSWORD": "token",
+        },
+    )
+    monkeypatch.setattr(deployer, "connection_bundle_for_request", lambda *args, **kwargs: bundle)
+    monkeypatch.setattr(
+        deployer.mlflow_service,
+        "resolve_artifact_experiment_name",
+        lambda *args, **kwargs: "e2e-runpod-test-direct",
+    )
+    monkeypatch.setattr(deployer.log, "warning", lambda message, *args: warnings.append(message % args))
+    monkeypatch.setattr(
+        deployer.dstack_backend,
+        "launch_remote",
+        lambda config, **kwargs: launches.append(
+            {
+                "experiment_name": config.mlflow.experiment_name,
+                "kwargs": kwargs,
+            }
+        ),
+    )
+
+    deployer.deploy_remote_request(request)
+
+    assert launches[0]["experiment_name"] == "e2e-runpod-test-direct"
+    assert "redirecting this launch" in warnings[0]
+
+
+def test_connection_bundle_to_runtime_env_keeps_empty_session_token_for_direct_mode() -> None:
+    bundle = deployer.ConnectionBundle(
+        mlflow_tracking_uri="https://mlflow-api.example.test",
+        artifact_upload_enabled=True,
+        artifact_store_kind="r2",
+        health_verdict="healthy",
+        artifact_transport_mode="direct",
+        artifact_runtime_env={"AWS_ACCESS_KEY_ID": "key-1"},
+    )
+
+    env = bundle.to_runtime_env()
+
+    assert env["AWS_ACCESS_KEY_ID"] == "key-1"
+    assert env["AWS_SESSION_TOKEN"] == ""
 
 
 def test_deploy_remote_request_dry_run_reports_connector_verdict_without_gating(monkeypatch) -> None:
@@ -142,6 +206,8 @@ def test_connection_bundle_for_local_debug_preserves_artifact_upload_config(monk
     config.mlflow.artifact_upload = True
 
     monkeypatch.setattr(deployer, "http_ok", lambda *args, **kwargs: True)
+    monkeypatch.setattr(deployer.connector_service, "artifact_transport_mode", lambda: "proxy")
+    monkeypatch.setattr(deployer.connector_service, "runtime_artifact_env", lambda: {})
 
     bundle = deployer.connection_bundle_for_request(
         deployer.ConnectionProfileRequest(
@@ -202,6 +268,12 @@ def test_connection_bundle_for_remote_without_ensure_ready_reports_degraded(monk
         "stable_tracking_uri",
         lambda: "https://mlflow-api.mlmonk96.net",
     )
+    monkeypatch.setattr(deployer.connector_service, "artifact_transport_mode", lambda: "direct")
+    monkeypatch.setattr(
+        deployer.connector_service,
+        "runtime_artifact_env",
+        lambda: {"AWS_ACCESS_KEY_ID": "key-1", "MLFLOW_S3_ENDPOINT_URL": "https://acct.r2.cloudflarestorage.com"},
+    )
 
     bundle = deployer.connection_bundle_for_request(
         deployer.ConnectionProfileRequest(
@@ -217,6 +289,7 @@ def test_connection_bundle_for_remote_without_ensure_ready_reports_degraded(monk
     assert bundle.health_verdict == "degraded"
     assert bundle.mlflow_tracking_uri == "https://mlflow-api.mlmonk96.net"
     assert bundle.artifact_store_kind == "r2"
+    assert bundle.artifact_transport_mode == "direct"
 
 
 def test_ensure_remote_runtime_accepts_quick_tunnel_bootstrap(monkeypatch) -> None:
@@ -227,6 +300,12 @@ def test_ensure_remote_runtime_accepts_quick_tunnel_bootstrap(monkeypatch) -> No
     monkeypatch.setattr(deployer.mlflow_service, "tunnel", lambda: None)
     monkeypatch.setattr(deployer.dashboard_service, "up", lambda: None)
     monkeypatch.setattr(deployer.log, "warning", lambda message, *args: warnings.append(message % args))
+    monkeypatch.setattr(deployer.connector_service, "artifact_transport_mode", lambda: "direct")
+    monkeypatch.setattr(
+        deployer.connector_service,
+        "runtime_artifact_env",
+        lambda: {"AWS_ACCESS_KEY_ID": "key-1", "MLFLOW_S3_ENDPOINT_URL": "https://acct.r2.cloudflarestorage.com"},
+    )
     monkeypatch.setattr(
         deployer.connector_service,
         "status_payload",
@@ -273,6 +352,12 @@ def test_ensure_remote_runtime_reuses_existing_healthy_quick_tunnel(monkeypatch)
     )
     monkeypatch.setattr(deployer.mlflow_service, "tunnel", lambda: tunnel_calls.append(None))
     monkeypatch.setattr(deployer.dashboard_service, "up", lambda: None)
+    monkeypatch.setattr(deployer.connector_service, "artifact_transport_mode", lambda: "direct")
+    monkeypatch.setattr(
+        deployer.connector_service,
+        "runtime_artifact_env",
+        lambda: {"AWS_ACCESS_KEY_ID": "key-1", "MLFLOW_S3_ENDPOINT_URL": "https://acct.r2.cloudflarestorage.com"},
+    )
 
     bundle = deployer.ensure_remote_runtime(config)
 
@@ -298,6 +383,12 @@ def test_connection_bundle_for_remote_without_ensure_ready_is_healthy_with_quick
             "quick_tunnel_active": True,
         },
     )
+    monkeypatch.setattr(deployer.connector_service, "artifact_transport_mode", lambda: "direct")
+    monkeypatch.setattr(
+        deployer.connector_service,
+        "runtime_artifact_env",
+        lambda: {"AWS_ACCESS_KEY_ID": "key-1", "MLFLOW_S3_ENDPOINT_URL": "https://acct.r2.cloudflarestorage.com"},
+    )
 
     bundle = deployer.connection_bundle_for_request(
         deployer.ConnectionProfileRequest(
@@ -313,6 +404,78 @@ def test_connection_bundle_for_remote_without_ensure_ready_is_healthy_with_quick
     assert bundle.health_verdict == "healthy"
     assert bundle.mlflow_tracking_uri == "https://curious-mantis-example.trycloudflare.com"
     assert bundle.artifact_store_kind == "r2"
+
+
+def test_deploy_remote_request_blocks_quick_tunnel_artifact_upload_without_override(monkeypatch) -> None:
+    config = load_run_config(REPO_ROOT / "examples" / "runpod_e2e_test.toml")
+    request = make_remote_request(config.source)
+    bundle = SimpleNamespace(
+        health_verdict="healthy",
+        artifact_upload_enabled=True,
+        artifact_transport_mode="proxy",
+        artifact_runtime_env={},
+        mlflow_tracking_uri="https://curious-mantis-example.trycloudflare.com",
+    )
+
+    monkeypatch.setattr(deployer, "load_run_config", lambda _path: config)
+    monkeypatch.setattr(
+        deployer,
+        "load_remote_settings",
+        lambda remote: {
+            "VCR_IMAGE_BASE": "docker.io/alextay96/gpupoor",
+            "VCR_LOGIN_REGISTRY": "docker.io",
+            "VCR_USERNAME": "user",
+            "VCR_PASSWORD": "token",
+        },
+    )
+    monkeypatch.setattr(deployer, "connection_bundle_for_request", lambda *args, **kwargs: bundle)
+    monkeypatch.setattr(
+        deployer.dstack_backend,
+        "launch_remote",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("launch should be blocked")),
+    )
+
+    with pytest.raises(RuntimeError, match="artifact_upload=true is blocked over Cloudflare Quick Tunnel"):
+        deployer.deploy_remote_request(request)
+
+
+def test_deploy_remote_request_allows_quick_tunnel_artifact_upload_with_override(monkeypatch) -> None:
+    config = load_run_config(REPO_ROOT / "examples" / "runpod_e2e_test.toml")
+    request = make_remote_request(config.source)
+    warnings: list[str] = []
+    launches: list[dict[str, object]] = []
+    bundle = SimpleNamespace(
+        health_verdict="healthy",
+        artifact_upload_enabled=True,
+        artifact_transport_mode="proxy",
+        artifact_runtime_env={},
+        mlflow_tracking_uri="https://curious-mantis-example.trycloudflare.com",
+    )
+
+    monkeypatch.setenv(deployer.QUICK_TUNNEL_ARTIFACT_UPLOAD_OVERRIDE_ENV, "1")
+    monkeypatch.setattr(deployer, "load_run_config", lambda _path: config)
+    monkeypatch.setattr(
+        deployer,
+        "load_remote_settings",
+        lambda remote: {
+            "VCR_IMAGE_BASE": "docker.io/alextay96/gpupoor",
+            "VCR_LOGIN_REGISTRY": "docker.io",
+            "VCR_USERNAME": "user",
+            "VCR_PASSWORD": "token",
+        },
+    )
+    monkeypatch.setattr(deployer, "connection_bundle_for_request", lambda *args, **kwargs: bundle)
+    monkeypatch.setattr(deployer.log, "warning", lambda message, *args: warnings.append(message % args))
+    monkeypatch.setattr(
+        deployer.dstack_backend,
+        "launch_remote",
+        lambda config, **kwargs: launches.append(kwargs),
+    )
+
+    deployer.deploy_remote_request(request)
+
+    assert len(launches) == 1
+    assert "temporary migration/debug override" in warnings[0]
 
 
 def test_deploy_remote_config_warns_when_manual_deploy_truncates_multi_value_targets(monkeypatch) -> None:
