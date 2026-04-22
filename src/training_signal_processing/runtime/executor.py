@@ -10,11 +10,13 @@ from ..models import (
     OpRuntimeContext,
     RayConfig,
     RunArtifactLayout,
+    RunState,
     RuntimeRunBindings,
     RuntimeTrackingContext,
 )
 from ..ops.base import Batch, Op
 from ..ops.registry import OpRegistry
+from ..utils import utc_isoformat
 from .dataset import ConfiguredRayDatasetBuilder, DatasetBuilder
 from .exporter import Exporter
 from .observability import (
@@ -122,7 +124,25 @@ class StreamingRayExecutor(Executor):
         )
         resume_ledger = self.pipeline.build_resume_ledger()
         raw_completed_item_keys = resume_ledger.load_completed_item_keys(bindings.run_id)
+        logger.log_event(
+            ExecutionLogEvent(
+                level="INFO",
+                code="executor.manifest.loaded",
+                message="Loaded input manifest rows.",
+                run_id=bindings.run_id,
+                details={"input_manifest_key": bindings.input_manifest_key},
+            )
+        )
         completed_item_keys = self.pipeline.resolve_completed_item_keys(raw_completed_item_keys)
+        logger.log_event(
+            ExecutionLogEvent(
+                level="INFO",
+                code="executor.resume.loaded",
+                message="Loaded resume state.",
+                run_id=bindings.run_id,
+                details={"completed_item_keys": len(completed_item_keys)},
+            )
+        )
         runtime_context = self.pipeline.build_runtime_context(
             logger=logger,
             completed_item_keys=completed_item_keys,
@@ -159,11 +179,48 @@ class StreamingRayExecutor(Executor):
         monitor = StructuredMonitor(logger=logger)
         monitor.start_run(run_state)
         progress_reporter.start_run()
+        run_state = self.transition_run_phase(
+            run_state=run_state,
+            resume_ledger=resume_ledger,
+            logger=logger,
+            progress_reporter=progress_reporter,
+            phase="manifest_loaded",
+            detail=f"input_manifest_key={bindings.input_manifest_key}",
+        )
+        run_state = self.transition_run_phase(
+            run_state=run_state,
+            resume_ledger=resume_ledger,
+            logger=logger,
+            progress_reporter=progress_reporter,
+            phase="resume_state_loaded",
+            detail=f"completed_item_keys={len(completed_item_keys)}",
+        )
         exported_batches = 0
         output_keys: list[str] = []
 
         try:
+            run_state = self.transition_run_phase(
+                run_state=run_state,
+                resume_ledger=resume_ledger,
+                logger=logger,
+                progress_reporter=progress_reporter,
+                phase="dataset_build_start",
+            )
             dataset = dataset_builder.build_for_run(input_rows)
+            run_state = self.transition_run_phase(
+                run_state=run_state,
+                resume_ledger=resume_ledger,
+                logger=logger,
+                progress_reporter=progress_reporter,
+                phase="dataset_build_complete",
+            )
+            run_state = self.transition_run_phase(
+                run_state=run_state,
+                resume_ledger=resume_ledger,
+                logger=logger,
+                progress_reporter=progress_reporter,
+                phase="iter_batches_start",
+            )
             # DO NOT CHANGE THE EXECUTOR LOOP WITHOUT EXPLICIT USER APPROVAL.
             for batch_index, input_batch in enumerate(
                 dataset_builder.iter_batches(dataset, batch_size=execution.batch_size),
@@ -171,6 +228,15 @@ class StreamingRayExecutor(Executor):
             ):
                 batch_id = f"batch-{batch_index:05d}"
                 current_batch = list(input_batch)
+                if batch_index == 1:
+                    run_state = self.transition_run_phase(
+                        run_state=run_state,
+                        resume_ledger=resume_ledger,
+                        logger=logger,
+                        progress_reporter=progress_reporter,
+                        phase="first_batch_materialized",
+                        detail=f"batch_id={batch_id} input_rows={len(current_batch)}",
+                    )
                 progress_reporter.start_batch(batch_id, batch_index, len(current_batch))
                 for op in resolved_pipeline.all_ops:
                     current_batch = self.apply_op(
@@ -236,6 +302,38 @@ class StreamingRayExecutor(Executor):
                 output_keys=output_keys,
                 error_message=message,
             ).to_dict()
+
+    def transition_run_phase(
+        self,
+        *,
+        run_state: RunState,
+        resume_ledger: ResumeLedger,
+        logger: ExecutionLogger,
+        progress_reporter: ProgressReporter,
+        phase: str,
+        detail: str = "",
+    ) -> RunState:
+        timestamp = utc_isoformat()
+        updated_state = RunState(
+            **{
+                **run_state.to_dict(),
+                "current_phase": phase,
+                "last_phase_at": timestamp,
+                "updated_at": timestamp,
+            }
+        )
+        resume_ledger.write_run_state(updated_state)
+        progress_reporter.report_phase(phase, detail)
+        logger.log_event(
+            ExecutionLogEvent(
+                level="INFO",
+                code="executor.phase",
+                message=f"Run phase changed to '{phase}'.",
+                run_id=run_state.run_id,
+                details={"phase": phase, "detail": detail, "run_state": updated_state.to_dict()},
+            )
+        )
+        return updated_state
 
     def build_execution_logger(self, tracking: RuntimeTrackingContext) -> ExecutionLogger:
         if tracking.enabled:

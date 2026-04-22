@@ -73,6 +73,8 @@ class OcrResumeLedger(ResumeLedger):
             source_root_key=artifact_layout.source_root_key,
             output_root_key=artifact_layout.output_root_key,
             tracking_run_id=tracking_run_id,
+            current_phase="run_initialized",
+            last_phase_at=utc_isoformat(),
         )
         self.write_run_state(run_state)
         return run_state
@@ -129,6 +131,8 @@ class OcrResumeLedger(ResumeLedger):
             source_root_key=run_state.source_root_key,
             output_root_key=run_state.output_root_key,
             tracking_run_id=run_state.tracking_run_id,
+            current_phase=run_state.current_phase,
+            last_phase_at=run_state.last_phase_at,
         )
         self.write_run_state(updated_state)
         return batch_commit, updated_state

@@ -47,6 +47,9 @@ uv run --group remote_ocr python -m training_signal_processing test-op --help
 uv run --group remote_ocr python -m training_signal_processing run --help
 uv run --group remote_ocr python -m training_signal_processing resume --help
 uv run --group remote_ocr python -m training_signal_processing ocr-remote-job --help
+uv run --group remote_ocr python -m training_signal_processing.pipelines.tokenizer.cli validate --help
+uv run --group remote_ocr python -m training_signal_processing.pipelines.tokenizer.cli run --help
+uv run --group remote_ocr python -m training_signal_processing.pipelines.tokenizer.cli resume --help
 ```
 
 ## Project Shape
@@ -68,6 +71,61 @@ uv run --group remote_ocr python -m training_signal_processing ocr-remote-job --
 
 The executor loop and shared submission core are intentionally fixed. Extend the
 workspace by editing recipes, custom OCR ops, or a pipeline family package.
+
+## Progress Checks
+
+For any long-running local or remote task, check MLflow first before assuming a run is stuck.
+This repo now emits progress there as the generic verification surface.
+
+Always look up the experiment name from the active recipe:
+- shared OCR CLI recipes use `mlflow.experiment_name` from the YAML you passed to `python -m training_signal_processing ...`
+- family-local CLIs such as `python -m training_signal_processing.pipelines.tokenizer.cli ...` also use `mlflow.experiment_name` from their YAML
+
+Useful launch examples:
+
+```bash
+uv run --group remote_ocr python -m training_signal_processing run \
+  --config config/remote_ocr.sample.yaml
+
+uv run --group remote_ocr python -m training_signal_processing.pipelines.tokenizer.cli run \
+  --config config/remote_tokenizer.sample.yaml
+```
+
+Useful MLflow verification example:
+
+```bash
+uv run --group remote_ocr python - <<'PY'
+from mlflow.tracking import MlflowClient
+
+tracking_uri = "http://127.0.0.1:5000"
+experiment_name = "remote-tokenizer"  # replace with mlflow.experiment_name from your recipe
+
+client = MlflowClient(tracking_uri=tracking_uri)
+experiment = next(
+    exp for exp in client.search_experiments() if exp.name == experiment_name
+)
+runs = client.search_runs(
+    [experiment.experiment_id],
+    order_by=["attributes.start_time DESC"],
+    max_results=5,
+)
+for run in runs:
+    print("run_id:", run.info.run_id)
+    print("status:", run.info.status)
+    print("tag_status:", run.data.tags.get("status"))
+    print("last_execution_event_code:", run.data.tags.get("last_execution_event_code"))
+    print("metrics:", run.data.metrics)
+    print("---")
+PY
+```
+
+What to look for in MLflow:
+- a new run under the recipe's `mlflow.experiment_name`
+- `status=running` while the job is active
+- `last_execution_event_code` advancing as the executor moves through phases
+- metrics such as `execution_event_count` increasing over time
+
+If MLflow is not updating, then inspect the remote stderr/progress bar and the run artifacts in R2 next.
 
 ## Verification
 

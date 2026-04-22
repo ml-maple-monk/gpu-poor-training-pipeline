@@ -3,6 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from training_signal_processing.custom_ops.user_ops import (
+    MarkerOcrDocumentOp,
+    PreparePdfDocumentOp,
+)
 from training_signal_processing.models import (
     BatchCommit,
     OpConfig,
@@ -15,8 +21,16 @@ from training_signal_processing.models import (
 )
 from training_signal_processing.ops.base import Batch, MapperOp
 from training_signal_processing.ops.registry import RegisteredOpRegistry
-from training_signal_processing.runtime.dataset import DatasetBuilder, DatasetHandle
-from training_signal_processing.runtime.executor import PipelineRuntimeAdapter, StreamingRayExecutor
+from training_signal_processing.pipelines.ocr.models import PdfTask
+from training_signal_processing.runtime.dataset import (
+    ConfiguredRayDatasetBuilder,
+    DatasetBuilder,
+    DatasetHandle,
+)
+from training_signal_processing.runtime.executor import (
+    PipelineRuntimeAdapter,
+    StreamingRayExecutor,
+)
 from training_signal_processing.runtime.exporter import Exporter
 from training_signal_processing.runtime.observability import ExecutionLogger
 from training_signal_processing.runtime.resume import ResumeLedger
@@ -88,6 +102,7 @@ class FakeExporter(Exporter):
 class FakeResumeLedger(ResumeLedger):
     def __init__(self) -> None:
         self.run_state: RunState | None = None
+        self.write_history: list[RunState] = []
 
     def find_latest_partial_run(self) -> str | None:
         return None
@@ -124,6 +139,8 @@ class FakeResumeLedger(ResumeLedger):
             source_root_key=artifact_layout.source_root_key,
             output_root_key=artifact_layout.output_root_key,
             tracking_run_id=tracking_run_id,
+            current_phase="run_initialized",
+            last_phase_at="2026-04-22T00:00:00Z",
         )
         return self.run_state
 
@@ -149,6 +166,8 @@ class FakeResumeLedger(ResumeLedger):
             source_root_key=run_state.source_root_key,
             output_root_key=run_state.output_root_key,
             tracking_run_id=run_state.tracking_run_id,
+            current_phase=run_state.current_phase,
+            last_phase_at=run_state.last_phase_at,
         )
         return (
             BatchCommit(
@@ -167,6 +186,7 @@ class FakeResumeLedger(ResumeLedger):
 
     def write_run_state(self, run_state: RunState) -> None:
         self.run_state = run_state
+        self.write_history.append(run_state)
 
     def mark_run_finished(self, run_state: RunState) -> RunState:
         self.run_state = RunState(
@@ -292,8 +312,146 @@ def test_streaming_executor_runs_with_fake_pipeline_adapter(capsys) -> None:
     assert adapter.resume_ledger.run_state is not None
     assert adapter.resume_ledger.run_state.status == "success"
     assert "[run] run_id=fake-run-001" in captured.out
+    assert "[phase] run_id=fake-run-001 phase=dataset_build_start" in captured.out
+    assert "[phase] run_id=fake-run-001 phase=iter_batches_start" in captured.out
     assert "[batch:start] batch_id=batch-00001" in captured.out
     assert "[op:start] batch_id=batch-00001 op=test_prepare_generic" in captured.out
     assert "[batch:commit] batch_id=batch-00002" in captured.out
     assert "[run:finish] run_id=fake-run-001 status=success" in captured.out
     assert "run fake-run-001:" in captured.err
+    phases = [
+        state.current_phase
+        for state in adapter.resume_ledger.write_history
+        if state.current_phase
+    ]
+    assert "manifest_loaded" in phases
+    assert "resume_state_loaded" in phases
+    assert "dataset_build_start" in phases
+    assert "dataset_build_complete" in phases
+    assert "iter_batches_start" in phases
+    assert "first_batch_materialized" in phases
+
+
+def test_configured_ray_dataset_builder_clamps_target_num_blocks(monkeypatch) -> None:
+    calls: list[int] = []
+
+    class FakeDataset:
+        def repartition(self, num_blocks: int):
+            calls.append(num_blocks)
+            return self
+
+    monkeypatch.setattr(
+        "training_signal_processing.runtime.dataset.ray.data.from_items",
+        lambda rows: FakeDataset(),
+    )
+    builder = ConfiguredRayDatasetBuilder(
+        RayConfig(executor_type="ray", batch_size=1, concurrency=1, target_num_blocks=32)
+    )
+
+    builder.build_ray_dataset([{"id": "a"}, {"id": "b"}])
+
+    assert calls == [2]
+
+
+def test_configured_ray_dataset_builder_skips_repartition_for_single_row(monkeypatch) -> None:
+    calls: list[int] = []
+
+    class FakeDataset:
+        def repartition(self, num_blocks: int):
+            calls.append(num_blocks)
+            return self
+
+    monkeypatch.setattr(
+        "training_signal_processing.runtime.dataset.ray.data.from_items",
+        lambda rows: FakeDataset(),
+    )
+    builder = ConfiguredRayDatasetBuilder(
+        RayConfig(executor_type="ray", batch_size=1, concurrency=1, target_num_blocks=32)
+    )
+
+    builder.build_ray_dataset([{"id": "a"}])
+
+    assert calls == []
+
+
+@pytest.fixture
+def ocr_runtime_context() -> OpRuntimeContext:
+    class FakeObjectStore:
+        def read_bytes(self, key: str) -> bytes:
+            return b"%PDF-fake"
+
+    return OpRuntimeContext(
+        config={"name": "ocr-test"},
+        run_id="ocr-test-run",
+        object_store=FakeObjectStore(),
+        output_root_key="output/ocr-test",
+        source_root_key="source/pdf",
+        logger=None,
+    )
+
+
+def build_prepared_ocr_row(runtime_context: OpRuntimeContext) -> dict[str, object]:
+    task = PdfTask(
+        source_r2_key="dataset/raw/pdf/example.pdf",
+        relative_path="example.pdf",
+        source_size_bytes=8,
+        source_sha256="abc123",
+    )
+    return PreparePdfDocumentOp().bind_runtime(runtime_context).process_row(task.to_dict())
+
+
+def test_marker_ocr_process_row_success(
+    monkeypatch,
+    ocr_runtime_context: OpRuntimeContext,
+) -> None:
+    row = build_prepared_ocr_row(ocr_runtime_context)
+    op = MarkerOcrDocumentOp(force_ocr=True).bind_runtime(ocr_runtime_context)
+    monkeypatch.setattr(
+        op,
+        "convert_pdf_bytes",
+        lambda pdf_bytes: ("hello markdown", {"torch_cuda_available": False}),
+    )
+
+    result = op.process_row(row)
+
+    assert result["status"] == "success"
+    assert result["markdown_text"] == "hello markdown"
+    assert result["marker_exit_code"] == 0
+    assert isinstance(result["diagnostics"], dict)
+
+
+def test_marker_ocr_process_row_failure(
+    monkeypatch,
+    ocr_runtime_context: OpRuntimeContext,
+) -> None:
+    row = build_prepared_ocr_row(ocr_runtime_context)
+    op = MarkerOcrDocumentOp(force_ocr=True).bind_runtime(ocr_runtime_context)
+
+    def raise_error(pdf_bytes: bytes):
+        raise RuntimeError("converter exploded")
+
+    monkeypatch.setattr(op, "convert_pdf_bytes", raise_error)
+
+    result = op.process_row(row)
+
+    assert result["status"] == "failed"
+    assert result["marker_exit_code"] == 1
+    assert "converter exploded" in result["error_message"]
+
+
+def test_marker_ocr_process_row_timeout(
+    monkeypatch,
+    ocr_runtime_context: OpRuntimeContext,
+) -> None:
+    row = build_prepared_ocr_row(ocr_runtime_context)
+    op = MarkerOcrDocumentOp(force_ocr=True).bind_runtime(ocr_runtime_context)
+
+    def raise_timeout(pdf_bytes: bytes):
+        raise TimeoutError("Marker OCR conversion timed out after 300 seconds.")
+
+    monkeypatch.setattr(op, "convert_pdf_bytes", raise_timeout)
+
+    result = op.process_row(row)
+
+    assert result["status"] == "failed"
+    assert "timed out" in result["error_message"]

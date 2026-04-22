@@ -231,6 +231,10 @@ class ProgressReporter(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def report_phase(self, phase: str, detail: str = "") -> None:
+        raise NotImplementedError
+
+    @abstractmethod
     def start_batch(self, batch_id: str, batch_index: int, input_row_count: int) -> None:
         raise NotImplementedError
 
@@ -257,6 +261,9 @@ class ProgressReporter(ABC):
 
 class NullProgressReporter(ProgressReporter):
     def start_run(self) -> None:
+        return None
+
+    def report_phase(self, phase: str, detail: str = "") -> None:
         return None
 
     def start_batch(self, batch_id: str, batch_index: int, input_row_count: int) -> None:
@@ -319,6 +326,10 @@ class TqdmProgressReporter(ProgressReporter):
             f"run_id={self.run_id} total_items={self.total_items} "
             f"pending_items={self.pending_items} batch_size={self.batch_size}"
         )
+
+    def report_phase(self, phase: str, detail: str = "") -> None:
+        rendered_detail = f" detail={detail}" if detail else ""
+        self.write_line(f"[phase] run_id={self.run_id} phase={phase}{rendered_detail}")
 
     def start_batch(self, batch_id: str, batch_index: int, input_row_count: int) -> None:
         self.write_line(

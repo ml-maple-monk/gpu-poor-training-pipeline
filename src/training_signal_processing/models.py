@@ -140,6 +140,8 @@ class RunState:
     output_root_key: str
     tracking_run_id: str
     error_message: str = ""
+    current_phase: str = ""
+    last_phase_at: str = ""
 
     @classmethod
     def from_dict(cls, row: dict[str, Any]) -> "RunState":
@@ -158,6 +160,8 @@ class RunState:
             output_root_key=str(row["output_root_key"]),
             tracking_run_id=str(row.get("tracking_run_id", "")),
             error_message=str(row.get("error_message", "")),
+            current_phase=str(row.get("current_phase", "")),
+            last_phase_at=str(row.get("last_phase_at", "")),
         )
 
     def to_dict(self) -> dict[str, Any]:
