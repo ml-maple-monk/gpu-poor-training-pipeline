@@ -8,6 +8,7 @@ import click
 from .models import OpRuntimeContext
 from .ops.registry import RegisteredOpRegistry
 from .pipelines.ocr.config import load_recipe_config
+from .pipelines.ocr.remote_job import cli as ocr_remote_job_cli
 from .pipelines.ocr.submission import OcrSubmissionAdapter
 from .runtime.submission import (
     R2ArtifactStore,
@@ -22,6 +23,9 @@ from .utils import join_s3_key, read_jsonl_rows
 @click.group()
 def cli() -> None:
     """Remote OCR commands."""
+
+
+cli.add_command(ocr_remote_job_cli, name="ocr-remote-job")
 
 
 @cli.command("validate")

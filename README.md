@@ -35,17 +35,18 @@ Concrete behavior belongs in a pipeline family package:
 ```bash
 uv sync --group remote_ocr
 uv run ruff check src/training_signal_processing
-uv run --group remote_ocr python -m training_signal_processing.main validate --config config/remote_ocr.sample.yaml
-uv run --group remote_ocr python -m training_signal_processing.main run --config config/remote_ocr.sample.yaml --dry-run
+uv run --group remote_ocr python -m training_signal_processing validate --config config/remote_ocr.sample.yaml
+uv run --group remote_ocr python -m training_signal_processing run --config config/remote_ocr.sample.yaml --dry-run
 ```
 
 ## Main Commands
 
 ```bash
-uv run --group remote_ocr python -m training_signal_processing.main list-ops
-uv run --group remote_ocr python -m training_signal_processing.main test-op --help
-uv run --group remote_ocr python -m training_signal_processing.main run --help
-uv run --group remote_ocr python -m training_signal_processing.main resume --help
+uv run --group remote_ocr python -m training_signal_processing list-ops
+uv run --group remote_ocr python -m training_signal_processing test-op --help
+uv run --group remote_ocr python -m training_signal_processing run --help
+uv run --group remote_ocr python -m training_signal_processing resume --help
+uv run --group remote_ocr python -m training_signal_processing ocr-remote-job --help
 ```
 
 ## Project Shape
@@ -76,6 +77,7 @@ Useful checks for this repo:
 uv run ruff check src tests README.md
 uv run python -m compileall src/training_signal_processing
 uv run --group remote_ocr pytest -q tests/test_runtime_generic.py
-uv run --group remote_ocr python -m training_signal_processing.main validate --config config/remote_ocr.sample.yaml
-uv run --group remote_ocr python -m training_signal_processing.main run --config config/remote_ocr.sample.yaml --dry-run
+uv run --group remote_ocr pytest -q tests/test_cli_entrypoints.py
+uv run --group remote_ocr python -m training_signal_processing validate --config config/remote_ocr.sample.yaml
+uv run --group remote_ocr python -m training_signal_processing run --config config/remote_ocr.sample.yaml --dry-run
 ```
