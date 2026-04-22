@@ -268,6 +268,10 @@ class R2ArtifactStore(ArtifactStore):
             "R2_SECRET_ACCESS_KEY": self.object_store.config.secret_access_key,
             "R2_REGION": self.object_store.config.region,
             "R2_ENDPOINT_URL": self.object_store.config.endpoint_url,
+            "AWS_ACCESS_KEY_ID": self.object_store.config.access_key_id,
+            "AWS_SECRET_ACCESS_KEY": self.object_store.config.secret_access_key,
+            "AWS_DEFAULT_REGION": self.object_store.config.region,
+            "MLFLOW_S3_ENDPOINT_URL": self.object_store.config.endpoint_url,
         }
 
 
