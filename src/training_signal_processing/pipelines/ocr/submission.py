@@ -36,10 +36,10 @@ class OcrSubmissionAdapter(SubmissionAdapter):
         pdf_paths = self.discover_pdf_paths(pdf_root)
         input_manifest_key = self.build_control_key(run_id, "input_manifest.jsonl")
         config_object_key = self.build_control_key(run_id, "recipe.json")
-        uploaded_documents = 0
+        uploaded_items = 0
         if not dry_run:
             manifest_rows = self.build_pdf_tasks(pdf_root, pdf_paths)
-            uploaded_documents = self.upload_pdf_tasks(artifact_store, pdf_paths, manifest_rows)
+            uploaded_items = self.upload_pdf_tasks(artifact_store, pdf_paths, manifest_rows)
             artifact_store.write_jsonl(
                 input_manifest_key,
                 [task.to_dict() for task in manifest_rows],
@@ -53,8 +53,8 @@ class OcrSubmissionAdapter(SubmissionAdapter):
             run_id=run_id,
             input_manifest_key=input_manifest_key,
             config_object_key=config_object_key,
-            discovered_documents=len(pdf_paths),
-            uploaded_documents=uploaded_documents,
+            discovered_items=len(pdf_paths),
+            uploaded_items=uploaded_items,
             is_resume=False,
         )
 
@@ -71,8 +71,8 @@ class OcrSubmissionAdapter(SubmissionAdapter):
             run_id=run_id,
             input_manifest_key=input_manifest_key,
             config_object_key=config_object_key,
-            discovered_documents=len(manifest_rows),
-            uploaded_documents=0,
+            discovered_items=len(manifest_rows),
+            uploaded_items=0,
             is_resume=True,
         )
 
@@ -89,8 +89,8 @@ class OcrSubmissionAdapter(SubmissionAdapter):
         run_id: str,
         input_manifest_key: str,
         config_object_key: str,
-        discovered_documents: int,
-        uploaded_documents: int,
+        discovered_items: int,
+        uploaded_items: int,
         is_resume: bool,
     ) -> PreparedRun:
         return PreparedRun(
@@ -103,14 +103,14 @@ class OcrSubmissionAdapter(SubmissionAdapter):
                 run_id=run_id,
                 config_object_key=config_object_key,
                 input_manifest_key=input_manifest_key,
-                uploaded_documents=uploaded_documents,
+                uploaded_items=uploaded_items,
             ),
             artifacts=(
                 ArtifactRef(name="input_manifest", key=input_manifest_key, kind="jsonl"),
                 ArtifactRef(name="config_object", key=config_object_key, kind="json"),
             ),
-            discovered_documents=discovered_documents,
-            uploaded_documents=uploaded_documents,
+            discovered_items=discovered_items,
+            uploaded_items=uploaded_items,
             is_resume=is_resume,
             metadata={
                 "pipeline_family": "ocr",
@@ -136,7 +136,7 @@ class OcrSubmissionAdapter(SubmissionAdapter):
         run_id: str,
         config_object_key: str,
         input_manifest_key: str,
-        uploaded_documents: int,
+        uploaded_items: int,
     ) -> RemoteInvocationSpec:
         command = shlex.join(
             [
@@ -153,8 +153,8 @@ class OcrSubmissionAdapter(SubmissionAdapter):
                 config_object_key,
                 "--input-manifest-key",
                 input_manifest_key,
-                "--uploaded-documents",
-                str(uploaded_documents),
+                "--uploaded-items",
+                str(uploaded_items),
             ]
         )
         env = artifact_store.build_remote_env()

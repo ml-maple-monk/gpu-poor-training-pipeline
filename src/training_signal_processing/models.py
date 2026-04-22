@@ -64,51 +64,10 @@ class OpConfig:
 
 
 @dataclass
-class DocumentResult:
-    run_id: str
-    batch_id: str
-    source_r2_key: str
-    relative_path: str
-    markdown_r2_key: str
-    status: str
-    error_message: str
-    source_sha256: str
-    source_size_bytes: int
-    started_at: str
-    finished_at: str
-    duration_sec: float
-    marker_exit_code: int
-    markdown_text: str = ""
-
-    @classmethod
-    def from_dict(cls, row: dict[str, Any]) -> "DocumentResult":
-        return cls(
-            run_id=str(row["run_id"]),
-            batch_id=str(row.get("batch_id", "")),
-            source_r2_key=str(row["source_r2_key"]),
-            relative_path=str(row["relative_path"]),
-            markdown_r2_key=str(row.get("markdown_r2_key", "")),
-            status=str(row["status"]),
-            error_message=str(row.get("error_message", "")),
-            source_sha256=str(row["source_sha256"]),
-            source_size_bytes=int(row["source_size_bytes"]),
-            started_at=str(row["started_at"]),
-            finished_at=str(row["finished_at"]),
-            duration_sec=float(row["duration_sec"]),
-            marker_exit_code=int(row.get("marker_exit_code", 0)),
-            markdown_text=str(row.get("markdown_text", "")),
-        )
-
-    def manifest_row(self) -> dict[str, Any]:
-        row = asdict(self)
-        row.pop("markdown_text", None)
-        return row
-
-
-@dataclass
 class BatchCommit:
     batch_id: str
-    row_count: int
+    input_row_count: int
+    output_row_count: int
     success_count: int
     failed_count: int
     skipped_count: int
@@ -131,20 +90,55 @@ class ExportBatchResult:
 
 
 @dataclass
+class RuntimeRunBindings:
+    run_id: str
+    input_manifest_key: str
+    config_object_key: str = ""
+    uploaded_items: int = 0
+    allow_overwrite: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class RunArtifactLayout:
+    source_root_key: str
+    output_root_key: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class RuntimeTrackingContext:
+    enabled: bool
+    tracking_uri: str
+    experiment_name: str
+    run_name: str
+    executor_type: str
+    batch_size: int
+    concurrency: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class RunState:
     run_id: str
     status: str
-    total_documents: int
-    pending_documents: int
+    total_items: int
+    pending_items: int
     success_count: int
     failed_count: int
     skipped_count: int
     last_committed_batch: int
     started_at: str
     updated_at: str
-    raw_prefix: str
-    output_prefix: str
-    mlflow_run_id: str
+    source_root_key: str
+    output_root_key: str
+    tracking_run_id: str
     error_message: str = ""
 
     @classmethod
@@ -152,17 +146,17 @@ class RunState:
         return cls(
             run_id=str(row["run_id"]),
             status=str(row["status"]),
-            total_documents=int(row["total_documents"]),
-            pending_documents=int(row["pending_documents"]),
+            total_items=int(row["total_items"]),
+            pending_items=int(row["pending_items"]),
             success_count=int(row["success_count"]),
             failed_count=int(row["failed_count"]),
             skipped_count=int(row["skipped_count"]),
             last_committed_batch=int(row["last_committed_batch"]),
             started_at=str(row["started_at"]),
             updated_at=str(row["updated_at"]),
-            raw_prefix=str(row["raw_prefix"]),
-            output_prefix=str(row["output_prefix"]),
-            mlflow_run_id=str(row.get("mlflow_run_id", "")),
+            source_root_key=str(row["source_root_key"]),
+            output_root_key=str(row["output_root_key"]),
+            tracking_run_id=str(row.get("tracking_run_id", "")),
             error_message=str(row.get("error_message", "")),
         )
 
@@ -227,8 +221,8 @@ class OpRuntimeContext:
     run_id: str
     object_store: Any
     output_root_key: str
-    raw_root_key: str
-    completed_source_keys: set[str] = field(default_factory=set)
+    source_root_key: str
+    completed_item_keys: set[str] = field(default_factory=set)
     allow_overwrite: bool = False
     logger: Any = None
 
@@ -236,8 +230,8 @@ class OpRuntimeContext:
         return {
             "run_id": self.run_id,
             "output_root_key": self.output_root_key,
-            "raw_root_key": self.raw_root_key,
-            "completed_source_keys": sorted(self.completed_source_keys),
+            "source_root_key": self.source_root_key,
+            "completed_item_keys": sorted(self.completed_item_keys),
             "allow_overwrite": self.allow_overwrite,
         }
 

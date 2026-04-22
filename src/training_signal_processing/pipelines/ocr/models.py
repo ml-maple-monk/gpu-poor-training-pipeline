@@ -64,13 +64,38 @@ class PdfTask:
 
 
 @dataclass
-class RuntimeBindings:
+class DocumentResult:
     run_id: str
-    input_manifest_key: str
-    config_object_key: str = ""
-    uploaded_documents: int = 0
-    allow_overwrite: bool = False
-    marker_binary: str = ""
+    source_r2_key: str
+    relative_path: str
+    markdown_r2_key: str
+    status: str
+    error_message: str
+    source_sha256: str
+    source_size_bytes: int
+    started_at: str
+    finished_at: str
+    duration_sec: float
+    marker_exit_code: int
+    markdown_text: str = ""
+
+    @classmethod
+    def from_dict(cls, row: dict[str, Any]) -> "DocumentResult":
+        return cls(
+            run_id=str(row["run_id"]),
+            source_r2_key=str(row["source_r2_key"]),
+            relative_path=str(row["relative_path"]),
+            markdown_r2_key=str(row.get("markdown_r2_key", "")),
+            status=str(row["status"]),
+            error_message=str(row.get("error_message", "")),
+            source_sha256=str(row["source_sha256"]),
+            source_size_bytes=int(row["source_size_bytes"]),
+            started_at=str(row.get("started_at", "")),
+            finished_at=str(row.get("finished_at", "")),
+            duration_sec=float(row.get("duration_sec", 0.0)),
+            marker_exit_code=int(row.get("marker_exit_code", 0)),
+            markdown_text=str(row.get("markdown_text", "")),
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

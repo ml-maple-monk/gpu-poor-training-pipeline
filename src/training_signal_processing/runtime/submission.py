@@ -69,8 +69,8 @@ class PreparedRun:
     bootstrap: BootstrapSpec
     invocation: RemoteInvocationSpec
     artifacts: tuple[ArtifactRef, ...] = ()
-    discovered_documents: int = 0
-    uploaded_documents: int = 0
+    discovered_items: int = 0
+    uploaded_items: int = 0
     is_resume: bool = False
     metadata: dict[str, object] = field(default_factory=dict)
 
@@ -82,8 +82,8 @@ class PreparedRun:
             "bootstrap": self.bootstrap.to_dict(),
             "invocation": self.invocation.to_dict(),
             "artifacts": [artifact.to_dict() for artifact in self.artifacts],
-            "discovered_documents": self.discovered_documents,
-            "uploaded_documents": self.uploaded_documents,
+            "discovered_items": self.discovered_items,
+            "uploaded_items": self.uploaded_items,
             "is_resume": self.is_resume,
             "metadata": dict(self.metadata),
         }
@@ -96,8 +96,8 @@ class PreparedRun:
             "bootstrap": self.bootstrap.to_dict(),
             "invocation": self.invocation.to_safe_dict(),
             "artifacts": [artifact.to_dict() for artifact in self.artifacts],
-            "discovered_documents": self.discovered_documents,
-            "uploaded_documents": self.uploaded_documents,
+            "discovered_items": self.discovered_items,
+            "uploaded_items": self.uploaded_items,
             "is_resume": self.is_resume,
             "metadata": dict(self.metadata),
         }
@@ -123,8 +123,8 @@ class SubmissionResult:
     def to_safe_dict(self) -> dict[str, object]:
         artifacts_payload = {
             "run_id": self.prepared_run.run_id,
-            "discovered_documents": self.prepared_run.discovered_documents,
-            "uploaded_documents": self.prepared_run.uploaded_documents,
+            "discovered_items": self.prepared_run.discovered_items,
+            "uploaded_items": self.prepared_run.uploaded_items,
             "is_resume": self.prepared_run.is_resume,
         }
         for artifact in self.prepared_run.artifacts:
@@ -135,8 +135,8 @@ class SubmissionResult:
             "sync_paths": list(self.prepared_run.sync_paths),
             "bootstrap_command": self.prepared_run.bootstrap.command,
             "remote_command": "<redacted remote command>",
-            "discovered_documents": self.prepared_run.discovered_documents,
-            "uploaded_documents": self.prepared_run.uploaded_documents,
+            "discovered_items": self.prepared_run.discovered_items,
+            "uploaded_items": self.prepared_run.uploaded_items,
             "is_resume": self.prepared_run.is_resume,
             **self.transport_details,
         }

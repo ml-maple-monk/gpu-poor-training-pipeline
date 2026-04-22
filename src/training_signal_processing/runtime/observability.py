@@ -6,9 +6,8 @@ import os
 import re
 from abc import ABC, abstractmethod
 
-from ..models import BatchCommit, ExecutionLogEvent, RunState
+from ..models import BatchCommit, ExecutionLogEvent, RunState, RuntimeTrackingContext
 from ..ops.base import Op
-from ..pipelines.ocr.models import RecipeConfig
 
 # WARNING TO OTHER AGENTS: DO NOT CHANGE ANYTHING IN THIS FILE WITHOUT EXPLICIT USER APPROVAL.
 
@@ -32,14 +31,14 @@ class StructuredExecutionLogger(ExecutionLogger):
 class MlflowExecutionLogger(StructuredExecutionLogger):
     def __init__(
         self,
-        config: RecipeConfig,
+        tracking: RuntimeTrackingContext,
         logger_name: str,
         artifact_root: str = "execution_logs",
     ) -> None:
         super().__init__(logger_name)
-        if not config.mlflow.enabled:
-            raise ValueError("MlflowExecutionLogger requires mlflow.enabled=true in the recipe.")
-        self.config = config
+        if not tracking.enabled:
+            raise ValueError("MlflowExecutionLogger requires tracking.enabled=true.")
+        self.tracking = tracking
         self.artifact_root = artifact_root.strip("/") or "execution_logs"
         self.mlflow_run_id = ""
         self.event_count = 0
@@ -103,10 +102,7 @@ class MlflowExecutionLogger(StructuredExecutionLogger):
         import mlflow
         from mlflow.tracking import MlflowClient
 
-        tracking_uri = (
-            os.environ.get("MLFLOW_TRACKING_URI")
-            or self.config.mlflow.local_tracking_uri
-        )
+        tracking_uri = os.environ.get("MLFLOW_TRACKING_URI") or self.tracking.tracking_uri
         mlflow.set_tracking_uri(tracking_uri)
         return MlflowClient(tracking_uri=tracking_uri)
 
@@ -207,7 +203,7 @@ class ProgressTracker(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def log_run_started(self, total_documents: int, uploaded_documents: int) -> str:
+    def log_run_started(self, total_items: int, uploaded_items: int) -> str:
         raise NotImplementedError
 
     @abstractmethod
@@ -230,14 +226,14 @@ class ProgressTrackerActor(ProgressTracker):
 class MlflowProgressTracker(ProgressTrackerActor):
     def __init__(
         self,
-        config: RecipeConfig,
+        tracking: RuntimeTrackingContext,
         run_id: str,
         logger: ExecutionLogger,
     ) -> None:
-        self.config = config
+        self.tracking = tracking
         self.pipeline_run_id = run_id
         self.logger = logger
-        self.mlflow_enabled = config.mlflow.enabled
+        self.mlflow_enabled = tracking.enabled
         self.mlflow_run_id = self.create_mlflow_run_id()
         self.mlflow = self.load_mlflow_client() if self.mlflow_enabled else None
         if isinstance(self.logger, MlflowExecutionLogger):
@@ -246,22 +242,22 @@ class MlflowProgressTracker(ProgressTrackerActor):
     def get_run_id(self) -> str:
         return self.mlflow_run_id
 
-    def log_run_started(self, total_documents: int, uploaded_documents: int) -> str:
+    def log_run_started(self, total_items: int, uploaded_items: int) -> str:
         if self.mlflow_enabled:
             self.mlflow.log_params(
                 {
                     "pipeline_run_id": self.pipeline_run_id,
-                    "total_documents": total_documents,
-                    "uploaded_documents": uploaded_documents,
-                    "batch_size": self.config.ray.batch_size,
-                    "concurrency": self.config.ray.concurrency,
+                    "total_items": total_items,
+                    "uploaded_items": uploaded_items,
+                    "batch_size": self.tracking.batch_size,
+                    "concurrency": self.tracking.concurrency,
                 }
             )
             self.mlflow.set_tags(
                 {
                     "status": "running",
-                    "executor_type": self.config.ray.executor_type,
-                    "run_name": self.config.run_name,
+                    "executor_type": self.tracking.executor_type,
+                    "run_name": self.tracking.run_name,
                 }
             )
         self.logger.log_event(
@@ -271,8 +267,8 @@ class MlflowProgressTracker(ProgressTrackerActor):
                 message="Progress tracker started the run.",
                 run_id=self.pipeline_run_id,
                 details={
-                    "total_documents": total_documents,
-                    "uploaded_documents": uploaded_documents,
+                    "total_items": total_items,
+                    "uploaded_items": uploaded_items,
                     "mlflow_run_id": self.mlflow_run_id,
                 },
             )
@@ -286,7 +282,7 @@ class MlflowProgressTracker(ProgressTrackerActor):
                     "success_count": run_state.success_count,
                     "failed_count": run_state.failed_count,
                     "skipped_count": run_state.skipped_count,
-                    "pending_documents": run_state.pending_documents,
+                    "pending_items": run_state.pending_items,
                     "batch_duration_sec": batch_commit.duration_sec,
                 },
                 step=run_state.last_committed_batch,
@@ -337,15 +333,12 @@ class MlflowProgressTracker(ProgressTrackerActor):
     def create_mlflow_run_id(self) -> str:
         if not self.mlflow_enabled:
             return f"disabled:{self.pipeline_run_id}"
-        tracking_uri = (
-            os.environ.get("MLFLOW_TRACKING_URI")
-            or self.config.mlflow.local_tracking_uri
-        )
+        tracking_uri = os.environ.get("MLFLOW_TRACKING_URI") or self.tracking.tracking_uri
         import mlflow
 
         mlflow.set_tracking_uri(tracking_uri)
-        mlflow.set_experiment(self.config.mlflow.experiment_name)
-        active_run = mlflow.start_run(run_name=f"{self.config.run_name}:{self.pipeline_run_id}")
+        mlflow.set_experiment(self.tracking.experiment_name)
+        active_run = mlflow.start_run(run_name=f"{self.tracking.run_name}:{self.pipeline_run_id}")
         return active_run.info.run_id
 
     def load_mlflow_client(self):  # type: ignore[no-untyped-def]

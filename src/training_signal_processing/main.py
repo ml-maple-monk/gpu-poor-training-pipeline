@@ -152,7 +152,7 @@ def build_op_runtime_context(config, op_name: str) -> OpRuntimeContext:  # type:
         run_id=f"op-test:{op_name}",
         object_store=artifact_store.as_object_store(),
         output_root_key=join_s3_key(config.r2.output_prefix, f"op-tests/{op_name}"),
-        raw_root_key=config.r2.raw_pdf_prefix,
+        source_root_key=config.r2.raw_pdf_prefix,
     )
 
 

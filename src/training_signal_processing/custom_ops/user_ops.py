@@ -74,7 +74,7 @@ class SkipExistingDocumentsOp(SkipExistingFilter):
         runtime = self.require_runtime()
         if runtime.allow_overwrite:
             return True
-        return str(row["source_r2_key"]) not in runtime.completed_source_keys
+        return str(row["source_r2_key"]) not in runtime.completed_item_keys
 
 
 class MarkerOcrDocumentOp(MarkerOcrMapper):
