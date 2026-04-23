@@ -99,6 +99,7 @@ class RayDatasetBuilder(DatasetBuilder):
         map_kwargs: dict[str, object] = {
             "batch_size": batch_size,
             "batch_format": "pyarrow",
+            "scheduling_strategy": "SPREAD",
         }
         if concurrency is not None:
             map_kwargs["concurrency"] = concurrency

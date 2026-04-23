@@ -76,11 +76,18 @@ uv run --group remote_ocr python -m training_signal_processing.main run --config
 
 ## Remote Image
 
-The default remote Runpod image used by [infra/start_runpod_5090.sh](infra/start_runpod_5090.sh) is:
+The supported 5090 path today is the Runpod REST launcher in
+[infra/start_runpod_5090.sh](infra/start_runpod_5090.sh). It requests one
+`NVIDIA GeForce RTX 5090` pod and defaults to this public CUDA 12.8 / PyTorch
+2.8 image:
 
 ```text
 runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
 ```
+
+The repo's Linux dependency resolution also pins Torch to the official PyTorch
+CUDA 12.8 wheel index, so do not switch the pod to a CUDA 13 image unless the
+host driver is known to support it.
 
 That launcher writes the active SSH target to `infra/current-machine` after the pod is reachable.
 The OCR CLI will use that machine automatically unless you explicitly override `ssh.host`
@@ -91,6 +98,65 @@ If you need a different public base image for a run, override it at launch time:
 ```bash
 RUNPOD_IMAGE=<your-image> infra/start_runpod_5090.sh
 ```
+
+Use this launcher when you want the OCR CLI to follow the active 5090 pod
+automatically through `infra/current-machine`.
+
+### dstack 4x 4090 On-Demand Resume
+
+Runpod also supports dstack for declarative pod orchestration. Keep dstack
+scratch task files out of tracked product code unless they are intentionally
+promoted.
+
+Use the checked-in on-demand 4x RTX 4090 resume config when resuming the OCR
+run on Runpod:
+
+```bash
+/home/geeyang/.dstack-cli-venv/bin/dstack apply \
+  -f infra/dstack/config/ocr-resume-4090x4.dstack.yml \
+  -y \
+  -d
+```
+
+The relevant dstack settings are:
+
+```yaml
+type: task
+name: training-signal-processing-ocr-4090x4
+
+image: runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
+shell: bash
+
+backends: [runpod]
+resources:
+  gpu:
+    name: "RTX4090"
+    count: 4
+  disk: 200GB..
+
+spot_policy: on-demand
+max_price: 16.0
+max_duration: 24h
+
+commands:
+  - nvidia-smi
+  - 'echo "To connect via SSH, use: ssh ${DSTACK_RUN_NAME}"'
+  - tail -f /dev/null
+```
+
+Operational notes:
+- Use the same image as the Runpod REST launcher unless you have verified CUDA,
+  Torch, Ray, and Marker together on the target host.
+- dstack examples use `image:` for custom containers and `resources.gpu` for GPU
+  selection; Runpod's dstack guide uses GPU aliases such as `RTX4090`.
+- `spot_policy: on-demand` is required for reserved/on-demand offers; do not use
+  `spot` or `auto` for this resume path.
+- `max_price: 16.0` is intentionally above the observed 4x RTX 4090 on-demand
+  offer price so dstack does not filter viable Runpod offers by budget.
+- dstack does not currently update this repo's `infra/current-machine` contract.
+  If you launch OCR through dstack, either run the job inside the dstack task or
+  manually write the SSH target to `infra/current-machine` before using the core
+  OCR CLI from your workstation.
 
 ## Main Commands
 
@@ -144,6 +210,15 @@ uv run --group remote_ocr python -m training_signal_processing.main run \
 
 uv run --group remote_ocr python -m training_signal_processing.pipelines.tokenizer.cli run \
   --config config/remote_tokenizer.sample.yaml
+```
+
+To resume an existing OCR sink and skip successfully processed PDFs recorded in
+that sink's batch manifests, pass the run ID explicitly:
+
+```bash
+uv run --group remote_ocr python -m training_signal_processing.main resume \
+  --config config/remote_ocr.sample.yaml \
+  --run-id 20260423T132754Z
 ```
 
 Useful MLflow verification example:
