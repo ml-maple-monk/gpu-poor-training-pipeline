@@ -97,7 +97,30 @@ class OcrSubmissionAdapter(SubmissionAdapter):
         stripped = stdout.strip()
         if not stripped:
             raise ValueError("Remote job returned no JSON summary on stdout.")
-        return json.loads(stripped)
+        # The remote driver emits progress lines (e.g. "[run] ...", MLflow
+        # banners) to stdout before the final JSON summary. Find the last
+        # top-level JSON object by scanning from the end for a line starting
+        # with '{' at column 0 and parsing from there through EOF.
+        candidate: str | None = None
+        for line_start in range(len(stripped) - 1, -1, -1):
+            if stripped[line_start] == "{" and (
+                line_start == 0 or stripped[line_start - 1] == "\n"
+            ):
+                candidate = stripped[line_start:]
+                break
+        if candidate is None:
+            candidate = stripped
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            preview = stripped[:2000]
+            tail = stripped[-500:] if len(stripped) > 2500 else ""
+            raise ValueError(
+                f"Remote stdout is not valid JSON ({exc}). "
+                f"Length={len(stripped)}.\n"
+                f"--- stdout head ---\n{preview}\n"
+                + (f"--- stdout tail ---\n{tail}\n" if tail else "")
+            ) from exc
 
     def build_prepared_run(
         self,
