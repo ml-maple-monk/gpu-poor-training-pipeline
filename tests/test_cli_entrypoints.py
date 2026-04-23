@@ -169,3 +169,53 @@ def test_load_recipe_config_rejects_non_positive_marker_ocr_resources(
     )
     with pytest.raises(ValueError, match="marker_ocr_resources.num_cpus must be positive"):
         load_recipe_config(cpu_config_path)
+
+
+def test_load_recipe_config_deep_merges_overlay_files(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(ocr_config, "CURRENT_MACHINE_PATH", tmp_path / "missing-machine")
+    overlay_path = tmp_path / "experiment.yaml"
+    overlay_path.write_text(
+        "ray:\n"
+        "  batch_size: 4\n"
+        "  marker_ocr_resources:\n"
+        "    num_gpus: 1.0\n"
+        "input:\n"
+        "  max_files: 50\n",
+        encoding="utf-8",
+    )
+
+    config = load_recipe_config(
+        Path("config/remote_ocr.sample.yaml"),
+        overlay_paths=(overlay_path,),
+    )
+
+    assert config.ray.batch_size == 4
+    assert config.ray.concurrency == 2
+    assert config.ray.marker_ocr_resources.num_gpus == pytest.approx(1.0)
+    assert config.ray.marker_ocr_resources.num_cpus == pytest.approx(3.0)
+    assert config.input.max_files == 50
+    assert config.input.raw_pdf_prefix == "dataset/raw/pdf"
+
+
+def test_pipelines_ocr_configs_baseline_loads_with_example_overlay(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(ocr_config, "CURRENT_MACHINE_PATH", tmp_path / "missing-machine")
+    configs_dir = Path("src/training_signal_processing/pipelines/ocr/configs")
+
+    config = load_recipe_config(
+        configs_dir / "baseline.yaml",
+        overlay_paths=(configs_dir / "experiment.example.yaml",),
+    )
+
+    assert config.run_name == "marker-ocr-high-throughput"
+    assert config.ray.batch_size == 4
+    assert config.ray.concurrency == 8
+    assert config.ray.marker_ocr_resources.num_gpus == pytest.approx(1.0)
+    assert config.ray.marker_ocr_resources.num_cpus == pytest.approx(6.0)
+    assert config.input.max_files == 50
+    assert config.mlflow.experiment_name == "remote-pdf-ocr-throughput-sweep"

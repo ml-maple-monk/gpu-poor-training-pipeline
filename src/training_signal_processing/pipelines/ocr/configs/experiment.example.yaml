@@ -1,0 +1,21 @@
+# Example experiment overlay. Layered on top of baseline.yaml.
+#
+# Only specify the keys you want to change. Mappings are deep-merged; scalars,
+# lists, and `ops` are replaced wholesale. Drop ssh.host and ssh.port out of any
+# overlay you create — those are resolved per-machine via infra/current-machine.
+
+run:
+  name: marker-ocr-high-throughput
+
+ray:
+  batch_size: 4
+  concurrency: 8
+  marker_ocr_resources:
+    num_gpus: 1.0
+    num_cpus: 6
+
+input:
+  max_files: 50
+
+mlflow:
+  experiment_name: remote-pdf-ocr-throughput-sweep

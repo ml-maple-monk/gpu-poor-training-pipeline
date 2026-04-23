@@ -27,10 +27,12 @@ class TokenizerSubmissionAdapter(SubmissionAdapter):
         config: RecipeConfig,
         config_path: Path,
         overrides: list[str] | None = None,
+        overlay_paths: tuple[Path, ...] = (),
     ) -> None:
         self.config = config
         self.config_path = config_path
         self.overrides = overrides or []
+        self.overlay_paths = tuple(overlay_paths)
 
     def prepare_new_run(self, artifact_store: ArtifactStore, *, dry_run: bool) -> PreparedRun:
         run_id = utc_timestamp()
@@ -45,7 +47,11 @@ class TokenizerSubmissionAdapter(SubmissionAdapter):
             artifact_store.write_jsonl(shard_manifest_key, [task.to_dict() for task in shard_tasks])
             artifact_store.write_json(
                 config_object_key,
-                load_resolved_recipe_mapping(self.config_path, self.overrides),
+                load_resolved_recipe_mapping(
+                    self.config_path,
+                    self.overrides,
+                    overlay_paths=self.overlay_paths,
+                ),
             )
         return self.build_prepared_run(
             artifact_store=artifact_store,

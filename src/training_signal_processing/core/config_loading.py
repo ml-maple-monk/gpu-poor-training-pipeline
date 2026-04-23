@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -18,9 +19,12 @@ def load_recipe_mapping(
     overrides: list[str] | None = None,
     *,
     current_machine_path: Path | None = None,
+    overlay_paths: Sequence[Path] = (),
 ) -> dict[str, Any]:
     resolved_overrides = list(overrides or [])
     raw_config = read_recipe_file(config_path)
+    for overlay_path in overlay_paths:
+        raw_config = deep_merge_mapping(raw_config, read_recipe_file(overlay_path))
     merged_config = apply_overrides(raw_config, resolved_overrides)
     if current_machine_path is not None:
         merged_config = apply_current_machine_target(
@@ -29,6 +33,17 @@ def load_recipe_mapping(
             current_machine_path=current_machine_path,
         )
     return expand_recipe_values(merged_config)
+
+
+def deep_merge_mapping(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    result = clone_mapping(base)
+    for key, overlay_value in overlay.items():
+        existing = result.get(key)
+        if isinstance(existing, dict) and isinstance(overlay_value, dict):
+            result[key] = deep_merge_mapping(existing, overlay_value)
+        else:
+            result[key] = clone_mapping(overlay_value)
+    return result
 
 
 def read_recipe_file(config_path: Path) -> dict[str, Any]:
@@ -178,6 +193,7 @@ def build_op_config(raw: dict[str, Any]) -> OpConfig:
 __all__ = [
     "DEFAULT_CURRENT_MACHINE_PATH",
     "load_recipe_mapping",
+    "deep_merge_mapping",
     "read_recipe_file",
     "apply_overrides",
     "extract_override_keys",

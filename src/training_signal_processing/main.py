@@ -29,13 +29,24 @@ cli.add_command(ocr_remote_job_cli, name="ocr-remote-job")
 
 
 @cli.command("validate")
-@click.option("--config", "config_path", required=True, type=click.Path(path_type=Path))
+@click.option(
+    "--config",
+    "config_paths",
+    required=True,
+    multiple=True,
+    type=click.Path(path_type=Path),
+)
 @click.option("--set", "overrides", multiple=True)
-def validate_command(config_path: Path, overrides: tuple[str, ...]) -> None:
+def validate_command(config_paths: tuple[Path, ...], overrides: tuple[str, ...]) -> None:
     try:
-        config = load_recipe_config(config_path, list(overrides))
+        base_path, overlay_paths = config_paths[0], config_paths[1:]
+        config = load_recipe_config(
+            base_path,
+            list(overrides),
+            overlay_paths=overlay_paths,
+        )
         pipeline = RegisteredOpRegistry().resolve_pipeline(config.ops)
-        click.echo(f"Validated remote OCR recipe: {config_path}")
+        click.echo(f"Validated remote OCR recipe: {' + '.join(str(p) for p in config_paths)}")
         click.echo(f"Run name: {config.run_name}")
         click.echo(f"Executor type: {config.ray.executor_type}")
         click.echo(f"Declared ops: {len(config.ops)}")
@@ -62,13 +73,19 @@ def list_ops_command() -> None:
 
 
 @cli.command("test-op")
-@click.option("--config", "config_path", required=True, type=click.Path(path_type=Path))
+@click.option(
+    "--config",
+    "config_paths",
+    required=True,
+    multiple=True,
+    type=click.Path(path_type=Path),
+)
 @click.option("--op", "op_name", required=True)
 @click.option("--rows-path", required=True, type=click.Path(path_type=Path))
 @click.option("--batch-size", type=int)
 @click.option("--set", "overrides", multiple=True)
 def test_op_command(
-    config_path: Path,
+    config_paths: tuple[Path, ...],
     op_name: str,
     rows_path: Path,
     batch_size: int | None,
@@ -77,7 +94,12 @@ def test_op_command(
     from .ops.testing import build_default_ray_op_test_harness
 
     try:
-        config = load_recipe_config(config_path, list(overrides))
+        base_path, overlay_paths = config_paths[0], config_paths[1:]
+        config = load_recipe_config(
+            base_path,
+            list(overrides),
+            overlay_paths=overlay_paths,
+        )
         rows = read_jsonl_rows(rows_path)
         resolved_batch_size = batch_size if batch_size is not None else config.ray.batch_size
         registry = RegisteredOpRegistry(runtime_context=build_op_runtime_context(config, op_name))
@@ -90,13 +112,24 @@ def test_op_command(
 
 
 @cli.command("run")
-@click.option("--config", "config_path", required=True, type=click.Path(path_type=Path))
+@click.option(
+    "--config",
+    "config_paths",
+    required=True,
+    multiple=True,
+    type=click.Path(path_type=Path),
+)
 @click.option("--dry-run", is_flag=True, default=False)
 @click.option("--set", "overrides", multiple=True)
-def run_command(config_path: Path, dry_run: bool, overrides: tuple[str, ...]) -> None:
+def run_command(
+    config_paths: tuple[Path, ...],
+    dry_run: bool,
+    overrides: tuple[str, ...],
+) -> None:
     try:
         result = submit_remote_pipeline(
-            config_path=config_path,
+            config_path=config_paths[0],
+            overlay_paths=config_paths[1:],
             overrides=list(overrides),
             dry_run=dry_run,
             resume_run_id=None,
@@ -107,19 +140,26 @@ def run_command(config_path: Path, dry_run: bool, overrides: tuple[str, ...]) ->
 
 
 @cli.command("resume")
-@click.option("--config", "config_path", required=True, type=click.Path(path_type=Path))
+@click.option(
+    "--config",
+    "config_paths",
+    required=True,
+    multiple=True,
+    type=click.Path(path_type=Path),
+)
 @click.option("--dry-run", is_flag=True, default=False)
 @click.option("--run-id", required=True)
 @click.option("--set", "overrides", multiple=True)
 def resume_command(
-    config_path: Path,
+    config_paths: tuple[Path, ...],
     dry_run: bool,
     run_id: str,
     overrides: tuple[str, ...],
 ) -> None:
     try:
         result = submit_remote_pipeline(
-            config_path=config_path,
+            config_path=config_paths[0],
+            overlay_paths=config_paths[1:],
             overrides=list(overrides),
             dry_run=dry_run,
             resume_run_id=run_id,
@@ -135,13 +175,15 @@ def submit_remote_pipeline(
     overrides: list[str],
     dry_run: bool,
     resume_run_id: str | None,
+    overlay_paths: tuple[Path, ...] = (),
 ) -> dict[str, object]:
-    config = load_recipe_config(config_path, overrides)
+    config = load_recipe_config(config_path, overrides, overlay_paths=overlay_paths)
     submission = SubmissionCoordinator(
         adapter=OcrSubmissionAdapter(
             config=config,
             config_path=config_path,
             overrides=overrides,
+            overlay_paths=overlay_paths,
         ),
         artifact_store=R2ArtifactStore.from_config_file(config.r2),
         remote_transport=SshRemoteTransport(config.ssh),

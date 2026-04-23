@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -29,16 +30,27 @@ REQUIRED_SECTIONS = [
 ]
 
 
-def load_recipe_config(config_path: Path, overrides: list[str] | None = None) -> RecipeConfig:
-    raw = load_resolved_recipe_mapping(config_path, overrides)
+def load_recipe_config(
+    config_path: Path,
+    overrides: list[str] | None = None,
+    *,
+    overlay_paths: Sequence[Path] = (),
+) -> RecipeConfig:
+    raw = load_resolved_recipe_mapping(config_path, overrides, overlay_paths=overlay_paths)
     return build_recipe_config(raw, config_path)
 
 
 def load_resolved_recipe_mapping(
     config_path: Path,
     overrides: list[str] | None = None,
+    *,
+    overlay_paths: Sequence[Path] = (),
 ) -> dict[str, Any]:
-    return config_loading.load_recipe_mapping(config_path, overrides)
+    return config_loading.load_recipe_mapping(
+        config_path,
+        overrides,
+        overlay_paths=overlay_paths,
+    )
 
 
 def build_recipe_config(raw: dict[str, Any], config_path: Path) -> RecipeConfig:

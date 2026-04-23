@@ -40,10 +40,12 @@ class YoutubeAsrSubmissionAdapter(SubmissionAdapter):
         config: RecipeConfig,
         config_path: Path,
         overrides: list[str] | None = None,
+        overlay_paths: tuple[Path, ...] = (),
     ) -> None:
         self.config = config
         self.config_path = config_path
         self.overrides = overrides or []
+        self.overlay_paths = tuple(overlay_paths)
 
     def prepare_new_run(self, artifact_store: ArtifactStore, *, dry_run: bool) -> PreparedRun:
         run_id = utc_timestamp()
@@ -58,7 +60,11 @@ class YoutubeAsrSubmissionAdapter(SubmissionAdapter):
             artifact_store.write_jsonl(input_manifest_key, [task.to_dict() for task in tasks])
             artifact_store.write_json(
                 config_object_key,
-                load_resolved_recipe_mapping(self.config_path, self.overrides),
+                load_resolved_recipe_mapping(
+                    self.config_path,
+                    self.overrides,
+                    overlay_paths=self.overlay_paths,
+                ),
             )
             discovered_items = len(tasks)
             uploaded_items = len(tasks)
