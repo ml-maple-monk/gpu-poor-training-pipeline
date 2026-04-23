@@ -16,13 +16,16 @@ class OcrResumeLedger(ResumeLedger):
 
     def find_latest_partial_run(self) -> str | None:
         root_prefix = self.config.r2.output_prefix.rstrip("/")
-        run_ids: set[str] = set()
-        for key in self.object_store.list_keys(root_prefix):
-            relative = key.removeprefix(f"{root_prefix}/")
-            if not relative or "/" not in relative:
-                continue
-            run_ids.add(relative.split("/", 1)[0])
-        for run_id in sorted(run_ids, reverse=True):
+        run_state_keys = sorted(
+            (
+                key
+                for key in self.object_store.list_keys(root_prefix)
+                if key.endswith("/run_state.json")
+            ),
+            reverse=True,
+        )
+        for run_state_key in run_state_keys:
+            run_id = run_state_key.removeprefix(f"{root_prefix}/").split("/", 1)[0]
             run_state = self.load_run_state(run_id)
             if run_state is not None and run_state.status in {"running", "partial"}:
                 return run_id

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shlex
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -36,8 +37,9 @@ class OcrSubmissionAdapter(SubmissionAdapter):
     def prepare_new_run(self, artifact_store: ArtifactStore, *, dry_run: bool) -> PreparedRun:
         run_id = utc_timestamp()
         pdf_root = Path(self.config.input.local_pdf_root).expanduser()
-        pdf_paths = self.discover_pdf_paths(pdf_root)
-        manifest_rows = self.build_pdf_tasks(pdf_root, pdf_paths)
+        discovered_pdf_paths = self.discover_pdf_paths(pdf_root)
+        manifest_rows = self.build_pdf_tasks(pdf_root, discovered_pdf_paths)
+        pdf_paths = [pdf_root / task.relative_path for task in manifest_rows]
         input_manifest_key = self.build_control_key(run_id, "input_manifest.jsonl")
         config_object_key = self.build_control_key(run_id, "recipe.json")
         async_upload: LocalAsyncUploadSpec | None = None
@@ -61,7 +63,7 @@ class OcrSubmissionAdapter(SubmissionAdapter):
             run_id=run_id,
             input_manifest_key=input_manifest_key,
             config_object_key=config_object_key,
-            discovered_items=len(pdf_paths),
+            discovered_items=len(manifest_rows),
             uploaded_items=0,
             is_resume=False,
             async_upload=async_upload,
@@ -209,8 +211,6 @@ class OcrSubmissionAdapter(SubmissionAdapter):
             for path in pdf_root.glob(self.config.input.include_glob)
             if path.is_file()
         )
-        if self.config.input.max_files is not None:
-            pdf_paths = pdf_paths[: self.config.input.max_files]
         if not pdf_paths:
             raise ValueError(f"No PDF files matched under {pdf_root}")
         return pdf_paths
@@ -221,13 +221,38 @@ class OcrSubmissionAdapter(SubmissionAdapter):
             relative_path = pdf_path.relative_to(pdf_root).as_posix()
             tasks.append(
                 PdfTask(
-                    source_r2_key=join_s3_key(self.config.r2.raw_pdf_prefix, relative_path),
+                    source_r2_key=join_s3_key(self.config.input.raw_pdf_prefix, relative_path),
                     relative_path=relative_path,
                     source_size_bytes=pdf_path.stat().st_size,
+                    source_page_count=self.count_pdf_pages(pdf_path),
                     source_sha256=compute_sha256_file(pdf_path),
                 )
             )
+        tasks.sort(
+            key=lambda task: (
+                task.source_page_count if task.source_page_count is not None else sys.maxsize,
+                task.source_size_bytes,
+                task.relative_path,
+            )
+        )
+        if self.config.input.max_files is not None:
+            tasks = tasks[: self.config.input.max_files]
         return tasks
+
+    def count_pdf_pages(self, pdf_path: Path) -> int | None:
+        import pypdfium2 as pdfium
+
+        try:
+            document = pdfium.PdfDocument(str(pdf_path))
+            try:
+                page_count = len(document)
+            finally:
+                document.close()
+        except Exception:
+            return None
+        if page_count <= 0:
+            return None
+        return page_count
 
     def build_async_upload_spec(
         self,
@@ -291,7 +316,7 @@ class OcrSubmissionAdapter(SubmissionAdapter):
         return Path(handle.name)
 
     def build_rclone_destination(self, *, remote_name: str, bucket: str) -> str:
-        prefix = self.config.r2.raw_pdf_prefix.strip("/")
+        prefix = self.config.input.raw_pdf_prefix.strip("/")
         if prefix:
             return f"{remote_name}:{bucket}/{prefix}"
         return f"{remote_name}:{bucket}"

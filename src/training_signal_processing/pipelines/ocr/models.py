@@ -8,27 +8,26 @@ from ...core.models import (
     ObservabilityConfig,
     OpConfig,
     R2Config,
-    RayConfig,
+    RayTransformResources,
     RemoteRuntimeConfig,
     SshConfig,
 )
 
 
 @dataclass
-class OcrRayConfig(RayConfig):
-    ocr_worker_num_gpus: float = 1.0
-    ocr_worker_num_cpus: int = 1
-
-
-@dataclass
-class OcrR2Config(R2Config):
-    raw_pdf_prefix: str = ""
+class OcrRayConfig:
+    executor_type: str
+    batch_size: int
+    concurrency: int
+    target_num_blocks: int
+    marker_ocr_resources: RayTransformResources
 
 
 @dataclass
 class InputConfig:
     local_pdf_root: str
     include_glob: str
+    raw_pdf_prefix: str
     max_files: int | None = None
 
 
@@ -46,7 +45,7 @@ class RecipeConfig:
     ssh: SshConfig
     remote: RemoteRuntimeConfig
     ray: OcrRayConfig
-    r2: OcrR2Config
+    r2: R2Config
     input: InputConfig
     mlflow: MlflowConfig
     observability: ObservabilityConfig
@@ -59,14 +58,19 @@ class PdfTask:
     source_r2_key: str
     relative_path: str
     source_size_bytes: int
+    source_page_count: int | None
     source_sha256: str
 
     @classmethod
     def from_dict(cls, row: dict[str, Any]) -> "PdfTask":
+        source_page_count = row.get("source_page_count")
         return cls(
             source_r2_key=str(row["source_r2_key"]),
             relative_path=str(row["relative_path"]),
             source_size_bytes=int(row["source_size_bytes"]),
+            source_page_count=(
+                int(source_page_count) if source_page_count is not None else None
+            ),
             source_sha256=str(row["source_sha256"]),
         )
 

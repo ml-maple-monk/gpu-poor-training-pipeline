@@ -13,6 +13,17 @@ from training_signal_processing.pipelines.ocr.submission import OcrSubmissionAda
 from training_signal_processing.runtime.submission import R2ArtifactStore
 
 
+def prepare_sample_ocr_run(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(OcrSubmissionAdapter, "count_pdf_pages", lambda self, path: 1)
+    config_path = Path("config/remote_ocr.sample.yaml")
+    config = load_recipe_config(config_path)
+    return OcrSubmissionAdapter(
+        config=config,
+        config_path=config_path,
+        overrides=[],
+    ).prepare_new_run(R2ArtifactStore.from_config_file(config.r2), dry_run=True)
+
+
 def test_main_cli_registers_ocr_remote_job_command() -> None:
     assert "ocr-remote-job" in cli.commands
 
@@ -30,14 +41,8 @@ def test_main_module_entrypoint_shows_help() -> None:
     assert "ocr-remote-job" in result.stdout
 
 
-def test_ocr_submission_uses_package_cli_entrypoint() -> None:
-    config_path = Path("config/remote_ocr.sample.yaml")
-    config = load_recipe_config(config_path)
-    prepared = OcrSubmissionAdapter(
-        config=config,
-        config_path=config_path,
-        overrides=[],
-    ).prepare_new_run(R2ArtifactStore.from_config_file(config.r2), dry_run=True)
+def test_ocr_submission_uses_package_cli_entrypoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    prepared = prepare_sample_ocr_run(monkeypatch)
 
     assert prepared.invocation.command.startswith(
         "uv run --python 3.12 --group remote_ocr --group model python -m "
@@ -45,27 +50,19 @@ def test_ocr_submission_uses_package_cli_entrypoint() -> None:
     )
 
 
-def test_ocr_submission_bootstrap_installs_remote_runtime() -> None:
-    config_path = Path("config/remote_ocr.sample.yaml")
-    config = load_recipe_config(config_path)
-    prepared = OcrSubmissionAdapter(
-        config=config,
-        config_path=config_path,
-        overrides=[],
-    ).prepare_new_run(R2ArtifactStore.from_config_file(config.r2), dry_run=True)
+def test_ocr_submission_bootstrap_installs_remote_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = prepare_sample_ocr_run(monkeypatch)
 
     assert "uv python install 3.12" in prepared.bootstrap.command
     assert "--group remote_ocr --group model --no-dev --frozen" in prepared.bootstrap.command
 
 
-def test_ocr_submission_includes_aws_compatible_remote_env() -> None:
-    config_path = Path("config/remote_ocr.sample.yaml")
-    config = load_recipe_config(config_path)
-    prepared = OcrSubmissionAdapter(
-        config=config,
-        config_path=config_path,
-        overrides=[],
-    ).prepare_new_run(R2ArtifactStore.from_config_file(config.r2), dry_run=True)
+def test_ocr_submission_includes_aws_compatible_remote_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prepared = prepare_sample_ocr_run(monkeypatch)
 
     assert (
         prepared.invocation.env["AWS_ACCESS_KEY_ID"]
@@ -143,32 +140,32 @@ def test_load_recipe_config_rejects_malformed_current_machine(
         load_recipe_config(Path("config/remote_ocr.sample.yaml"))
 
 
-def test_load_recipe_config_parses_ocr_worker_resources() -> None:
+def test_load_recipe_config_parses_marker_ocr_resources() -> None:
     config = load_recipe_config(Path("config/remote_ocr.sample.yaml"))
 
-    assert config.ray.ocr_worker_num_gpus == pytest.approx(0.5)
-    assert config.ray.ocr_worker_num_cpus == 3
+    assert config.ray.marker_ocr_resources.num_gpus == pytest.approx(0.5)
+    assert config.ray.marker_ocr_resources.num_cpus == pytest.approx(3.0)
 
 
-def test_load_recipe_config_rejects_non_positive_ocr_worker_resources(
+def test_load_recipe_config_rejects_non_positive_marker_ocr_resources(
     tmp_path: Path,
 ) -> None:
-    gpu_config_path = tmp_path / "invalid_ocr_worker_gpu.yaml"
+    gpu_config_path = tmp_path / "invalid_marker_gpu.yaml"
     gpu_config_path.write_text(
         Path("config/remote_ocr.sample.yaml")
         .read_text(encoding="utf-8")
-        .replace("ocr_worker_num_gpus: 0.5", "ocr_worker_num_gpus: 0"),
+        .replace("num_gpus: 0.5", "num_gpus: 0"),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="ray.ocr_worker_num_gpus must be positive"):
+    with pytest.raises(ValueError, match="marker_ocr_resources.num_gpus must be positive"):
         load_recipe_config(gpu_config_path)
 
-    cpu_config_path = tmp_path / "invalid_ocr_worker_cpu.yaml"
+    cpu_config_path = tmp_path / "invalid_marker_cpu.yaml"
     cpu_config_path.write_text(
         Path("config/remote_ocr.sample.yaml")
         .read_text(encoding="utf-8")
-        .replace("ocr_worker_num_cpus: 3", "ocr_worker_num_cpus: 0"),
+        .replace("num_cpus: 3", "num_cpus: 0"),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="ray.ocr_worker_num_cpus must be positive"):
+    with pytest.raises(ValueError, match="marker_ocr_resources.num_cpus must be positive"):
         load_recipe_config(cpu_config_path)

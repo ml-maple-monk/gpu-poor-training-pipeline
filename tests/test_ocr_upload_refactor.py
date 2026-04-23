@@ -175,16 +175,17 @@ ray:
   batch_size: 1
   concurrency: 1
   target_num_blocks: 1
-  ocr_worker_num_gpus: 1.0
-  ocr_worker_num_cpus: 4
+  marker_ocr_resources:
+    num_gpus: 1.0
+    num_cpus: 4
 r2:
   config_file: {r2_config}
   bucket: test-bucket
-  raw_pdf_prefix: dataset/raw/pdf
   output_prefix: dataset/processed/pdf_ocr
 input:
   local_pdf_root: {pdf_root}
   include_glob: "**/*.pdf"
+  raw_pdf_prefix: dataset/raw/pdf
   max_files: 2
 mlflow:
   enabled: false
@@ -213,6 +214,12 @@ ops:
         encoding="utf-8",
     )
     monkeypatch.setattr(ocr_config, "CURRENT_MACHINE_PATH", tmp_path / "missing-machine")
+    page_counts = {"alpha.pdf": 5, "nested/beta.pdf": 1}
+    monkeypatch.setattr(
+        OcrSubmissionAdapter,
+        "count_pdf_pages",
+        lambda self, path: page_counts[path.relative_to(pdf_root).as_posix()],
+    )
     return config_path
 
 
@@ -245,12 +252,46 @@ def test_ocr_prepare_new_run_builds_async_upload_spec(
     file_list_path = Path(prepared.async_upload.command[5])
     assert file_list_path.is_file()
     assert file_list_path.read_text(encoding="utf-8").splitlines() == [
-        "alpha.pdf",
         "nested/beta.pdf",
+        "alpha.pdf",
     ]
     manifest_key = f"{config.r2.output_prefix}/{prepared.run_id}/control/input_manifest.jsonl"
     assert manifest_key in artifact_store.written_jsonl
+    manifest_rows = artifact_store.written_jsonl[manifest_key]
+    assert [row["relative_path"] for row in manifest_rows] == [
+        "nested/beta.pdf",
+        "alpha.pdf",
+    ]
+    assert [row["source_page_count"] for row in manifest_rows] == [1, 5]
     assert prepared.async_upload.env["RCLONE_CONFIG_OCRINPUT_PROVIDER"] == "Cloudflare"
+
+
+def test_ocr_prepare_new_run_applies_max_files_after_page_sort(
+    monkeypatch: pytest.MonkeyPatch,
+    ocr_upload_config: Path,
+) -> None:
+    config = load_recipe_config(ocr_upload_config, ["input.max_files=1"])
+    artifact_store = FakeArtifactStore()
+    adapter = OcrSubmissionAdapter(
+        config=config,
+        config_path=ocr_upload_config,
+        overrides=["input.max_files=1"],
+    )
+    monkeypatch.setattr(
+        "training_signal_processing.pipelines.ocr.submission.shutil.which",
+        lambda name: "/usr/bin/rclone" if name == "rclone" else None,
+    )
+
+    prepared = adapter.prepare_new_run(artifact_store, dry_run=False)
+
+    assert prepared.discovered_items == 1
+    assert prepared.async_upload is not None
+    file_list_path = Path(prepared.async_upload.command[5])
+    assert file_list_path.read_text(encoding="utf-8").splitlines() == ["nested/beta.pdf"]
+    manifest_key = f"{config.r2.output_prefix}/{prepared.run_id}/control/input_manifest.jsonl"
+    assert [row["relative_path"] for row in artifact_store.written_jsonl[manifest_key]] == [
+        "nested/beta.pdf"
+    ]
 
 
 def test_ocr_prepare_new_run_dry_run_skips_async_upload(ocr_upload_config: Path) -> None:
@@ -372,9 +413,31 @@ def build_prepared_ocr_row(runtime_context: OpRuntimeContext) -> dict[str, objec
         source_r2_key="dataset/raw/pdf/example.pdf",
         relative_path="example.pdf",
         source_size_bytes=8,
+        source_page_count=1,
         source_sha256="abc123",
     )
     return user_ops.PreparePdfDocumentOp().bind_runtime(runtime_context).process_row(task.to_dict())
+
+
+def test_prepare_pdf_document_uses_flat_markdown_key(
+    ocr_runtime_context: OpRuntimeContext,
+) -> None:
+    task = PdfTask(
+        source_r2_key="dataset/raw/pdf/nested/alpha/example.pdf",
+        relative_path="nested/alpha/example.pdf",
+        source_size_bytes=8,
+        source_page_count=1,
+        source_sha256="abc123",
+    )
+
+    row = user_ops.PreparePdfDocumentOp().bind_runtime(ocr_runtime_context).process_row(
+        task.to_dict()
+    )
+
+    assert row["markdown_r2_key"] == (
+        "output/ocr-test/markdown/26f49e62f3aa6c0b-example.md"
+    )
+    assert "/nested/" not in str(row["markdown_r2_key"])
 
 
 def test_marker_ocr_process_row_success(

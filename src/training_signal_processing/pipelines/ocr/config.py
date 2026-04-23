@@ -10,10 +10,12 @@ from ...core.models import (
     MlflowConfig,
     ObservabilityConfig,
     OpConfig,
+    R2Config,
+    RayTransformResources,
     RemoteRuntimeConfig,
     SshConfig,
 )
-from .models import InputConfig, OcrR2Config, OcrRayConfig, RecipeConfig, ResumeConfig
+from .models import InputConfig, OcrRayConfig, RecipeConfig, ResumeConfig
 
 CURRENT_MACHINE_PATH = Path(__file__).resolve().parents[4] / "infra" / "current-machine"
 
@@ -166,13 +168,24 @@ def build_recipe_config(raw: dict[str, Any], config_path: Path) -> RecipeConfig:
     require_sections(raw, config_path)
     validate_recipe_constraints(raw)
     ops = [build_op_config(item) for item in raw["ops"]]
+    ray_raw = raw["ray"]
+    marker_raw = ray_raw["marker_ocr_resources"]
     return RecipeConfig(
         run_name=raw["run"]["name"],
         config_version=int(raw["run"]["config_version"]),
         ssh=SshConfig(**raw["ssh"]),
         remote=RemoteRuntimeConfig(**raw["remote"]),
-        ray=OcrRayConfig(**raw["ray"]),
-        r2=OcrR2Config(**raw["r2"]),
+        ray=OcrRayConfig(
+            executor_type=str(ray_raw["executor_type"]),
+            batch_size=int(ray_raw["batch_size"]),
+            concurrency=int(ray_raw["concurrency"]),
+            target_num_blocks=int(ray_raw["target_num_blocks"]),
+            marker_ocr_resources=RayTransformResources(
+                num_gpus=float(marker_raw["num_gpus"]),
+                num_cpus=float(marker_raw["num_cpus"]),
+            ),
+        ),
+        r2=R2Config(**raw["r2"]),
         input=InputConfig(**raw["input"]),
         mlflow=MlflowConfig(**raw["mlflow"]),
         observability=ObservabilityConfig(**raw["observability"]),
@@ -221,9 +234,12 @@ def validate_recipe_constraints(raw: dict[str, Any]) -> None:
         raise ValueError("ray.concurrency must be positive")
     if int(ray.get("target_num_blocks", 0)) < 0:
         raise ValueError("ray.target_num_blocks must be zero or positive")
-    if float(ray.get("ocr_worker_num_gpus", 1.0)) <= 0:
-        raise ValueError("ray.ocr_worker_num_gpus must be positive")
-    if int(ray.get("ocr_worker_num_cpus", 1)) <= 0:
-        raise ValueError("ray.ocr_worker_num_cpus must be positive")
+    marker = ray.get("marker_ocr_resources")
+    if not isinstance(marker, dict):
+        raise ValueError("ray.marker_ocr_resources must be a mapping with num_gpus and num_cpus")
+    if float(marker.get("num_gpus", 0)) <= 0:
+        raise ValueError("ray.marker_ocr_resources.num_gpus must be positive")
+    if float(marker.get("num_cpus", 0)) <= 0:
+        raise ValueError("ray.marker_ocr_resources.num_cpus must be positive")
     if raw["resumability"]["strategy"] != "batch_manifest":
         raise ValueError("Only batch_manifest resumability is supported")

@@ -42,6 +42,7 @@ class OcrPipelineRuntimeAdapter(PipelineRuntimeAdapter):
         return self.config.ray
 
     def get_tracking_context(self) -> RuntimeTrackingContext:
+        marker = self.config.ray.marker_ocr_resources
         return RuntimeTrackingContext(
             enabled=self.config.mlflow.enabled,
             tracking_uri=os.environ.get("MLFLOW_TRACKING_URI", ""),
@@ -52,8 +53,8 @@ class OcrPipelineRuntimeAdapter(PipelineRuntimeAdapter):
             concurrency=self.config.ray.concurrency,
             target_num_blocks=self.config.ray.target_num_blocks,
             extra_params={
-                "ocr_worker_num_gpus": self.config.ray.ocr_worker_num_gpus,
-                "ocr_worker_num_cpus": self.config.ray.ocr_worker_num_cpus,
+                "marker_ocr_num_gpus": marker.num_gpus if marker.num_gpus is not None else 0.0,
+                "marker_ocr_num_cpus": marker.num_cpus if marker.num_cpus is not None else 0.0,
             },
         )
 
@@ -62,7 +63,7 @@ class OcrPipelineRuntimeAdapter(PipelineRuntimeAdapter):
 
     def get_artifact_layout(self) -> RunArtifactLayout:
         return RunArtifactLayout(
-            source_root_key=self.config.r2.raw_pdf_prefix,
+            source_root_key=self.config.input.raw_pdf_prefix,
             output_root_key=join_s3_key(self.config.r2.output_prefix, self.bindings.run_id),
         )
 
@@ -109,8 +110,9 @@ class OcrPipelineRuntimeAdapter(PipelineRuntimeAdapter):
     ) -> RayTransformResources:
         if op.name != "marker_ocr":
             return super().resolve_transform_resources(op=op, execution=execution)
+        marker = self.config.ray.marker_ocr_resources
         return RayTransformResources(
             concurrency=execution.concurrency,
-            num_gpus=self.config.ray.ocr_worker_num_gpus,
-            num_cpus=float(self.config.ray.ocr_worker_num_cpus),
+            num_gpus=marker.num_gpus,
+            num_cpus=marker.num_cpus,
         )

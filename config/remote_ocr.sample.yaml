@@ -17,17 +17,18 @@ ray:
   batch_size: 1
   concurrency: 2
   target_num_blocks: 32
-  ocr_worker_num_gpus: 0.5
-  ocr_worker_num_cpus: 3
+  marker_ocr_resources:
+    num_gpus: 0.5
+    num_cpus: 3
 
 r2:
   config_file: r2
   bucket: gpu-poor
-  raw_pdf_prefix: dataset/raw/pdf
   output_prefix: dataset/processed/pdf_ocr
 
 input:
   local_pdf_root: /home/geeyang/workspace/malay-data/bookscrape/data/downloads
+  raw_pdf_prefix: dataset/raw/pdf
   include_glob: "**/*.pdf"
   max_files: 5
 
