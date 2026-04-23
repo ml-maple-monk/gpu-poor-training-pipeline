@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from ...core.models import (
+    AsyncUploadConfig,
     MlflowConfig,
     ObservabilityConfig,
     OpConfig,
@@ -21,6 +22,7 @@ class OcrRayConfig:
     concurrency: int
     target_num_blocks: int
     marker_ocr_resources: RayTransformResources
+    async_upload: AsyncUploadConfig | None = None
 
 
 @dataclass

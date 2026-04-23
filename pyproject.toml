@@ -27,6 +27,7 @@ explicit = true
 dev = [
     "import-linter>=2.11,<3",
     "pytest>=9.0.3",
+    "pytest-asyncio>=0.24",
     "ruff>=0.15.11",
 ]
 model = [
@@ -34,6 +35,7 @@ model = [
     "transformers>=4.51.0",
 ]
 remote_ocr = [
+    "aioboto3>=13",
     "boto3>=1.39.0",
     "click>=8.1.8",
     "marker-pdf>=1.10.0",

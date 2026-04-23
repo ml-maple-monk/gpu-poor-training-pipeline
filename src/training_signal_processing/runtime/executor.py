@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -18,8 +19,10 @@ from ..core.models import (
 from ..core.utils import utc_isoformat
 from ..ops.base import Batch, Op
 from ..ops.registry import OpRegistry
+from ..storage.object_store import R2ObjectStore
+from .async_upload_coordinator import AsyncUploadCoordinator
 from .dataset import ConfiguredRayDatasetBuilder, DatasetBuilder
-from .exporter import Exporter
+from .exporter import Exporter, RayExporter
 from .observability import (
     ExecutionLogger,
     MlflowExecutionLogger,
@@ -159,6 +162,12 @@ class StreamingRayExecutor(Executor):
         registry = self.pipeline.build_op_registry(runtime_context)
         resolved_pipeline = registry.resolve_pipeline(op_configs)
         exporter = self.pipeline.build_exporter()
+        coordinator = self._build_upload_coordinator(
+            execution=execution,
+            runtime_context=runtime_context,
+        )
+        if coordinator is not None and isinstance(exporter, RayExporter):
+            exporter.upload_coordinator = coordinator
         dataset_builder = self.pipeline.build_dataset_builder()
         input_rows = self.pipeline.load_input_rows()
         if not input_rows:
@@ -263,6 +272,23 @@ class StreamingRayExecutor(Executor):
                     reported_batch_id=export_result.batch_id,
                     reported_row_count=export_result.row_count,
                 )
+                if coordinator is not None:
+                    drain_start = time.monotonic()
+                    pre_drain_depth = coordinator.depth()
+                    coordinator.drain()
+                    logger.log_event(
+                        ExecutionLogEvent(
+                            level="INFO",
+                            code="executor.upload.drain",
+                            message=f"Drained upload coordinator for '{batch_id}'.",
+                            run_id=bindings.run_id,
+                            batch_id=batch_id,
+                            details={
+                                "depth_before_drain": pre_drain_depth,
+                                "drain_seconds": time.monotonic() - drain_start,
+                            },
+                        )
+                    )
                 batch_commit, run_state = resume_ledger.commit_batch(
                     run_state=run_state,
                     batch_index=batch_index,
@@ -283,6 +309,8 @@ class StreamingRayExecutor(Executor):
                 output_keys.extend(export_result.output_keys)
             run_state = resume_ledger.mark_run_finished(run_state)
             exporter.finalize_run(run_state)
+            if coordinator is not None:
+                coordinator.drain()
             monitor.finish_run(run_state)
             progress_tracker.log_run_finished(run_state.status)
             progress_reporter.finish_run(run_state.status)
@@ -296,6 +324,17 @@ class StreamingRayExecutor(Executor):
             ).to_dict()
         except Exception as exc:
             message = str(exc)
+            if coordinator is not None:
+                cancelled = coordinator.abort()
+                logger.log_event(
+                    ExecutionLogEvent(
+                        level="WARNING",
+                        code="executor.upload.aborted",
+                        message=f"Aborted upload coordinator: {cancelled} cancelled.",
+                        run_id=bindings.run_id,
+                        details={"cancelled_count": cancelled, "error": message},
+                    )
+                )
             run_state = resume_ledger.mark_run_failed(run_state, message)
             monitor.fail_run(run_state)
             progress_tracker.log_run_failed(message)
@@ -309,6 +348,37 @@ class StreamingRayExecutor(Executor):
                 output_keys=output_keys,
                 error_message=message,
             ).to_dict()
+        finally:
+            if coordinator is not None:
+                try:
+                    coordinator.close()
+                except Exception as close_exc:  # pragma: no cover - defensive
+                    logger.log_event(
+                        ExecutionLogEvent(
+                            level="WARNING",
+                            code="executor.upload.close_error",
+                            message=f"AsyncUploadCoordinator.close() raised: {close_exc}",
+                            run_id=bindings.run_id,
+                        )
+                    )
+
+    def _build_upload_coordinator(
+        self,
+        *,
+        execution: RayConfig,
+        runtime_context: OpRuntimeContext,
+    ) -> AsyncUploadCoordinator | None:
+        async_cfg = execution.async_upload
+        if async_cfg is None or not async_cfg.enabled:
+            return None
+        object_store = runtime_context.get_object_store()
+        if not isinstance(object_store, R2ObjectStore):
+            return None
+        return AsyncUploadCoordinator(
+            object_store=object_store,
+            max_in_flight=async_cfg.max_in_flight,
+            max_queued=async_cfg.max_queued,
+        )
 
     def transition_run_phase(
         self,

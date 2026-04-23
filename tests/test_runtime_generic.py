@@ -524,3 +524,133 @@ def test_streaming_executor_uses_adapter_transform_resources() -> None:
             "num_cpus": None,
         },
     ]
+
+
+class RecordingCoordinator:
+    """Test double for AsyncUploadCoordinator lifecycle verification."""
+
+    def __init__(self, *, drain_fails_on_batch: int | None = None) -> None:
+        self.drain_calls = 0
+        self.abort_calls = 0
+        self.close_calls = 0
+        self.submit_calls: list[tuple[str, bytes]] = []
+        # Track order of drain vs commit_batch via an external log mutated
+        # by the fake ledger wrapping commit_batch.
+        self.events: list[str] = []
+        self._drain_fails_on_batch = drain_fails_on_batch
+
+    def submit(self, key: str, body: bytes) -> None:
+        self.submit_calls.append((key, body))
+
+    def drain(self, timeout: float | None = None) -> None:
+        self.drain_calls += 1
+        self.events.append(f"drain:{self.drain_calls}")
+        if (
+            self._drain_fails_on_batch is not None
+            and self.drain_calls == self._drain_fails_on_batch
+        ):
+            raise RuntimeError(f"injected drain failure on batch {self.drain_calls}")
+
+    def abort(self) -> int:
+        self.abort_calls += 1
+        return 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+    def depth(self) -> int:
+        return 0
+
+
+class ThreeBatchAdapter(FakePipelineAdapter):
+    """Three-row adapter (batch_size=1 → 3 batches) for lifecycle tests."""
+
+    def load_input_rows(self) -> list[dict[str, object]]:
+        return [{"id": "row-a"}, {"id": "row-b"}, {"id": "row-c"}]
+
+
+def _ledger_event_recorder(
+    adapter: FakePipelineAdapter, coordinator: RecordingCoordinator
+) -> None:
+    """Wrap commit_batch on the adapter's ledger to record event ordering."""
+    original = adapter.resume_ledger.commit_batch
+
+    def wrapped(**kwargs: Any):  # type: ignore[no-untyped-def]
+        coordinator.events.append(f"commit:{kwargs['batch_index']}")
+        return original(**kwargs)
+
+    adapter.resume_ledger.commit_batch = wrapped  # type: ignore[assignment]
+
+
+def test_streaming_executor_drains_coordinator_before_each_commit(
+    monkeypatch,
+) -> None:
+    adapter = ThreeBatchAdapter()
+    coordinator = RecordingCoordinator()
+    _ledger_event_recorder(adapter, coordinator)
+
+    executor = StreamingRayExecutor(adapter)
+    monkeypatch.setattr(
+        executor,
+        "_build_upload_coordinator",
+        lambda *, execution, runtime_context: coordinator,
+    )
+
+    summary = executor.run()
+
+    assert summary["status"] == "success"
+    # One drain per batch (3) plus one final drain after finalize_run.
+    assert coordinator.drain_calls == 4
+    assert coordinator.abort_calls == 0
+    assert coordinator.close_calls == 1
+    # Drain must precede commit for every batch.
+    expected_prefix = [
+        "drain:1",
+        "commit:1",
+        "drain:2",
+        "commit:2",
+        "drain:3",
+        "commit:3",
+    ]
+    assert coordinator.events[: len(expected_prefix)] == expected_prefix
+
+
+def test_streaming_executor_aborts_when_drain_raises_mid_run(
+    monkeypatch,
+) -> None:
+    adapter = ThreeBatchAdapter()
+    coordinator = RecordingCoordinator(drain_fails_on_batch=2)
+    _ledger_event_recorder(adapter, coordinator)
+
+    executor = StreamingRayExecutor(adapter)
+    monkeypatch.setattr(
+        executor,
+        "_build_upload_coordinator",
+        lambda *, execution, runtime_context: coordinator,
+    )
+
+    summary = executor.run()
+
+    assert summary["status"] == "failed"
+    assert "injected drain failure" in summary["error_message"]
+    # Batch 1 committed, batch 2 drain failed → batch 2 not committed.
+    assert "commit:1" in coordinator.events
+    assert "commit:2" not in coordinator.events
+    assert "commit:3" not in coordinator.events
+    # abort() was called exactly once in the except path, before close().
+    assert coordinator.abort_calls == 1
+    assert coordinator.close_calls == 1
+    # The ledger's run state must reflect the failure.
+    assert adapter.resume_ledger.run_state is not None
+    assert adapter.resume_ledger.run_state.status == "failed"
+
+
+def test_streaming_executor_skips_coordinator_when_disabled() -> None:
+    """When async_upload is None (default), no coordinator is built."""
+    adapter = FakePipelineAdapter()
+    # Default RayConfig has async_upload=None → _build_upload_coordinator returns None.
+    summary = StreamingRayExecutor(adapter).run()
+    assert summary["status"] == "success"
+    # Nothing to assert directly — the absence of coordinator state IS the test.
+    # The existing test_streaming_executor_runs_with_fake_pipeline_adapter
+    # already exercises the full sync path.

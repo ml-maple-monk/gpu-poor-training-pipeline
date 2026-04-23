@@ -24,7 +24,7 @@ class OcrMarkdownExporter(RayExporter):
                     raise ValueError("Successful OCR rows must include markdown_r2_key.")
                 if not result.markdown_text:
                     raise ValueError("Successful OCR rows must include markdown_text.")
-                self.object_store.write_bytes(
+                self._put_bytes(
                     result.markdown_r2_key,
                     result.markdown_text.encode("utf-8"),
                 )

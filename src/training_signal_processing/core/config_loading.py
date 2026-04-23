@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from .models import OpConfig
+from .models import AsyncUploadConfig, OpConfig
 
 DEFAULT_CURRENT_MACHINE_PATH = (
     Path(__file__).resolve().parents[3] / "infra" / "current-machine"
@@ -179,6 +179,15 @@ def require_sections(raw: dict[str, Any], config_path: Path, required: list[str]
         raise ValueError(f"Recipe missing required sections in {config_path}: {joined}")
 
 
+def pop_async_upload_config(ray_raw: dict[str, Any]) -> AsyncUploadConfig | None:
+    raw_block = ray_raw.pop("async_upload", None)
+    if raw_block is None:
+        return None
+    if not isinstance(raw_block, dict):
+        raise ValueError("ray.async_upload must be a mapping")
+    return AsyncUploadConfig(**raw_block)
+
+
 def build_op_config(raw: dict[str, Any]) -> OpConfig:
     if not isinstance(raw, dict):
         raise ValueError("Each op must be a mapping")
@@ -206,4 +215,5 @@ __all__ = [
     "expand_recipe_values",
     "require_sections",
     "build_op_config",
+    "pop_async_upload_config",
 ]

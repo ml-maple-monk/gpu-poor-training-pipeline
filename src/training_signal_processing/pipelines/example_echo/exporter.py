@@ -24,7 +24,7 @@ class EchoExporter(RayExporter):
                 "message": result.message,
                 "echoed_at": result.echoed_at,
             }
-            self.object_store.write_bytes(
+            self._put_bytes(
                 result.output_r2_key,
                 json.dumps(payload, sort_keys=True).encode("utf-8"),
             )

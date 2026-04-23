@@ -58,12 +58,14 @@ def build_recipe_config(raw: dict[str, Any], config_path: Path) -> RecipeConfig:
     validate_recipe_constraints(raw)
     ops = [config_loading.build_op_config(item) for item in raw["ops"]]
     family_specs = [ParquetFamilySpec.from_dict(item) for item in raw["input"]["family_specs"]]
+    ray_raw = dict(raw["ray"])
+    async_upload = config_loading.pop_async_upload_config(ray_raw)
     return RecipeConfig(
         run_name=raw["run"]["name"],
         config_version=int(raw["run"]["config_version"]),
         ssh=SshConfig(**raw["ssh"]),
         remote=RemoteRuntimeConfig(**raw["remote"]),
-        ray=RayConfig(**raw["ray"]),
+        ray=RayConfig(**ray_raw, async_upload=async_upload),
         r2=R2Config(**raw["r2"]),
         input=InputConfig(
             source_prefix=str(raw["input"]["source_prefix"]),

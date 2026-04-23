@@ -22,11 +22,19 @@ class RemoteRuntimeConfig:
 
 
 @dataclass
+class AsyncUploadConfig:
+    enabled: bool = True
+    max_in_flight: int = 8
+    max_queued: int = 32
+
+
+@dataclass
 class RayConfig:
     executor_type: str
     batch_size: int
     concurrency: int
     target_num_blocks: int
+    async_upload: AsyncUploadConfig | None = None
 
 
 @dataclass(frozen=True)
