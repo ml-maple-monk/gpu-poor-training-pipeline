@@ -4,7 +4,6 @@ import json
 import logging
 import math
 import os
-import re
 import sys
 from abc import ABC, abstractmethod
 
@@ -35,13 +34,11 @@ class MlflowExecutionLogger(StructuredExecutionLogger):
         self,
         tracking: RuntimeTrackingContext,
         logger_name: str,
-        artifact_root: str = "execution_logs",
     ) -> None:
         super().__init__(logger_name)
         if not tracking.enabled:
             raise ValueError("MlflowExecutionLogger requires tracking.enabled=true.")
         self.tracking = tracking
-        self.artifact_root = artifact_root.strip("/") or "execution_logs"
         self.mlflow_run_id = ""
         self.event_count = 0
         self.level_counts: dict[str, int] = {}
@@ -88,17 +85,6 @@ class MlflowExecutionLogger(StructuredExecutionLogger):
             self.client.set_tag(self.mlflow_run_id, "last_execution_op_name", event.op_name)
         if event.batch_id:
             self.client.set_tag(self.mlflow_run_id, "last_execution_batch_id", event.batch_id)
-        self.client.log_dict(
-            self.mlflow_run_id,
-            event.to_dict(),
-            self.build_artifact_path(event),
-        )
-
-    def build_artifact_path(self, event: ExecutionLogEvent) -> str:
-        safe_code = re.sub(r"[^a-zA-Z0-9._-]+", "_", event.code).strip("_")
-        if not safe_code:
-            safe_code = "event"
-        return f"{self.artifact_root}/{self.event_count:05d}-{safe_code}.json"
 
     def load_mlflow_client(self):  # type: ignore[no-untyped-def]
         import mlflow
@@ -396,15 +382,20 @@ class MlflowProgressTracker(ProgressTrackerActor):
 
     def log_run_started(self, total_items: int, uploaded_items: int) -> str:
         if self.mlflow_enabled:
-            self.mlflow.log_params(
-                {
-                    "pipeline_run_id": self.pipeline_run_id,
-                    "total_items": total_items,
-                    "uploaded_items": uploaded_items,
-                    "batch_size": self.tracking.batch_size,
-                    "concurrency": self.tracking.concurrency,
-                }
-            )
+            params: dict[str, int | float | str] = {
+                "pipeline_run_id": self.pipeline_run_id,
+                "total_items": total_items,
+                "uploaded_items": uploaded_items,
+                "batch_size": self.tracking.batch_size,
+                "concurrency": self.tracking.concurrency,
+            }
+            if self.tracking.target_num_blocks is not None:
+                params["target_num_blocks"] = self.tracking.target_num_blocks
+            if self.tracking.ocr_worker_num_gpus is not None:
+                params["ocr_worker_num_gpus"] = self.tracking.ocr_worker_num_gpus
+            if self.tracking.ocr_worker_num_cpus is not None:
+                params["ocr_worker_num_cpus"] = self.tracking.ocr_worker_num_cpus
+            self.mlflow.log_params(params)
             self.mlflow.set_tags(
                 {
                     "status": "running",

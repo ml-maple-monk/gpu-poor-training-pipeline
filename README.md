@@ -172,7 +172,7 @@ Examples of hard-coded categories worth escalating:
 - any experiment-critical behavior that can only be changed by editing logic
 
 Concrete repo example:
-- OCR timeout currently falls back to `OCR_CONVERSION_TIMEOUT_SEC = 300` in [src/training_signal_processing/custom_ops/user_ops.py](/home/geeyang/workspace/training-signal-processing/src/training_signal_processing/custom_ops/user_ops.py)
+- OCR timeout currently falls back to `OCR_CONVERSION_TIMEOUT_SEC = 1800` in [src/training_signal_processing/custom_ops/user_ops.py](/home/geeyang/workspace/training-signal-processing/src/training_signal_processing/custom_ops/user_ops.py)
 
 ## Verification
 

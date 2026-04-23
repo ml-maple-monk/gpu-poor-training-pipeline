@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-import pyarrow as pa
-
 from ..models import ExecutionLogEvent, OpTestResult
 from ..runtime.dataset import (
     DatasetBuilder,
@@ -120,16 +118,11 @@ class RayOpTestHarness(OpTestHarness):
     def _apply_op(self, dataset: DatasetHandle, op: Op, batch_size: int) -> DatasetHandle:
         if not isinstance(dataset, RayDatasetHandle):
             raise TypeError("RayOpTestHarness requires a RayDatasetHandle dataset.")
-
-        def mapper(table: pa.Table) -> pa.Table:
-            return pa.Table.from_pylist(op.process_batch(table.to_pylist()))
-
-        next_dataset = dataset.unwrap().map_batches(
-            mapper,
+        return self.dataset_builder.apply_op_transform(
+            dataset,
+            op=op,
             batch_size=batch_size,
-            batch_format="pyarrow",
         )
-        return RayDatasetHandle(next_dataset)
 
     def _collect_rows(self, dataset: DatasetHandle, batch_size: int) -> Batch:
         rows: Batch = []

@@ -15,12 +15,12 @@ from ...runtime.observability import ExecutionLogger
 from ...runtime.resume import ResumeLedger
 from ...storage import R2ObjectStore
 from ...utils import join_s3_key
-from .exporter import TokenJsonlExporter
+from .exporter import YoutubeTranscriptExporter
 from .models import RecipeConfig
-from .resume import TokenizerResumeLedger
+from .resume import YoutubeAsrResumeLedger
 
 
-class TokenizerPipelineRuntimeAdapter(PipelineRuntimeAdapter):
+class YoutubeAsrPipelineRuntimeAdapter(PipelineRuntimeAdapter):
     def __init__(
         self,
         *,
@@ -55,7 +55,7 @@ class TokenizerPipelineRuntimeAdapter(PipelineRuntimeAdapter):
 
     def get_artifact_layout(self) -> RunArtifactLayout:
         return RunArtifactLayout(
-            source_root_key=self.config.input.source_prefix,
+            source_root_key=self.config.input.media_r2_prefix,
             output_root_key=join_s3_key(self.config.r2.output_prefix, self.bindings.run_id),
         )
 
@@ -84,10 +84,10 @@ class TokenizerPipelineRuntimeAdapter(PipelineRuntimeAdapter):
         return RegisteredOpRegistry(runtime_context=runtime_context)
 
     def build_exporter(self) -> Exporter:
-        return TokenJsonlExporter(self.object_store)
+        return YoutubeTranscriptExporter(self.object_store)
 
     def build_resume_ledger(self) -> ResumeLedger:
-        return TokenizerResumeLedger(config=self.config, object_store=self.object_store)
+        return YoutubeAsrResumeLedger(config=self.config, object_store=self.object_store)
 
     def resolve_completed_item_keys(self, completed_item_keys: set[str]) -> set[str]:
         if self.bindings.allow_overwrite:

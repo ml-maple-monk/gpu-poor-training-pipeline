@@ -13,6 +13,7 @@ __pycache__/
 .omc/
 .runtime/
 r2
+mlflow.db
 .cache/marker_output/
 .cache/marker_benchmark/
 .cache/marker_smoke_output/

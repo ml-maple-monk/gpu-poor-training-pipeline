@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import shlex
+import shutil
+import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -9,11 +11,12 @@ from ...runtime.submission import (
     ArtifactRef,
     ArtifactStore,
     BootstrapSpec,
+    LocalAsyncUploadSpec,
     PreparedRun,
     RemoteInvocationSpec,
     SubmissionAdapter,
 )
-from ...utils import compute_sha256_file, join_s3_key, utc_timestamp
+from ...utils import compute_sha256_file, join_s3_key, parse_env_file, utc_timestamp
 from .config import load_resolved_recipe_mapping
 from .models import PdfTask, RecipeConfig
 
@@ -34,12 +37,17 @@ class OcrSubmissionAdapter(SubmissionAdapter):
         run_id = utc_timestamp()
         pdf_root = Path(self.config.input.local_pdf_root).expanduser()
         pdf_paths = self.discover_pdf_paths(pdf_root)
+        manifest_rows = self.build_pdf_tasks(pdf_root, pdf_paths)
         input_manifest_key = self.build_control_key(run_id, "input_manifest.jsonl")
         config_object_key = self.build_control_key(run_id, "recipe.json")
-        uploaded_items = 0
+        async_upload: LocalAsyncUploadSpec | None = None
         if not dry_run:
-            manifest_rows = self.build_pdf_tasks(pdf_root, pdf_paths)
-            uploaded_items = self.upload_pdf_tasks(artifact_store, pdf_paths, manifest_rows)
+            async_upload = self.build_async_upload_spec(
+                artifact_store=artifact_store,
+                pdf_root=pdf_root,
+                pdf_paths=pdf_paths,
+                run_id=run_id,
+            )
             artifact_store.write_jsonl(
                 input_manifest_key,
                 [task.to_dict() for task in manifest_rows],
@@ -54,8 +62,9 @@ class OcrSubmissionAdapter(SubmissionAdapter):
             input_manifest_key=input_manifest_key,
             config_object_key=config_object_key,
             discovered_items=len(pdf_paths),
-            uploaded_items=uploaded_items,
+            uploaded_items=0,
             is_resume=False,
+            async_upload=async_upload,
         )
 
     def prepare_resume_run(self, artifact_store: ArtifactStore, run_id: str) -> PreparedRun:
@@ -92,6 +101,7 @@ class OcrSubmissionAdapter(SubmissionAdapter):
         discovered_items: int,
         uploaded_items: int,
         is_resume: bool,
+        async_upload: LocalAsyncUploadSpec | None = None,
     ) -> PreparedRun:
         return PreparedRun(
             run_id=run_id,
@@ -112,6 +122,7 @@ class OcrSubmissionAdapter(SubmissionAdapter):
             discovered_items=discovered_items,
             uploaded_items=uploaded_items,
             is_resume=is_resume,
+            async_upload=async_upload,
             metadata={
                 "pipeline_family": "ocr",
                 "input_manifest_key": input_manifest_key,
@@ -218,17 +229,97 @@ class OcrSubmissionAdapter(SubmissionAdapter):
             )
         return tasks
 
-    def upload_pdf_tasks(
+    def build_async_upload_spec(
         self,
+        *,
         artifact_store: ArtifactStore,
+        pdf_root: Path,
         pdf_paths: list[Path],
-        tasks: list[PdfTask],
-    ) -> int:
-        uploaded = 0
-        for pdf_path, task in zip(pdf_paths, tasks, strict=True):
-            artifact_store.upload_file(pdf_path, task.source_r2_key)
-            uploaded += 1
-        return uploaded
+        run_id: str,
+    ) -> LocalAsyncUploadSpec:
+        rclone_path = shutil.which("rclone")
+        if rclone_path is None:
+            raise RuntimeError(
+                "Local rclone is required for OCR input uploads. Install rclone before "
+                "submitting a non-dry-run OCR job."
+            )
+        file_list_path = self.write_upload_file_list(
+            run_id=run_id,
+            pdf_root=pdf_root,
+            pdf_paths=pdf_paths,
+        )
+        remote_name = "ocrinput"
+        destination = self.build_rclone_destination(
+            remote_name=remote_name,
+            bucket=artifact_store.bucket,
+        )
+        return LocalAsyncUploadSpec(
+            command=(
+                rclone_path,
+                "copy",
+                str(pdf_root),
+                destination,
+                "--files-from-raw",
+                str(file_list_path),
+                "--transfers",
+                "1",
+                "--checkers",
+                "1",
+            ),
+            cwd=str(pdf_root),
+            env=self.build_rclone_env(remote_name=remote_name),
+            cleanup_paths=(str(file_list_path),),
+        )
+
+    def write_upload_file_list(
+        self,
+        *,
+        run_id: str,
+        pdf_root: Path,
+        pdf_paths: list[Path],
+    ) -> Path:
+        handle = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f"ocr-upload-{run_id}-",
+            suffix=".txt",
+            delete=False,
+        )
+        with handle:
+            for pdf_path in pdf_paths:
+                handle.write(f"{pdf_path.relative_to(pdf_root).as_posix()}\n")
+        return Path(handle.name)
+
+    def build_rclone_destination(self, *, remote_name: str, bucket: str) -> str:
+        prefix = self.config.r2.raw_pdf_prefix.strip("/")
+        if prefix:
+            return f"{remote_name}:{bucket}/{prefix}"
+        return f"{remote_name}:{bucket}"
+
+    def build_rclone_env(self, *, remote_name: str) -> dict[str, str]:
+        config_values = parse_env_file(Path(self.config.r2.config_file).expanduser())
+        required_keys = (
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "AWS_DEFAULT_REGION",
+            "MLFLOW_S3_ENDPOINT_URL",
+        )
+        missing_keys = [key for key in required_keys if not config_values.get(key)]
+        if missing_keys:
+            raise ValueError(
+                "R2 config file is missing required rclone upload values: "
+                + ", ".join(missing_keys)
+            )
+        prefix = f"RCLONE_CONFIG_{remote_name.upper()}_"
+        return {
+            f"{prefix}TYPE": "s3",
+            f"{prefix}PROVIDER": "Cloudflare",
+            f"{prefix}ACCESS_KEY_ID": config_values["AWS_ACCESS_KEY_ID"],
+            f"{prefix}SECRET_ACCESS_KEY": config_values["AWS_SECRET_ACCESS_KEY"],
+            f"{prefix}REGION": config_values["AWS_DEFAULT_REGION"],
+            f"{prefix}ENDPOINT": config_values["MLFLOW_S3_ENDPOINT_URL"],
+            f"{prefix}NO_CHECK_BUCKET": "true",
+        }
 
     def build_control_key(self, run_id: str, name: str) -> str:
         return join_s3_key(self.build_run_root(run_id), f"control/{name}")

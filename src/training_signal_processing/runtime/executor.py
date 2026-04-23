@@ -214,6 +214,15 @@ class StreamingRayExecutor(Executor):
                 progress_reporter=progress_reporter,
                 phase="dataset_build_complete",
             )
+            dataset = self.apply_pipeline_transforms(
+                dataset_builder=dataset_builder,
+                dataset=dataset,
+                resolved_pipeline=resolved_pipeline,
+                execution=execution,
+                tracer=tracer,
+                logger=logger,
+                run_id=bindings.run_id,
+            )
             run_state = self.transition_run_phase(
                 run_state=run_state,
                 resume_ledger=resume_ledger,
@@ -221,13 +230,11 @@ class StreamingRayExecutor(Executor):
                 progress_reporter=progress_reporter,
                 phase="iter_batches_start",
             )
-            # DO NOT CHANGE THE EXECUTOR LOOP WITHOUT EXPLICIT USER APPROVAL.
-            for batch_index, input_batch in enumerate(
+            for batch_index, current_batch in enumerate(
                 dataset_builder.iter_batches(dataset, batch_size=execution.batch_size),
                 start=1,
             ):
                 batch_id = f"batch-{batch_index:05d}"
-                current_batch = list(input_batch)
                 if batch_index == 1:
                     run_state = self.transition_run_phase(
                         run_state=run_state,
@@ -238,19 +245,10 @@ class StreamingRayExecutor(Executor):
                         detail=f"batch_id={batch_id} input_rows={len(current_batch)}",
                     )
                 progress_reporter.start_batch(batch_id, batch_index, len(current_batch))
-                for op in resolved_pipeline.all_ops:
-                    current_batch = self.apply_op(
-                        op=op,
-                        batch_id=batch_id,
-                        batch=current_batch,
-                        tracer=tracer,
-                        logger=logger,
-                        progress_reporter=progress_reporter,
-                    )
                 export_result = exporter.export_batch(batch_id=batch_id, rows=current_batch)
                 self.validate_export_result(
                     batch_id=batch_id,
-                    input_row_count=len(input_batch),
+                    input_row_count=len(current_batch),
                     rows=current_batch,
                     output_keys=export_result.output_keys,
                     reported_batch_id=export_result.batch_id,
@@ -259,12 +257,12 @@ class StreamingRayExecutor(Executor):
                 batch_commit, run_state = resume_ledger.commit_batch(
                     run_state=run_state,
                     batch_index=batch_index,
-                    input_row_count=len(input_batch),
+                    input_row_count=len(current_batch),
                     rows=current_batch,
                 )
                 self.validate_batch_commit(
                     batch_id=batch_id,
-                    input_row_count=len(input_batch),
+                    input_row_count=len(current_batch),
                     output_row_count=len(current_batch),
                     reported_batch_id=batch_commit.batch_id,
                     reported_input_row_count=batch_commit.input_row_count,
@@ -274,8 +272,8 @@ class StreamingRayExecutor(Executor):
                 progress_reporter.commit_batch(batch_commit, run_state)
                 exported_batches += 1
                 output_keys.extend(export_result.output_keys)
-            exporter.finalize_run(run_state)
             run_state = resume_ledger.mark_run_finished(run_state)
+            exporter.finalize_run(run_state)
             monitor.finish_run(run_state)
             progress_tracker.log_run_finished(run_state.status)
             progress_reporter.finish_run(run_state.status)
@@ -395,6 +393,63 @@ class StreamingRayExecutor(Executor):
         )
         return rendered_batch
 
+    def apply_pipeline_transforms(
+        self,
+        *,
+        dataset_builder: DatasetBuilder,
+        dataset,
+        resolved_pipeline,
+        execution: RayConfig,
+        tracer: StructuredTracer,
+        logger: ExecutionLogger,
+        run_id: str,
+    ):
+        current_dataset = dataset
+        for op in resolved_pipeline.all_ops:
+            resources = self.resolve_op_transform_resources(op=op, execution=execution)
+            tracer.trace_before_op(op)
+            logger.log_event(
+                ExecutionLogEvent(
+                    level="INFO",
+                    code="executor.dataset.transform",
+                    message=f"Scheduled dataset transform for op '{op.name}'.",
+                    run_id=run_id,
+                    op_name=op.name,
+                    details={
+                        "batch_size": execution.batch_size,
+                        **resources,
+                    },
+                )
+            )
+            current_dataset = dataset_builder.apply_op_transform(
+                current_dataset,
+                op=op,
+                batch_size=execution.batch_size,
+                concurrency=resources["concurrency"],
+                num_gpus=resources["num_gpus"],
+                num_cpus=resources["num_cpus"],
+            )
+            tracer.trace_after_op(op)
+        return current_dataset
+
+    def resolve_op_transform_resources(
+        self,
+        *,
+        op: Op,
+        execution: RayConfig,
+    ) -> dict[str, int | float | None]:
+        if op.name == "marker_ocr":
+            return {
+                "concurrency": execution.concurrency,
+                "num_gpus": execution.ocr_worker_num_gpus,
+                "num_cpus": float(execution.ocr_worker_num_cpus),
+            }
+        return {
+            "concurrency": None,
+            "num_gpus": None,
+            "num_cpus": None,
+        }
+
     def validate_contract(
         self,
         *,
@@ -412,6 +467,10 @@ class StreamingRayExecutor(Executor):
             raise PipelineContractError("RayConfig.batch_size must be positive.")
         if execution.concurrency <= 0:
             raise PipelineContractError("RayConfig.concurrency must be positive.")
+        if execution.ocr_worker_num_gpus <= 0:
+            raise PipelineContractError("RayConfig.ocr_worker_num_gpus must be positive.")
+        if execution.ocr_worker_num_cpus <= 0:
+            raise PipelineContractError("RayConfig.ocr_worker_num_cpus must be positive.")
         if not tracking.run_name.strip():
             raise PipelineContractError("RuntimeTrackingContext.run_name must be non-empty.")
         if not artifact_layout.source_root_key.strip():

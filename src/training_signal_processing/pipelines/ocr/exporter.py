@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from ...models import ExportBatchResult, RunState
 from ...runtime.exporter import RayExporter
 from ...storage import ObjectStore
@@ -15,17 +17,20 @@ class OcrMarkdownExporter(RayExporter):
         output_keys: list[str] = []
         for row in rows:
             result = DocumentResult.from_dict(row)
-            if result.status != "success":
-                continue
-            if not result.markdown_r2_key.strip():
-                raise ValueError("Successful OCR rows must include markdown_r2_key.")
-            if not result.markdown_text:
-                raise ValueError("Successful OCR rows must include markdown_text.")
-            self.object_store.write_bytes(
-                result.markdown_r2_key,
-                result.markdown_text.encode("utf-8"),
-            )
-            output_keys.append(result.markdown_r2_key)
+            try:
+                if result.status != "success":
+                    continue
+                if not result.markdown_r2_key.strip():
+                    raise ValueError("Successful OCR rows must include markdown_r2_key.")
+                if not result.markdown_text:
+                    raise ValueError("Successful OCR rows must include markdown_text.")
+                self.object_store.write_bytes(
+                    result.markdown_r2_key,
+                    result.markdown_text.encode("utf-8"),
+                )
+                output_keys.append(result.markdown_r2_key)
+            finally:
+                self.cleanup_staged_pdf(result.staged_pdf_path)
         return ExportBatchResult(
             batch_id=batch_id,
             row_count=len(rows),
@@ -37,3 +42,11 @@ class OcrMarkdownExporter(RayExporter):
             join_s3_key(run_state.output_root_key, "run.json"),
             run_state.to_dict(),
         )
+
+    def cleanup_staged_pdf(self, staged_pdf_path: str) -> None:
+        if not staged_pdf_path.strip():
+            return
+        try:
+            Path(staged_pdf_path).unlink(missing_ok=True)
+        except OSError:
+            return

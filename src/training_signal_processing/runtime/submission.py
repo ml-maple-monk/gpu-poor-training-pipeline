@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 from abc import ABC, abstractmethod
@@ -62,6 +63,22 @@ class RemoteInvocationSpec:
 
 
 @dataclass(frozen=True)
+class LocalAsyncUploadSpec:
+    command: tuple[str, ...]
+    cwd: str = ""
+    env: dict[str, str] = field(default_factory=dict)
+    cleanup_paths: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "command": list(self.command),
+            "cwd": self.cwd,
+            "env_keys": sorted(self.env),
+            "cleanup_paths": list(self.cleanup_paths),
+        }
+
+
+@dataclass(frozen=True)
 class PreparedRun:
     run_id: str
     remote_root: str
@@ -72,6 +89,7 @@ class PreparedRun:
     discovered_items: int = 0
     uploaded_items: int = 0
     is_resume: bool = False
+    async_upload: LocalAsyncUploadSpec | None = None
     metadata: dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
@@ -85,6 +103,7 @@ class PreparedRun:
             "discovered_items": self.discovered_items,
             "uploaded_items": self.uploaded_items,
             "is_resume": self.is_resume,
+            "async_upload": self.async_upload.to_dict() if self.async_upload else None,
             "metadata": dict(self.metadata),
         }
 
@@ -99,6 +118,7 @@ class PreparedRun:
             "discovered_items": self.discovered_items,
             "uploaded_items": self.uploaded_items,
             "is_resume": self.is_resume,
+            "has_async_upload": self.async_upload is not None,
             "metadata": dict(self.metadata),
         }
 
@@ -189,6 +209,76 @@ class SubprocessCommandRunner(CommandRunner):
             detail = result.stderr.strip() or result.stdout.strip()
             raise RuntimeError(f"Command failed: {rendered}\n{detail}")
         return CommandOutput(stdout=result.stdout, stderr=result.stderr)
+
+
+class AsyncCommandHandle(ABC):
+    @abstractmethod
+    def poll(self) -> int | None:
+        raise NotImplementedError
+
+    @abstractmethod
+    def wait(self) -> CommandOutput:
+        raise NotImplementedError
+
+    @abstractmethod
+    def terminate(self) -> None:
+        raise NotImplementedError
+
+
+class AsyncCommandRunner(ABC):
+    @abstractmethod
+    def start(
+        self,
+        command: list[str],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> AsyncCommandHandle:
+        raise NotImplementedError
+
+
+class SubprocessAsyncCommandHandle(AsyncCommandHandle):
+    def __init__(self, process: subprocess.Popen[str], command: list[str]) -> None:
+        self.process = process
+        self.command = command
+
+    def poll(self) -> int | None:
+        return self.process.poll()
+
+    def wait(self) -> CommandOutput:
+        stdout, stderr = self.process.communicate()
+        if self.process.returncode != 0:
+            rendered = shlex.join(self.command)
+            detail = stderr.strip() or stdout.strip()
+            raise RuntimeError(f"Command failed: {rendered}\n{detail}")
+        return CommandOutput(stdout=stdout, stderr=stderr)
+
+    def terminate(self) -> None:
+        if self.process.poll() is None:
+            self.process.terminate()
+
+
+class SubprocessAsyncCommandRunner(AsyncCommandRunner):
+    def start(
+        self,
+        command: list[str],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> AsyncCommandHandle:
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=str(cwd) if cwd is not None else None,
+                env={**os.environ, **(env or {})},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except FileNotFoundError as exc:
+            rendered = shlex.join(command)
+            raise RuntimeError(f"Async command executable not found: {rendered}") from exc
+        return SubprocessAsyncCommandHandle(process, command)
 
 
 class ArtifactStore(ABC):
@@ -406,10 +496,12 @@ class SubmissionCoordinator:
         adapter: SubmissionAdapter,
         artifact_store: ArtifactStore,
         remote_transport: RemoteTransport,
+        async_command_runner: AsyncCommandRunner | None = None,
     ) -> None:
         self.adapter = adapter
         self.artifact_store = artifact_store
         self.remote_transport = remote_transport
+        self.async_command_runner = async_command_runner or SubprocessAsyncCommandRunner()
 
     def submit(
         self,
@@ -436,13 +528,45 @@ class SubmissionCoordinator:
             remote_root=prepared_run.remote_root,
             spec=prepared_run.bootstrap,
         )
-        remote_output = self.remote_transport.execute(
-            remote_root=prepared_run.remote_root,
-            spec=prepared_run.invocation,
-        )
-        return SubmissionResult(
-            mode="executed",
-            prepared_run=prepared_run,
-            transport_details=transport_details,
-            remote_summary=self.adapter.parse_remote_summary(remote_output.stdout),
-        )
+        upload_handle: AsyncCommandHandle | None = None
+        try:
+            if prepared_run.async_upload is not None:
+                upload_handle = self.async_command_runner.start(
+                    list(prepared_run.async_upload.command),
+                    cwd=(
+                        Path(prepared_run.async_upload.cwd)
+                        if prepared_run.async_upload.cwd
+                        else None
+                    ),
+                    env=prepared_run.async_upload.env,
+                )
+            remote_output = self.remote_transport.execute(
+                remote_root=prepared_run.remote_root,
+                spec=prepared_run.invocation,
+            )
+            if upload_handle is not None:
+                upload_handle.wait()
+            return SubmissionResult(
+                mode="executed",
+                prepared_run=prepared_run,
+                transport_details=transport_details,
+                remote_summary=self.adapter.parse_remote_summary(remote_output.stdout),
+            )
+        except Exception:
+            if upload_handle is not None and upload_handle.poll() is None:
+                upload_handle.terminate()
+                try:
+                    upload_handle.wait()
+                except Exception:
+                    pass
+            raise
+        finally:
+            if prepared_run.async_upload is not None:
+                self.cleanup_local_paths(prepared_run.async_upload.cleanup_paths)
+
+    def cleanup_local_paths(self, paths: tuple[str, ...]) -> None:
+        for raw_path in paths:
+            try:
+                Path(raw_path).unlink(missing_ok=True)
+            except OSError:
+                continue

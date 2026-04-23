@@ -8,7 +8,7 @@ import pyarrow as pa
 import ray
 
 from ..models import RayConfig
-from ..ops.base import Batch
+from ..ops.base import Batch, Op
 
 # WARNING TO OTHER AGENTS: DO NOT CHANGE ANYTHING IN THIS FILE WITHOUT EXPLICIT USER APPROVAL.
 
@@ -40,6 +40,19 @@ class DatasetBuilder(ABC):
     def iter_batches(self, dataset: DatasetHandle, batch_size: int) -> Iterable[Batch]:
         raise NotImplementedError
 
+    @abstractmethod
+    def apply_op_transform(
+        self,
+        dataset: DatasetHandle,
+        *,
+        op: Op,
+        batch_size: int,
+        concurrency: int | None = None,
+        num_gpus: float | None = None,
+        num_cpus: float | None = None,
+    ) -> DatasetHandle:
+        raise NotImplementedError
+
 
 class RayDatasetBuilder(DatasetBuilder):
     """Ray-only dataset contract shared by the executor and the op test harness."""
@@ -59,6 +72,45 @@ class RayDatasetBuilder(DatasetBuilder):
             if not isinstance(batch, pa.Table):
                 raise TypeError("Expected pyarrow.Table batches from the Ray dataset.")
             yield batch.to_pylist()
+
+    def apply_op_transform(
+        self,
+        dataset: DatasetHandle,
+        *,
+        op: Op,
+        batch_size: int,
+        concurrency: int | None = None,
+        num_gpus: float | None = None,
+        num_cpus: float | None = None,
+    ) -> DatasetHandle:
+        if batch_size <= 0:
+            raise ValueError("RayDatasetBuilder batch_size must be positive.")
+        if not isinstance(dataset, RayDatasetHandle):
+            raise TypeError("RayDatasetBuilder requires a RayDatasetHandle dataset.")
+
+        def mapper(table: pa.Table) -> pa.Table:
+            rendered = op.process_batch(table.to_pylist())
+            if not isinstance(rendered, list):
+                raise TypeError(
+                    f"Op '{op.name}' must return a list batch, got {type(rendered).__name__}."
+                )
+            return pa.Table.from_pylist(rendered)
+
+        map_kwargs: dict[str, object] = {
+            "batch_size": batch_size,
+            "batch_format": "pyarrow",
+        }
+        if concurrency is not None:
+            map_kwargs["concurrency"] = concurrency
+        if num_gpus is not None:
+            map_kwargs["num_gpus"] = num_gpus
+        if num_cpus is not None:
+            map_kwargs["num_cpus"] = num_cpus
+        next_dataset = dataset.unwrap().map_batches(
+            mapper,
+            **map_kwargs,
+        )
+        return RayDatasetHandle(next_dataset)
 
     @abstractmethod
     def build_ray_dataset(self, rows: Batch) -> Any:

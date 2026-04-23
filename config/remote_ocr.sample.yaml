@@ -15,8 +15,10 @@ remote:
 ray:
   executor_type: ray
   batch_size: 1
-  concurrency: 1
+  concurrency: 2
   target_num_blocks: 32
+  ocr_worker_num_gpus: 0.5
+  ocr_worker_num_cpus: 3
 
 r2:
   config_file: r2

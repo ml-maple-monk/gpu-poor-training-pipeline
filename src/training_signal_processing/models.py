@@ -27,6 +27,8 @@ class RayConfig:
     batch_size: int
     concurrency: int
     target_num_blocks: int
+    ocr_worker_num_gpus: float = 1.0
+    ocr_worker_num_cpus: int = 1
 
 
 @dataclass
@@ -119,6 +121,9 @@ class RuntimeTrackingContext:
     executor_type: str
     batch_size: int
     concurrency: int
+    target_num_blocks: int | None = None
+    ocr_worker_num_gpus: float | None = None
+    ocr_worker_num_cpus: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

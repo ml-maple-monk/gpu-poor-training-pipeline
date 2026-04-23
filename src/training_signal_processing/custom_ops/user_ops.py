@@ -3,7 +3,7 @@ from __future__ import annotations
 import multiprocessing as mp
 from pathlib import Path
 from tempfile import NamedTemporaryFile
-from time import perf_counter
+from time import perf_counter, sleep
 
 from ..models import ExecutionLogEvent
 from ..ops.base import Batch
@@ -31,7 +31,8 @@ Design contract:
   to add a new op.
 """
 
-OCR_CONVERSION_TIMEOUT_SEC = 300
+OCR_CONVERSION_TIMEOUT_SEC = 1800
+SOURCE_OBJECT_POLL_INTERVAL_SEC = 2.0
 
 
 class MarkerConversionError(RuntimeError):
@@ -65,7 +66,7 @@ def get_marker_mp_context() -> mp.context.BaseContext:
 def _run_marker_conversion(
     pdf_path: str,
     options: dict[str, object],
-    result_queue: mp.Queue,
+    result_sender: object,
 ) -> None:
     diagnostics = build_marker_diagnostics(options)
     try:
@@ -85,7 +86,7 @@ def _run_marker_conversion(
         )
         rendered = converter(pdf_path)
         markdown_text, _, _ = text_from_rendered(rendered)
-        result_queue.put(
+        result_sender.send(
             {
                 "status": "success",
                 "markdown_text": markdown_text,
@@ -93,44 +94,49 @@ def _run_marker_conversion(
             }
         )
     except Exception as exc:
-        result_queue.put(
+        result_sender.send(
             {
                 "status": "failed",
                 "error_message": str(exc),
                 "diagnostics": diagnostics,
             }
         )
+    finally:
+        close_sender = getattr(result_sender, "close", None)
+        if callable(close_sender):
+            close_sender()
 
 
-def convert_pdf_bytes_with_timeout(
-    pdf_bytes: bytes,
+def convert_pdf_path_with_timeout(
+    pdf_path: Path,
     options: dict[str, object],
 ) -> tuple[str, dict[str, object]]:
-    with NamedTemporaryFile(suffix=".pdf", delete=False) as handle:
-        handle.write(pdf_bytes)
-        temp_path = Path(handle.name)
     mp_context = get_marker_mp_context()
-    result_queue = mp_context.Queue()
+    result_receiver, result_sender = mp_context.Pipe(duplex=False)
     timeout_sec = int(options.get("timeout_sec", OCR_CONVERSION_TIMEOUT_SEC))
     process = mp_context.Process(
         target=_run_marker_conversion,
-        args=(str(temp_path), options, result_queue),
+        args=(str(pdf_path), options, result_sender),
     )
     try:
         process.start()
-        process.join(timeout=timeout_sec)
-        if process.is_alive():
+        if not result_receiver.poll(timeout_sec):
             process.terminate()
             process.join(timeout=5)
             raise MarkerConversionError(
                 f"Marker OCR conversion timed out after {timeout_sec} seconds.",
                 diagnostics={"timeout_sec": timeout_sec},
             )
-        if result_queue.empty():
+        try:
+            payload = result_receiver.recv()
+        except EOFError as exc:
             raise MarkerConversionError(
                 "Marker OCR conversion exited without returning a result.",
-            )
-        payload = result_queue.get()
+            ) from exc
+        process.join(timeout=5)
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
         diagnostics = (
             dict(payload["diagnostics"])
             if isinstance(payload.get("diagnostics"), dict)
@@ -143,11 +149,46 @@ def convert_pdf_bytes_with_timeout(
             )
         return str(payload.get("markdown_text", "")), diagnostics
     finally:
-        if hasattr(result_queue, "close"):
-            result_queue.close()
-        if hasattr(result_queue, "join_thread"):
-            result_queue.join_thread()
+        close_receiver = getattr(result_receiver, "close", None)
+        if callable(close_receiver):
+            close_receiver()
+        close_sender = getattr(result_sender, "close", None)
+        if callable(close_sender):
+            close_sender()
+
+
+def stage_pdf_bytes_for_ocr(pdf_bytes: bytes) -> Path:
+    with NamedTemporaryFile(suffix=".pdf", delete=False) as handle:
+        handle.write(pdf_bytes)
+        return Path(handle.name)
+
+
+def convert_pdf_bytes_with_timeout(
+    pdf_bytes: bytes,
+    options: dict[str, object],
+) -> tuple[str, dict[str, object]]:
+    temp_path = stage_pdf_bytes_for_ocr(pdf_bytes)
+    try:
+        return convert_pdf_path_with_timeout(temp_path, options)
+    finally:
         temp_path.unlink(missing_ok=True)
+
+
+def wait_for_source_object(
+    object_store: object,
+    *,
+    key: str,
+    timeout_sec: int,
+) -> None:
+    deadline = perf_counter() + timeout_sec
+    while perf_counter() < deadline:
+        if object_store.exists(key):
+            return
+        remaining = deadline - perf_counter()
+        if remaining <= 0:
+            break
+        sleep(min(SOURCE_OBJECT_POLL_INTERVAL_SEC, remaining))
+    raise TimeoutError(f"OCR source object did not appear within {timeout_sec} seconds: {key}")
 
 
 class IdentityPreviewOp(BatchTransformOp):
@@ -205,22 +246,38 @@ class MarkerOcrDocumentOp(MarkerOcrMapper):
         started_at = utc_isoformat()
         started_clock = perf_counter()
         diagnostics = build_marker_diagnostics(dict(self.options))
+        timeout_sec = int(self.options.get("timeout_sec", OCR_CONVERSION_TIMEOUT_SEC))
+        staged_pdf_path = ""
         try:
+            object_store = runtime.get_object_store()
             self.log_runtime_event(
                 runtime,
                 code="ocr.pdf.read.start",
                 message="Starting PDF read for OCR.",
                 details={"source_r2_key": str(row["source_r2_key"]), "diagnostics": diagnostics},
             )
-            pdf_bytes = runtime.get_object_store().read_bytes(str(row["source_r2_key"]))
+            wait_for_source_object(
+                object_store,
+                key=str(row["source_r2_key"]),
+                timeout_sec=timeout_sec,
+            )
+            diagnostics["source_object_ready"] = True
+            pdf_bytes = object_store.read_bytes(str(row["source_r2_key"]))
             diagnostics["pdf_bytes_loaded"] = len(pdf_bytes)
+            staged_pdf_path = str(stage_pdf_bytes_for_ocr(pdf_bytes))
+            diagnostics["staged_pdf_path"] = staged_pdf_path
             self.log_runtime_event(
                 runtime,
                 code="ocr.converter.init.start",
                 message="Starting OCR converter process.",
                 details={"diagnostics": diagnostics},
             )
-            markdown_text, conversion_diagnostics = self.convert_pdf_bytes(pdf_bytes)
+            elapsed_sec = perf_counter() - started_clock
+            remaining_timeout_sec = max(int(timeout_sec - elapsed_sec), 1)
+            markdown_text, conversion_diagnostics = self.convert_pdf_file(
+                Path(staged_pdf_path),
+                timeout_sec=remaining_timeout_sec,
+            )
             diagnostics.update(conversion_diagnostics)
             status = "success"
             error_message = ""
@@ -255,11 +312,23 @@ class MarkerOcrDocumentOp(MarkerOcrMapper):
             "duration_sec": perf_counter() - started_clock,
             "marker_exit_code": marker_exit_code,
             "markdown_text": markdown_text,
+            "staged_pdf_path": staged_pdf_path,
             "diagnostics": diagnostics,
         }
 
     def convert_pdf_bytes(self, pdf_bytes: bytes) -> tuple[str, dict[str, object]]:
         return convert_pdf_bytes_with_timeout(pdf_bytes, dict(self.options))
+
+    def convert_pdf_file(
+        self,
+        pdf_path: Path,
+        *,
+        timeout_sec: int,
+    ) -> tuple[str, dict[str, object]]:
+        return convert_pdf_path_with_timeout(
+            pdf_path,
+            {**dict(self.options), "timeout_sec": timeout_sec},
+        )
 
     def log_runtime_event(
         self,

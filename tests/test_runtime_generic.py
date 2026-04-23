@@ -57,6 +57,55 @@ class SimpleDatasetBuilder(DatasetBuilder):
         for index in range(0, len(rows), batch_size):
             yield rows[index : index + batch_size]
 
+    def apply_op_transform(
+        self,
+        dataset: DatasetHandle,
+        *,
+        op,
+        batch_size: int,
+        concurrency: int | None = None,
+        num_gpus: float | None = None,
+        num_cpus: float | None = None,
+    ) -> DatasetHandle:
+        rows = dataset.unwrap()
+        rendered_rows: list[dict[str, object]] = []
+        for index in range(0, len(rows), batch_size):
+            rendered_rows.extend(op.process_batch(rows[index : index + batch_size]))
+        return SimpleDatasetHandle(rendered_rows)
+
+
+class RecordingDatasetBuilder(SimpleDatasetBuilder):
+    def __init__(self) -> None:
+        self.transform_calls: list[dict[str, object]] = []
+
+    def apply_op_transform(
+        self,
+        dataset: DatasetHandle,
+        *,
+        op,
+        batch_size: int,
+        concurrency: int | None = None,
+        num_gpus: float | None = None,
+        num_cpus: float | None = None,
+    ) -> DatasetHandle:
+        self.transform_calls.append(
+            {
+                "op_name": op.name,
+                "batch_size": batch_size,
+                "concurrency": concurrency,
+                "num_gpus": num_gpus,
+                "num_cpus": num_cpus,
+            }
+        )
+        return super().apply_op_transform(
+            dataset,
+            op=op,
+            batch_size=batch_size,
+            concurrency=concurrency,
+            num_gpus=num_gpus,
+            num_cpus=num_cpus,
+        )
+
 
 class PrepareGenericOp(MapperOp):
     op_name = "test_prepare_generic"
@@ -93,7 +142,10 @@ class FakeExporter(Exporter):
         return ExportBatchResult(
             batch_id=batch_id,
             row_count=len(rows),
-            output_keys=[f"memory://{row['id']}" for row in rows],
+            output_keys=[
+                f"memory://{row.get('id') or row.get('relative_path') or index}"
+                for index, row in enumerate(rows, start=1)
+            ],
         )
 
     def finalize_run(self, run_state: RunState) -> None:
@@ -222,6 +274,8 @@ class FakePipelineAdapter(PipelineRuntimeAdapter):
             batch_size=1,
             concurrency=1,
             target_num_blocks=1,
+            ocr_worker_num_gpus=1.0,
+            ocr_worker_num_cpus=4,
         )
 
     def get_tracking_context(self) -> RuntimeTrackingContext:
@@ -309,14 +363,13 @@ def test_streaming_executor_runs_with_fake_pipeline_adapter(capsys) -> None:
     assert summary["exported_batches"] == 2
     assert summary["output_keys"] == ["memory://row-a", "memory://row-b"]
     assert adapter.exporter.finalized_run_state is not None
-    assert adapter.exporter.finalized_run_state.status == "running"
+    assert adapter.exporter.finalized_run_state.status == "success"
     assert adapter.resume_ledger.run_state is not None
     assert adapter.resume_ledger.run_state.status == "success"
     assert "[run] run_id=fake-run-001" in captured.out
     assert "[phase] run_id=fake-run-001 phase=dataset_build_start" in captured.out
     assert "[phase] run_id=fake-run-001 phase=iter_batches_start" in captured.out
     assert "[batch:start] batch_id=batch-00001" in captured.out
-    assert "[op:start] batch_id=batch-00001 op=test_prepare_generic" in captured.out
     assert "[batch:commit] batch_id=batch-00002" in captured.out
     assert "[run:finish] run_id=fake-run-001 status=success" in captured.out
     assert "run fake-run-001:" in captured.err
@@ -346,7 +399,14 @@ def test_configured_ray_dataset_builder_clamps_target_num_blocks(monkeypatch) ->
         lambda rows: FakeDataset(),
     )
     builder = ConfiguredRayDatasetBuilder(
-        RayConfig(executor_type="ray", batch_size=1, concurrency=1, target_num_blocks=32)
+        RayConfig(
+            executor_type="ray",
+            batch_size=1,
+            concurrency=1,
+            target_num_blocks=32,
+            ocr_worker_num_gpus=1.0,
+            ocr_worker_num_cpus=4,
+        )
     )
 
     builder.build_ray_dataset([{"id": "a"}, {"id": "b"}])
@@ -367,7 +427,14 @@ def test_configured_ray_dataset_builder_skips_repartition_for_single_row(monkeyp
         lambda rows: FakeDataset(),
     )
     builder = ConfiguredRayDatasetBuilder(
-        RayConfig(executor_type="ray", batch_size=1, concurrency=1, target_num_blocks=32)
+        RayConfig(
+            executor_type="ray",
+            batch_size=1,
+            concurrency=1,
+            target_num_blocks=32,
+            ocr_worker_num_gpus=1.0,
+            ocr_worker_num_cpus=4,
+        )
     )
 
     builder.build_ray_dataset([{"id": "a"}])
@@ -378,6 +445,9 @@ def test_configured_ray_dataset_builder_skips_repartition_for_single_row(monkeyp
 @pytest.fixture
 def ocr_runtime_context() -> OpRuntimeContext:
     class FakeObjectStore:
+        def exists(self, key: str) -> bool:
+            return True
+
         def read_bytes(self, key: str) -> bytes:
             return b"%PDF-fake"
 
@@ -409,8 +479,8 @@ def test_marker_ocr_process_row_success(
     op = MarkerOcrDocumentOp(force_ocr=True).bind_runtime(ocr_runtime_context)
     monkeypatch.setattr(
         op,
-        "convert_pdf_bytes",
-        lambda pdf_bytes: ("hello markdown", {"torch_cuda_available": False}),
+        "convert_pdf_file",
+        lambda pdf_path, timeout_sec: ("hello markdown", {"torch_cuda_available": False}),
     )
 
     result = op.process_row(row)
@@ -428,10 +498,10 @@ def test_marker_ocr_process_row_failure(
     row = build_prepared_ocr_row(ocr_runtime_context)
     op = MarkerOcrDocumentOp(force_ocr=True).bind_runtime(ocr_runtime_context)
 
-    def raise_error(pdf_bytes: bytes):
+    def raise_error(pdf_path: Path, timeout_sec: int):
         raise RuntimeError("converter exploded")
 
-    monkeypatch.setattr(op, "convert_pdf_bytes", raise_error)
+    monkeypatch.setattr(op, "convert_pdf_file", raise_error)
 
     result = op.process_row(row)
 
@@ -447,10 +517,10 @@ def test_marker_ocr_process_row_timeout(
     row = build_prepared_ocr_row(ocr_runtime_context)
     op = MarkerOcrDocumentOp(force_ocr=True).bind_runtime(ocr_runtime_context)
 
-    def raise_timeout(pdf_bytes: bytes):
+    def raise_timeout(pdf_path: Path, timeout_sec: int):
         raise TimeoutError("Marker OCR conversion timed out after 300 seconds.")
 
-    monkeypatch.setattr(op, "convert_pdf_bytes", raise_timeout)
+    monkeypatch.setattr(op, "convert_pdf_file", raise_timeout)
 
     result = op.process_row(row)
 
@@ -461,26 +531,31 @@ def test_marker_ocr_process_row_timeout(
 def test_convert_pdf_bytes_with_timeout_uses_spawn_context(monkeypatch) -> None:
     created: dict[str, object] = {}
 
-    class FakeQueue:
+    class FakeReceiver:
         def __init__(self) -> None:
-            self._payloads: list[dict[str, object]] = []
             self.closed = False
-            self.joined = False
 
-        def put(self, payload: dict[str, object]) -> None:
-            self._payloads.append(payload)
+        def poll(self, timeout: int) -> bool:
+            created["events"].append(("poll", timeout))
+            return "payload" in created
 
-        def empty(self) -> bool:
-            return not self._payloads
-
-        def get(self) -> dict[str, object]:
-            return self._payloads.pop(0)
+        def recv(self) -> dict[str, object]:
+            created["events"].append("recv")
+            created["payload_received"] = True
+            return created["payload"]
 
         def close(self) -> None:
             self.closed = True
 
-        def join_thread(self) -> None:
-            self.joined = True
+    class FakeSender:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def send(self, payload: dict[str, object]) -> None:
+            created["payload"] = payload
+
+        def close(self) -> None:
+            self.closed = True
 
     class FakeProcess:
         def __init__(self, *, target, args) -> None:
@@ -488,32 +563,41 @@ def test_convert_pdf_bytes_with_timeout_uses_spawn_context(monkeypatch) -> None:
             created["args"] = args
             created["started"] = False
             created["terminated"] = False
+            created["join_calls"] = []
+            self.alive = True
 
         def start(self) -> None:
             created["started"] = True
-            queue = created["args"][2]
-            queue.put(
+            sender = created["args"][2]
+            sender.send(
                 {
                     "status": "success",
-                    "markdown_text": "spawned markdown",
+                    "markdown_text": "spawned markdown" * 1024,
                     "diagnostics": {"mp_start_method": "spawn"},
                 }
             )
 
         def join(self, timeout=None) -> None:
-            created["join_timeout"] = timeout
+            created["join_calls"].append(timeout)
+            if created.get("payload_received"):
+                self.alive = False
 
         def is_alive(self) -> bool:
-            return False
+            return self.alive
 
         def terminate(self) -> None:
             created["terminated"] = True
+            self.alive = False
 
     class FakeContext:
-        def Queue(self) -> FakeQueue:
-            queue = FakeQueue()
-            created["queue"] = queue
-            return queue
+        def Pipe(self, duplex: bool = False) -> tuple[FakeReceiver, FakeSender]:
+            assert duplex is False
+            receiver = FakeReceiver()
+            sender = FakeSender()
+            created["receiver"] = receiver
+            created["sender"] = sender
+            created["events"] = []
+            return receiver, sender
 
         def Process(self, *, target, args) -> FakeProcess:
             return FakeProcess(target=target, args=args)
@@ -528,10 +612,105 @@ def test_convert_pdf_bytes_with_timeout_uses_spawn_context(monkeypatch) -> None:
         {"force_ocr": True, "timeout_sec": 5},
     )
 
-    assert markdown_text == "spawned markdown"
+    assert markdown_text == "spawned markdown" * 1024
     assert diagnostics["mp_start_method"] == "spawn"
     assert created["started"] is True
-    assert created["join_timeout"] == 5
+    assert created["events"] == [("poll", 5), "recv"]
+    assert created["join_calls"] == [5]
     assert created["target"].__name__ == "_run_marker_conversion"
-    assert created["queue"].closed is True
-    assert created["queue"].joined is True
+    assert created["receiver"].closed is True
+    assert created["sender"].closed is True
+
+
+class OcrResourcePipelineAdapter(FakePipelineAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.dataset_builder = RecordingDatasetBuilder()
+
+    def get_execution_config(self) -> RayConfig:
+        return RayConfig(
+            executor_type="ray",
+            batch_size=1,
+            concurrency=2,
+            target_num_blocks=1,
+            ocr_worker_num_gpus=0.5,
+            ocr_worker_num_cpus=4,
+        )
+
+    def get_op_configs(self) -> list[OpConfig]:
+        return [
+            OpConfig(name="prepare_pdf_document", type="mapper"),
+            OpConfig(name="marker_ocr", type="mapper", options={"force_ocr": True}),
+            OpConfig(name="export_markdown", type="mapper"),
+        ]
+
+    def load_input_rows(self) -> list[dict[str, object]]:
+        task = PdfTask(
+            source_r2_key="dataset/raw/pdf/example.pdf",
+            relative_path="example.pdf",
+            source_size_bytes=8,
+            source_sha256="abc123",
+        )
+        return [task.to_dict()]
+
+    def build_runtime_context(
+        self,
+        *,
+        logger: ExecutionLogger,
+        completed_item_keys: set[str],
+    ) -> OpRuntimeContext:
+        class FakeObjectStore:
+            def exists(self, key: str) -> bool:
+                return True
+
+            def read_bytes(self, key: str) -> bytes:
+                return b"%PDF-fake"
+
+        return OpRuntimeContext(
+            config={"name": "ocr-resource-test"},
+            run_id=self.bindings.run_id,
+            object_store=FakeObjectStore(),
+            output_root_key="output/items/fake-run-001",
+            source_root_key="source/items",
+            completed_item_keys=completed_item_keys,
+            logger=logger,
+        )
+
+
+def test_streaming_executor_uses_configured_ocr_worker_resources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = OcrResourcePipelineAdapter()
+    monkeypatch.setattr(
+        MarkerOcrDocumentOp,
+        "convert_pdf_file",
+        lambda self, pdf_path, timeout_sec: ("hello markdown", {"torch_cuda_available": True}),
+    )
+
+    summary = StreamingRayExecutor(adapter).run()
+
+    assert summary["status"] == "success"
+    assert isinstance(adapter.dataset_builder, RecordingDatasetBuilder)
+    assert adapter.dataset_builder.transform_calls == [
+        {
+            "op_name": "prepare_pdf_document",
+            "batch_size": 1,
+            "concurrency": None,
+            "num_gpus": None,
+            "num_cpus": None,
+        },
+        {
+            "op_name": "marker_ocr",
+            "batch_size": 1,
+            "concurrency": 2,
+            "num_gpus": 0.5,
+            "num_cpus": 4.0,
+        },
+        {
+            "op_name": "export_markdown",
+            "batch_size": 1,
+            "concurrency": None,
+            "num_gpus": None,
+            "num_cpus": None,
+        },
+    ]

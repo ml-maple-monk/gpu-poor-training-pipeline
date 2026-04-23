@@ -15,7 +15,7 @@ from ...models import (
     RemoteRuntimeConfig,
     SshConfig,
 )
-from .models import InputConfig, RecipeConfig, ResumeConfig
+from .models import AsrConfig, DownloadConfig, InputConfig, RecipeConfig, ResumeConfig
 
 CURRENT_MACHINE_PATH = Path(__file__).resolve().parents[4] / "infra" / "current-machine"
 
@@ -176,6 +176,8 @@ def build_recipe_config(raw: dict[str, Any], config_path: Path) -> RecipeConfig:
         ray=RayConfig(**raw["ray"]),
         r2=R2Config(**raw["r2"]),
         input=InputConfig(**raw["input"]),
+        download=DownloadConfig(**raw["download"]),
+        asr=AsrConfig(**raw["asr"]),
         mlflow=MlflowConfig(**raw["mlflow"]),
         observability=ObservabilityConfig(**raw["observability"]),
         resumability=ResumeConfig(**raw["resumability"]),
@@ -191,6 +193,8 @@ def require_sections(raw: dict[str, Any], config_path: Path) -> None:
         "ray",
         "r2",
         "input",
+        "download",
+        "asr",
         "mlflow",
         "observability",
         "resumability",
@@ -214,18 +218,25 @@ def build_op_config(raw: dict[str, Any]) -> OpConfig:
 
 
 def validate_recipe_constraints(raw: dict[str, Any]) -> None:
-    ray = raw["ray"]
-    if ray["executor_type"] != "ray":
+    if raw["ray"]["executor_type"] != "ray":
         raise ValueError("Only ray executor_type is supported")
-    if int(ray.get("batch_size", 0)) <= 0:
-        raise ValueError("ray.batch_size must be positive")
-    if int(ray.get("concurrency", 0)) <= 0:
-        raise ValueError("ray.concurrency must be positive")
-    if int(ray.get("target_num_blocks", 0)) < 0:
-        raise ValueError("ray.target_num_blocks must be zero or positive")
-    if float(ray.get("ocr_worker_num_gpus", 1.0)) <= 0:
-        raise ValueError("ray.ocr_worker_num_gpus must be positive")
-    if int(ray.get("ocr_worker_num_cpus", 1)) <= 0:
-        raise ValueError("ray.ocr_worker_num_cpus must be positive")
     if raw["resumability"]["strategy"] != "batch_manifest":
         raise ValueError("Only batch_manifest resumability is supported")
+    if int(raw["input"]["videos_per_channel"]) <= 0:
+        raise ValueError("input.videos_per_channel must be positive")
+    if not str(raw["input"]["media_r2_prefix"]).strip():
+        raise ValueError("input.media_r2_prefix must be non-empty")
+    if not str(raw["download"]["local_staging_dir"]).strip():
+        raise ValueError("download.local_staging_dir must be non-empty")
+    if not str(raw["download"]["format_selector"]).strip():
+        raise ValueError("download.format_selector must be non-empty")
+    if not str(raw["asr"]["model_name"]).strip():
+        raise ValueError("asr.model_name must be non-empty")
+    if float(raw["asr"]["gpu_memory_utilization"]) <= 0:
+        raise ValueError("asr.gpu_memory_utilization must be positive")
+    if int(raw["asr"]["max_inference_batch_size"]) <= 0:
+        raise ValueError("asr.max_inference_batch_size must be positive")
+    if int(raw["asr"]["max_new_tokens"]) <= 0:
+        raise ValueError("asr.max_new_tokens must be positive")
+    if int(raw["asr"]["max_media_file_size_mb"]) <= 0:
+        raise ValueError("asr.max_media_file_size_mb must be positive")

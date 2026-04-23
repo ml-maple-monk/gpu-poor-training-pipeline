@@ -141,3 +141,34 @@ def test_load_recipe_config_rejects_malformed_current_machine(
 
     with pytest.raises(ValueError, match="current-machine"):
         load_recipe_config(Path("config/remote_ocr.sample.yaml"))
+
+
+def test_load_recipe_config_parses_ocr_worker_resources() -> None:
+    config = load_recipe_config(Path("config/remote_ocr.sample.yaml"))
+
+    assert config.ray.ocr_worker_num_gpus == pytest.approx(0.5)
+    assert config.ray.ocr_worker_num_cpus == 3
+
+
+def test_load_recipe_config_rejects_non_positive_ocr_worker_resources(
+    tmp_path: Path,
+) -> None:
+    gpu_config_path = tmp_path / "invalid_ocr_worker_gpu.yaml"
+    gpu_config_path.write_text(
+        Path("config/remote_ocr.sample.yaml")
+        .read_text(encoding="utf-8")
+        .replace("ocr_worker_num_gpus: 0.5", "ocr_worker_num_gpus: 0"),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="ray.ocr_worker_num_gpus must be positive"):
+        load_recipe_config(gpu_config_path)
+
+    cpu_config_path = tmp_path / "invalid_ocr_worker_cpu.yaml"
+    cpu_config_path.write_text(
+        Path("config/remote_ocr.sample.yaml")
+        .read_text(encoding="utf-8")
+        .replace("ocr_worker_num_cpus: 3", "ocr_worker_num_cpus: 0"),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="ray.ocr_worker_num_cpus must be positive"):
+        load_recipe_config(cpu_config_path)

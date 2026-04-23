@@ -47,6 +47,9 @@ class OcrPipelineRuntimeAdapter(PipelineRuntimeAdapter):
             executor_type=self.config.ray.executor_type,
             batch_size=self.config.ray.batch_size,
             concurrency=self.config.ray.concurrency,
+            target_num_blocks=self.config.ray.target_num_blocks,
+            ocr_worker_num_gpus=self.config.ray.ocr_worker_num_gpus,
+            ocr_worker_num_cpus=self.config.ray.ocr_worker_num_cpus,
         )
 
     def get_op_configs(self):

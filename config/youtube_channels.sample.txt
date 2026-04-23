@@ -1,0 +1,2 @@
+# One YouTube channel URL per line.
+https://www.youtube.com/@example

@@ -78,6 +78,7 @@ class DocumentResult:
     duration_sec: float
     marker_exit_code: int
     markdown_text: str = ""
+    staged_pdf_path: str = ""
     diagnostics: dict[str, Any] | None = None
 
     @classmethod
@@ -96,6 +97,7 @@ class DocumentResult:
             duration_sec=float(row.get("duration_sec", 0.0)),
             marker_exit_code=int(row.get("marker_exit_code", 0)),
             markdown_text=str(row.get("markdown_text", "")),
+            staged_pdf_path=str(row.get("staged_pdf_path", "")),
             diagnostics=(
                 dict(row["diagnostics"])
                 if isinstance(row.get("diagnostics"), dict)
