@@ -294,8 +294,11 @@ class ExportEchoOp(RowWiseMapperOp):
 that successful rows have the fields the exporter needs; the actual
 R2 write happens once per batch in `EchoExporter.export_batch`
 (§5) — not per row. This split is the framework's convention: ops
-stay pure and parallel; I/O happens in the exporter, which runs
-synchronously per batch after Ray materializes.
+stay pure and parallel; I/O is centralized in the exporter, which
+runs on the driver once per batch after Ray materializes. Writes go
+through `self._put_bytes` — synchronous by default, or queued onto
+the async upload coordinator if one is active (see ARCHITECTURE.md
+§6.1).
 
 `RowWiseMapperOp` is re-used directly here (instead of the OCR-flavored
 `ExportMarkdownMapper`) to demonstrate that `op_stage` can be set
@@ -378,8 +381,9 @@ final summary object after all batches are committed.
 
 **Why.** Separating "what goes out" from "what ops compute" lets ops
 stay pure and parallel. The exporter is called from the main
-executor thread (not inside Ray), so it's safe to do synchronous R2
-writes, file system access, etc.
+executor (driver) thread, not inside a Ray worker — so it's the one
+place in the pipeline that can safely do bulk I/O without shipping
+credentials or clients across process boundaries.
 
 **How.** One file — 42 lines —
 [pipelines/example_echo/exporter.py](src/training_signal_processing/pipelines/example_echo/exporter.py):
@@ -397,7 +401,7 @@ def export_batch(self, batch_id: str, rows: list[dict[str, object]]) -> ExportBa
             "message": result.message,
             "echoed_at": result.echoed_at,
         }
-        self.object_store.write_bytes(
+        self._put_bytes(
             result.output_r2_key,
             json.dumps(payload, sort_keys=True).encode("utf-8"),
         )
@@ -409,7 +413,7 @@ def export_batch(self, batch_id: str, rows: list[dict[str, object]]) -> ExportBa
     )
 ```
 
-Two conventions:
+Three conventions:
 
 - **Filter by `status`.** The ledger writes every row (including
   failed ones) to the per-batch manifest, but the exporter only
@@ -418,11 +422,23 @@ Two conventions:
   exporter trusts the pre-populated key rather than rebuilding it,
   so the convention is "prepare decides where things land; exporter
   just puts them there."
+- **Write via `self._put_bytes`.** The helper on
+  [`RayExporter`](src/training_signal_processing/runtime/exporter.py#L21)
+  routes to the async upload coordinator when one is attached
+  (opt-in via `ray.async_upload` in the recipe), and falls back to
+  synchronous `self.object_store.write_bytes` otherwise. Either way
+  the exporter code is identical; the executor handles the
+  drain-before-commit semantics (see ARCHITECTURE.md §6.1) so
+  failed uploads surface as run failures before the ledger records
+  anything.
 
 `finalize_run` at
 [exporter.py:38](src/training_signal_processing/pipelines/example_echo/exporter.py#L38)
 writes `run.json` with the final `RunState` snapshot — identical
-shape across every pipeline.
+shape across every pipeline. It's called after the last batch
+commits and uses sync `object_store.write_json` (not routed
+through the coordinator) because it's a single write off the hot
+path.
 
 ---
 

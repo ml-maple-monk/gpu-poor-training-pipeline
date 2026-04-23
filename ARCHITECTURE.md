@@ -88,6 +88,8 @@ ledger entries back to R2 per batch.
 |    resume.py             |                     |                   |
 |    observability.py      |                     |                   |
 |    remote_job.py         |                     |                   |
+|    async_upload_         |                     |                   |
+|      coordinator.py      |                     |                   |
 +--------------------------------------------------------------------+
                                    ^
                                    | enforced by [tool.importlinter]:
@@ -278,6 +280,58 @@ run.json                       # final summary (exporter.finalize_run)
 (`source_root_key`, `output_root_key`) the executor passes into the
 runtime context.
 
+### 6.1 Async upload coordinator (driver-side)
+
+`AsyncUploadCoordinator` ([runtime/async_upload_coordinator.py:28](src/training_signal_processing/runtime/async_upload_coordinator.py#L28))
+is an opt-in component that lets the driver overlap per-batch R2
+writes with downstream compute. Without it, `Exporter.export_batch`
+loops through rows calling `object_store.write_bytes(...)`
+synchronously — each `put_object` blocks the batch loop, so the
+driver cannot advance to the next batch (or to
+`resume_ledger.commit_batch`) until every PUT has returned.
+
+The coordinator owns one daemon thread hosting an `asyncio` event
+loop and a long-lived `aioboto3` S3 client. `submit(key, body)`
+returns immediately after scheduling an upload coroutine on that
+loop; bounds are enforced by an `asyncio.Semaphore(max_in_flight)`
+on the loop side and a `threading.Semaphore(max_queued)` on the
+submit side (backpressure so memory doesn't blow up under a fast
+producer). A `_put_bytes(self, key, body)` helper on `RayExporter`
+([runtime/exporter.py:21](src/training_signal_processing/runtime/exporter.py#L21))
+routes to `coordinator.submit` when an upload coordinator is
+attached, and falls back to `object_store.write_bytes` otherwise.
+
+Lifecycle is scoped to one run, orchestrated by the executor:
+constructed once after `build_exporter()`, drained before every
+`resume_ledger.commit_batch` (so a failed upload surfaces as a run
+failure rather than a partial commit), aborted in the outer
+`except` handler, and closed in a `finally` block for idempotent
+teardown. `R2ObjectStore` itself stays untouched — its
+`write_bytes` signature is unchanged, and the coordinator holds no
+state on the store, so the same `R2ObjectStore` instance stays safe
+to pickle into Ray worker closures (workers continue to use the
+sync path).
+
+Opt-in via YAML — the default is absent:
+
+```yaml
+ray:
+  async_upload:
+    enabled: true
+    max_in_flight: 8
+    max_queued: 32
+```
+
+If the block is omitted (or `enabled: false`), `_build_upload_coordinator`
+([runtime/executor.py](src/training_signal_processing/runtime/executor.py))
+returns `None` and the export path uses sync writes — behavior
+identical to the pre-coordinator runtime. Worker-side writes
+(`custom_ops/youtube_asr_ops.py`, `custom_ops/tokenizer_ops.py`)
+are intentionally not routed through the coordinator: workers live
+in separate processes, so a driver-side asyncio loop doesn't help
+them, and the complexity of per-worker loops would outweigh the
+gain.
+
 ---
 
 ## 7. Submission and transport
@@ -383,17 +437,30 @@ StreamingRayExecutor.run()  (runtime/executor.py:114)
         |                                  num_cpus=R.num_cpus)
         |     (LAZY — no actual execution yet)
         |
-        +--- for batch in dataset_builder.iter_batches(dataset, batch_size):
+        +--- coordinator = _build_upload_coordinator(execution, ...)
+        |     # returns None unless ray.async_upload.enabled AND
+        |     # object_store isinstance R2ObjectStore
+        |     if coordinator: exporter.upload_coordinator = coordinator
+        |
+        +--- try:                                            # lifecycle wrap
+        |    for batch in dataset_builder.iter_batches(dataset, batch_size):
         |       # FIRST iter materializes the lazy plan
-        |       exporter.export_batch(batch_id, rows)         # write outputs
+        |       exporter.export_batch(batch_id, rows)         # queue writes
+        |       if coordinator: coordinator.drain()           # await in-flight
         |       resume_ledger.commit_batch(...)               # ledger write
         |       progress_tracker.log_batch_commit(...)        # MLflow metrics
         |       transition_run_phase(..., "first_batch_materialized")
         |
-        +--- resume_ledger.mark_run_finished(run_state)
-        +--- exporter.finalize_run(run_state)
+        |    resume_ledger.mark_run_finished(run_state)
+        |    exporter.finalize_run(run_state)
+        |    if coordinator: coordinator.drain()              # final drain
+        |    return ExecutorRunSummary.to_dict()              # printed by CLI
         |
-        +--- return ExecutorRunSummary.to_dict()              # printed by CLI
+        +--- except Exception:
+        |      if coordinator: coordinator.abort()            # cancel in-flight
+        |      resume_ledger.mark_run_failed(run_state, ...)  # status=failed
+        +--- finally:
+               if coordinator: coordinator.close()            # idempotent
 ```
 
 Three properties matter:
@@ -626,8 +693,11 @@ to the final markdown writes. Step numbers below match the diagram.
 [7] OcrMarkdownExporter.export_batch            (exporter.py:16)
         - for row in rows:
             if row.status != "success": continue
-            object_store.write_bytes(markdown_r2_key, markdown_text.encode())
+            self._put_bytes(markdown_r2_key, markdown_text.encode())
             cleanup_staged_pdf(row.staged_pdf_path)
+        # _put_bytes routes to the async coordinator if attached,
+        # else falls back to sync object_store.write_bytes. The
+        # executor drains the coordinator before commit_batch below.
                                                                 |
                                                                 v
 [8] OcrResumeLedger.commit_batch                (resume.py:86)
