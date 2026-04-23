@@ -4,7 +4,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from training_signal_processing.main import cli
+from training_signal_processing.pipelines.ocr import config as ocr_config
 from training_signal_processing.pipelines.ocr.config import load_recipe_config
 from training_signal_processing.pipelines.ocr.submission import OcrSubmissionAdapter
 from training_signal_processing.runtime.submission import R2ArtifactStore
@@ -37,8 +40,22 @@ def test_ocr_submission_uses_package_cli_entrypoint() -> None:
     ).prepare_new_run(R2ArtifactStore.from_config_file(config.r2), dry_run=True)
 
     assert prepared.invocation.command.startswith(
-        "uv run --group remote_ocr python -m training_signal_processing ocr-remote-job "
+        "uv run --python 3.12 --group remote_ocr --group model python -m "
+        "training_signal_processing ocr-remote-job "
     )
+
+
+def test_ocr_submission_bootstrap_installs_remote_runtime() -> None:
+    config_path = Path("config/remote_ocr.sample.yaml")
+    config = load_recipe_config(config_path)
+    prepared = OcrSubmissionAdapter(
+        config=config,
+        config_path=config_path,
+        overrides=[],
+    ).prepare_new_run(R2ArtifactStore.from_config_file(config.r2), dry_run=True)
+
+    assert "uv python install 3.12" in prepared.bootstrap.command
+    assert "--group remote_ocr --group model --no-dev --frozen" in prepared.bootstrap.command
 
 
 def test_ocr_submission_includes_aws_compatible_remote_env() -> None:
@@ -63,3 +80,64 @@ def test_ocr_submission_includes_aws_compatible_remote_env() -> None:
         prepared.invocation.env["MLFLOW_S3_ENDPOINT_URL"]
         == prepared.invocation.env["R2_ENDPOINT_URL"]
     )
+
+
+def test_load_recipe_config_uses_current_machine_when_no_ssh_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    machine_path = tmp_path / "current-machine"
+    machine_path.write_text(
+        "ssh -i ~/.ssh/id_ed25519 -p 40222 root@203.0.113.20\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ocr_config, "CURRENT_MACHINE_PATH", machine_path)
+
+    config = load_recipe_config(Path("config/remote_ocr.sample.yaml"))
+
+    assert config.ssh.host == "203.0.113.20"
+    assert config.ssh.port == 40222
+
+
+def test_load_recipe_config_explicit_ssh_overrides_beat_current_machine(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    machine_path = tmp_path / "current-machine"
+    machine_path.write_text(
+        "ssh -i ~/.ssh/id_ed25519 -p 40222 root@203.0.113.20\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ocr_config, "CURRENT_MACHINE_PATH", machine_path)
+
+    config = load_recipe_config(
+        Path("config/remote_ocr.sample.yaml"),
+        overrides=["ssh.host=198.51.100.99", "ssh.port=51234"],
+    )
+
+    assert config.ssh.host == "198.51.100.99"
+    assert config.ssh.port == 51234
+
+
+def test_load_recipe_config_falls_back_to_yaml_when_current_machine_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(ocr_config, "CURRENT_MACHINE_PATH", tmp_path / "missing-machine")
+
+    config = load_recipe_config(Path("config/remote_ocr.sample.yaml"))
+
+    assert config.ssh.host == "74.15.1.150"
+    assert config.ssh.port == 30311
+
+
+def test_load_recipe_config_rejects_malformed_current_machine(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    machine_path = tmp_path / "current-machine"
+    machine_path.write_text("not an ssh command\n", encoding="utf-8")
+    monkeypatch.setattr(ocr_config, "CURRENT_MACHINE_PATH", machine_path)
+
+    with pytest.raises(ValueError, match="current-machine"):
+        load_recipe_config(Path("config/remote_ocr.sample.yaml"))

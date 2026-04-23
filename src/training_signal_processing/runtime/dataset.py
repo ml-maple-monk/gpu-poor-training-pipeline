@@ -86,6 +86,8 @@ class ConfiguredRayDatasetBuilder(RayDatasetBuilder):
 
     def build_ray_dataset(self, rows: Batch) -> Any:
         dataset = ray.data.from_items(rows)
+        if len(rows) <= 1:
+            return dataset
         if self.config.target_num_blocks > 0:
-            dataset = dataset.repartition(self.config.target_num_blocks)
+            dataset = dataset.repartition(min(self.config.target_num_blocks, len(rows)))
         return dataset

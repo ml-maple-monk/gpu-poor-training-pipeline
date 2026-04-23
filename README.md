@@ -39,6 +39,24 @@ uv run --group remote_ocr python -m training_signal_processing validate --config
 uv run --group remote_ocr python -m training_signal_processing run --config config/remote_ocr.sample.yaml --dry-run
 ```
 
+## Remote Image
+
+The default remote Runpod image used by [infra/start_runpod_5090.sh](infra/start_runpod_5090.sh) is:
+
+```text
+runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
+```
+
+That launcher writes the active SSH target to `infra/current-machine` after the pod is reachable.
+The OCR CLI will use that machine automatically unless you explicitly override `ssh.host`
+or `ssh.port` with recipe overrides.
+
+If you need a different public base image for a run, override it at launch time:
+
+```bash
+RUNPOD_IMAGE=<your-image> infra/start_runpod_5090.sh
+```
+
 ## Main Commands
 
 ```bash
@@ -126,6 +144,35 @@ What to look for in MLflow:
 - metrics such as `execution_event_count` increasing over time
 
 If MLflow is not updating, then inspect the remote stderr/progress bar and the run artifacts in R2 next.
+
+## Experiment Workflow
+
+Experiments in this repo must stay config-driven.
+
+Allowed experiment surface:
+- vary YAML values in `config/`
+- use `--set` overrides for one-off runs
+- tune existing config-backed controls such as `ray.batch_size`, `ray.target_num_blocks`, `input.max_files`, `mlflow.experiment_name`, and op options already exposed in YAML such as `force_ocr`
+
+Do not change logic just to run an experiment:
+- do not edit executor logic, submission logic, pipeline logic, or custom op logic for a tuning run
+- do not add one-off branches or temporary hard-coded behavior in tracked product code
+
+Put temporary experiment helpers in a local-only directory:
+- use `experiments/` at the repo root for scratch scripts, notebooks, and one-off experiment helpers
+- `experiments/` is intentionally untracked and should stay local
+- do not promote experiment-only logic into the product path unless it is an intentional follow-up change
+
+If an experiment depends on a hard-coded value in logic instead of an exposed config surface, stop the experiment and ask to make that value configurable before running again.
+
+Examples of hard-coded categories worth escalating:
+- fixed timeouts
+- fixed ports or path assumptions
+- fixed device or runtime defaults
+- any experiment-critical behavior that can only be changed by editing logic
+
+Concrete repo example:
+- OCR timeout currently falls back to `OCR_CONVERSION_TIMEOUT_SEC = 300` in [src/training_signal_processing/custom_ops/user_ops.py](/home/geeyang/workspace/training-signal-processing/src/training_signal_processing/custom_ops/user_ops.py)
 
 ## Verification
 

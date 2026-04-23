@@ -78,6 +78,7 @@ class DocumentResult:
     duration_sec: float
     marker_exit_code: int
     markdown_text: str = ""
+    diagnostics: dict[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, row: dict[str, Any]) -> "DocumentResult":
@@ -95,6 +96,11 @@ class DocumentResult:
             duration_sec=float(row.get("duration_sec", 0.0)),
             marker_exit_code=int(row.get("marker_exit_code", 0)),
             markdown_text=str(row.get("markdown_text", "")),
+            diagnostics=(
+                dict(row["diagnostics"])
+                if isinstance(row.get("diagnostics"), dict)
+                else None
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:

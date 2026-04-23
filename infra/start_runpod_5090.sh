@@ -1,9 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd -- "$(dirname -- "$0")"
-export RUNPOD_API_KEY="$(<credentials/runpod/runpod_api_key)" RUNPOD_SSH_PUBLIC_KEY="$(<"$HOME/.ssh/id_ed25519.pub")"
+
+RUNPOD_IMAGE="${RUNPOD_IMAGE:-runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404}"
+RUNPOD_CONTAINER_DISK_GB="${RUNPOD_CONTAINER_DISK_GB:-80}"
+
+export RUNPOD_API_KEY="$(<credentials/runpod/runpod_api_key)"
+export RUNPOD_SSH_PUBLIC_KEY="$(<"$HOME/.ssh/id_ed25519.pub")"
+export RUNPOD_IMAGE
+export RUNPOD_CONTAINER_DISK_GB
 python3 - "${RUNPOD_NAME:-training-signal-processing-5090-ssh}" "${RUNPOD_COUNT:-1}" <<'PY'
-import json, os, pathlib, sys, time, urllib.error, urllib.request
+import json, os, pathlib, socket, sys, time, urllib.error, urllib.request
 
 name, count = sys.argv[1], int(sys.argv[2])
 headers = {"Authorization": f"Bearer {os.environ['RUNPOD_API_KEY']}", "Content-Type": "application/json"}
@@ -22,6 +29,16 @@ def call(method, path, payload=None):
     except urllib.error.HTTPError as exc:
         raise SystemExit(exc.read().decode() or str(exc)) from exc
 
+
+def wait_for_ssh(ip: str, port: int, *, attempts: int = 24, delay_sec: int = 5) -> None:
+    for _ in range(attempts):
+        try:
+            with socket.create_connection((ip, port), timeout=5):
+                return
+        except OSError:
+            time.sleep(delay_sec)
+    raise SystemExit(f"Timed out waiting for SSH to accept connections on {ip}:{port}")
+
 payload = {
     "name": name,
     "computeType": "GPU",
@@ -29,8 +46,8 @@ payload = {
     "gpuCount": 1,
     "gpuTypeIds": ["NVIDIA GeForce RTX 5090"],
     "gpuTypePriority": "custom",
-    "imageName": "runpod/pytorch:2.8.0-py3.11-cuda12.8.1-cudnn-devel-ubuntu22.04",
-    "containerDiskInGb": 50,
+    "imageName": os.environ["RUNPOD_IMAGE"],
+    "containerDiskInGb": int(os.environ["RUNPOD_CONTAINER_DISK_GB"]),
     "volumeInGb": 0,
     "ports": ["22/tcp"],
     "supportPublicIp": True,
@@ -45,6 +62,7 @@ for pod_id in [call("POST", "/pods", payload)["id"] for _ in range(count)]:
         pod = call("GET", f"/pods/{pod_id}")
         ip, port = pod.get("publicIp"), (pod.get("portMappings") or {}).get("22")
         if ip and port:
+            wait_for_ssh(ip, int(port))
             ssh = f"ssh -i ~/.ssh/id_ed25519 -p {port} root@{ip}"
             for path in machine_files:
                 path.write_text(f"{ssh}\n")

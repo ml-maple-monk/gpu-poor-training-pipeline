@@ -8,6 +8,7 @@ import pytest
 from training_signal_processing.custom_ops.user_ops import (
     MarkerOcrDocumentOp,
     PreparePdfDocumentOp,
+    convert_pdf_bytes_with_timeout,
 )
 from training_signal_processing.models import (
     BatchCommit,
@@ -455,3 +456,82 @@ def test_marker_ocr_process_row_timeout(
 
     assert result["status"] == "failed"
     assert "timed out" in result["error_message"]
+
+
+def test_convert_pdf_bytes_with_timeout_uses_spawn_context(monkeypatch) -> None:
+    created: dict[str, object] = {}
+
+    class FakeQueue:
+        def __init__(self) -> None:
+            self._payloads: list[dict[str, object]] = []
+            self.closed = False
+            self.joined = False
+
+        def put(self, payload: dict[str, object]) -> None:
+            self._payloads.append(payload)
+
+        def empty(self) -> bool:
+            return not self._payloads
+
+        def get(self) -> dict[str, object]:
+            return self._payloads.pop(0)
+
+        def close(self) -> None:
+            self.closed = True
+
+        def join_thread(self) -> None:
+            self.joined = True
+
+    class FakeProcess:
+        def __init__(self, *, target, args) -> None:
+            created["target"] = target
+            created["args"] = args
+            created["started"] = False
+            created["terminated"] = False
+
+        def start(self) -> None:
+            created["started"] = True
+            queue = created["args"][2]
+            queue.put(
+                {
+                    "status": "success",
+                    "markdown_text": "spawned markdown",
+                    "diagnostics": {"mp_start_method": "spawn"},
+                }
+            )
+
+        def join(self, timeout=None) -> None:
+            created["join_timeout"] = timeout
+
+        def is_alive(self) -> bool:
+            return False
+
+        def terminate(self) -> None:
+            created["terminated"] = True
+
+    class FakeContext:
+        def Queue(self) -> FakeQueue:
+            queue = FakeQueue()
+            created["queue"] = queue
+            return queue
+
+        def Process(self, *, target, args) -> FakeProcess:
+            return FakeProcess(target=target, args=args)
+
+    monkeypatch.setattr(
+        "training_signal_processing.custom_ops.user_ops.get_marker_mp_context",
+        lambda: FakeContext(),
+    )
+
+    markdown_text, diagnostics = convert_pdf_bytes_with_timeout(
+        b"%PDF-fake",
+        {"force_ocr": True, "timeout_sec": 5},
+    )
+
+    assert markdown_text == "spawned markdown"
+    assert diagnostics["mp_start_method"] == "spawn"
+    assert created["started"] is True
+    assert created["join_timeout"] == 5
+    assert created["target"].__name__ == "_run_marker_conversion"
+    assert created["queue"].closed is True
+    assert created["queue"].joined is True

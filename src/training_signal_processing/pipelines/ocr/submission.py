@@ -122,9 +122,14 @@ class OcrSubmissionAdapter(SubmissionAdapter):
     def build_bootstrap_spec(self) -> BootstrapSpec:
         command = " && ".join(
             [
-                "command -v uv >/dev/null",
+                "command -v rsync >/dev/null",
+                "command -v uv >/dev/null || python3 -m pip install --break-system-packages uv",
                 f"uv python install {shlex.quote(self.config.remote.python_version)}",
-                "uv sync --group remote_ocr --no-dev",
+                (
+                    "uv sync "
+                    f"--python {shlex.quote(self.config.remote.python_version)} "
+                    "--group remote_ocr --group model --no-dev --frozen"
+                ),
             ]
         )
         return BootstrapSpec(command=command)
@@ -142,8 +147,12 @@ class OcrSubmissionAdapter(SubmissionAdapter):
             [
                 "uv",
                 "run",
+                "--python",
+                self.config.remote.python_version,
                 "--group",
                 "remote_ocr",
+                "--group",
+                "model",
                 "python",
                 "-m",
                 "training_signal_processing",

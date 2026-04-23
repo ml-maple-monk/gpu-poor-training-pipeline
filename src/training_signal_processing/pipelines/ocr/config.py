@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,8 @@ from ...models import (
 )
 from .models import InputConfig, RecipeConfig, ResumeConfig
 
+CURRENT_MACHINE_PATH = Path(__file__).resolve().parents[4] / "infra" / "current-machine"
+
 
 def load_recipe_config(config_path: Path, overrides: list[str] | None = None) -> RecipeConfig:
     expanded_config = load_resolved_recipe_mapping(config_path, overrides)
@@ -26,8 +29,13 @@ def load_resolved_recipe_mapping(
     config_path: Path,
     overrides: list[str] | None = None,
 ) -> dict[str, Any]:
+    resolved_overrides = list(overrides or [])
     raw_config = read_recipe_file(config_path)
-    merged_config = apply_overrides(raw_config, overrides or [])
+    merged_config = apply_overrides(raw_config, resolved_overrides)
+    merged_config = apply_current_machine_target(
+        merged_config,
+        override_keys=extract_override_keys(resolved_overrides),
+    )
     return expand_recipe_values(merged_config)
 
 
@@ -46,6 +54,10 @@ def apply_overrides(config: dict[str, Any], overrides: list[str]) -> dict[str, A
         key_path, value = split_override(override)
         set_override_value(updated, key_path.split("."), parse_override_value(value))
     return updated
+
+
+def extract_override_keys(overrides: list[str]) -> set[str]:
+    return {split_override(override)[0] for override in overrides}
 
 
 def clone_mapping(value: Any) -> Any:
@@ -92,6 +104,54 @@ def parse_override_value(value: str) -> Any:
         return float(value)
     except ValueError:
         return value
+
+
+def apply_current_machine_target(
+    config: dict[str, Any],
+    *,
+    override_keys: set[str],
+) -> dict[str, Any]:
+    if not isinstance(config.get("ssh"), dict):
+        return config
+    needs_host = "ssh.host" not in override_keys
+    needs_port = "ssh.port" not in override_keys
+    if not (needs_host or needs_port):
+        return config
+    if not CURRENT_MACHINE_PATH.is_file():
+        return config
+    host, port = parse_current_machine_ssh_target(CURRENT_MACHINE_PATH)
+    updated = clone_mapping(config)
+    ssh_config = dict(updated["ssh"])
+    if needs_host:
+        ssh_config["host"] = host
+    if needs_port:
+        ssh_config["port"] = port
+    updated["ssh"] = ssh_config
+    return updated
+
+
+def parse_current_machine_ssh_target(path: Path) -> tuple[str, int]:
+    command_text = path.read_text(encoding="utf-8").strip()
+    if not command_text:
+        raise ValueError(f"{path} is empty; expected an ssh command.")
+    tokens = shlex.split(command_text)
+    if not tokens or tokens[0] != "ssh":
+        raise ValueError(f"{path} must start with an ssh command: {command_text}")
+    port: int | None = None
+    host: str | None = None
+    for index, token in enumerate(tokens):
+        if token == "-p":
+            if index + 1 >= len(tokens):
+                raise ValueError(f"{path} is missing a port value after -p: {command_text}")
+            try:
+                port = int(tokens[index + 1])
+            except ValueError as exc:
+                raise ValueError(f"{path} contains a non-integer ssh port: {command_text}") from exc
+        elif "@" in token and not token.startswith("-"):
+            host = token.rsplit("@", 1)[1]
+    if not host or port is None:
+        raise ValueError(f"{path} must contain both ssh host and -p <port>: {command_text}")
+    return host, port
 
 
 def expand_recipe_values(value: Any) -> Any:
