@@ -507,7 +507,14 @@ job is narrow and purely declarative. You provide the input manifest
 + recipe JSON in R2, the bootstrap shell, and the remote invocation
 command. The coordinator at
 [runtime/submission.py:492](src/training_signal_processing/runtime/submission.py#L492)
-takes it from there.
+takes it from there. **Framework behavior around this contract
+changed in PR #1/#2a:** the coordinator is now fire-and-forget
+(`.submit()` returns a `LaunchHandle` once `setsid` writes `job.pgid`
+on the pod) and opens any declared `reverse_tunnels` persistently
+via `ensure_reverse_tunnels` before launch. Your adapter's
+declarative output — `bootstrap`, `invocation`, `reverse_tunnels`,
+`parse_remote_summary` — is unchanged; the framework just does more
+on top of it now.
 
 **How.** 181 lines in
 [pipelines/example_echo/submission.py](src/training_signal_processing/pipelines/example_echo/submission.py).
@@ -584,6 +591,16 @@ command. Three things matter:
 `json.loads(stdout.strip())` — the remote job prints the executor
 summary as JSON.
 
+**Lifecycle note.** `parse_remote_summary` is still called by
+blocking `execute`-style transports (e.g., `example_echo`,
+`tokenizer`, `youtube_asr`). The default OCR path uses
+`launch_detached` and does **not** invoke it — the remote writes its
+own `run_state.json` to R2 instead, and the local CLI has already
+exited by the time the executor finishes. Keep implementing
+`parse_remote_summary` for your new pipeline: blocking adapters will
+need it, and switching to fire-and-forget later is a framework-side
+change, not an adapter one.
+
 No rclone, no local file upload, no page-count sort — `example_echo`
 keeps the submission adapter minimal. For a pipeline that uploads
 local binaries, crib the rclone block at
@@ -659,6 +676,16 @@ The `submit_remote_pipeline` helper at
 assembles the `SubmissionCoordinator` and calls `.submit()`. This is
 the same pattern OCR's `main.py` uses — only the adapter class
 changes.
+
+**Return-value contract.** After PR #1/#2a, `.submit()` returns a
+`SubmissionResult(mode='launched', launch: LaunchHandle, tunnels:
+tuple[TunnelHandle, ...])` in the default OCR path. Wire the CLI to
+print `.to_safe_dict()` as before; the returned launch + tunnel
+handles are the operator's entry points (log path, pgid path,
+ControlMaster socket) until the `ocr-remote` CLI ships in a
+follow-up PR. Blocking-execute transports still return the old
+shape with `mode='executed'` and `remote_summary` populated — no
+change needed there.
 
 ---
 
