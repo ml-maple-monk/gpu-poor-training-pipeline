@@ -183,6 +183,9 @@ ssh:
 remote:
   root_dir: /tmp/ocr
   python_version: "3.12"
+  remote_jobs_root: /root/ocr-jobs
+  pgid_wait_attempts: 20
+  pgid_wait_sleep_seconds: 0.25
 ray:
   executor_type: ray
   batch_size: 1
@@ -199,6 +202,8 @@ input:
   local_pdf_root: {pdf_root}
   include_glob: "**/*.pdf"
   raw_pdf_prefix: dataset/raw/pdf
+  upload_transfers: 1
+  upload_checkers: 1
   max_files: 2
 mlflow:
   enabled: false
@@ -220,6 +225,8 @@ ops:
   - name: marker_ocr
     type: mapper
     force_ocr: true
+    timeout_sec: 1800
+    source_object_poll_interval_sec: 2.0
 """,
         encoding="utf-8",
     )
@@ -252,6 +259,12 @@ def test_ocr_prepare_new_run_builds_async_upload_spec(
         "copy",
         config.input.local_pdf_root,
         "ocrinput:test-bucket/dataset/raw/pdf",
+    )
+    assert prepared.async_upload.command[-4:] == (
+        "--transfers",
+        "1",
+        "--checkers",
+        "1",
     )
     file_list_path = Path(prepared.async_upload.command[5])
     assert file_list_path.is_file()
@@ -297,6 +310,35 @@ def test_ocr_prepare_new_run_applies_max_files_after_size_sort(
     assert [row["relative_path"] for row in artifact_store.written_jsonl[manifest_key]] == [
         "nested/beta.pdf"
     ]
+
+
+def test_ocr_prepare_new_run_uses_yaml_upload_parallelism(
+    monkeypatch: pytest.MonkeyPatch,
+    ocr_upload_config: Path,
+) -> None:
+    config = load_recipe_config(
+        ocr_upload_config,
+        ["input.upload_transfers=3", "input.upload_checkers=4"],
+    )
+    adapter = OcrSubmissionAdapter(
+        config=config,
+        config_path=ocr_upload_config,
+        overrides=["input.upload_transfers=3", "input.upload_checkers=4"],
+    )
+    monkeypatch.setattr(
+        "training_signal_processing.pipelines.ocr.submission.shutil.which",
+        lambda name: "/usr/bin/rclone" if name == "rclone" else None,
+    )
+
+    prepared = adapter.prepare_new_run(FakeArtifactStore(), dry_run=False)
+
+    assert prepared.async_upload is not None
+    assert prepared.async_upload.command[-4:] == (
+        "--transfers",
+        "3",
+        "--checkers",
+        "4",
+    )
 
 
 def test_ocr_prepare_new_run_dry_run_skips_async_upload(ocr_upload_config: Path) -> None:
@@ -455,7 +497,11 @@ def test_marker_ocr_process_row_success(
     ocr_runtime_context: OpRuntimeContext,
 ) -> None:
     row = build_prepared_ocr_row(ocr_runtime_context)
-    op = ocr_ops.MarkerOcrDocumentOp(force_ocr=True).bind_runtime(ocr_runtime_context)
+    op = ocr_ops.MarkerOcrDocumentOp(
+        force_ocr=True,
+        timeout_sec=1800,
+        source_object_poll_interval_sec=2.0,
+    ).bind_runtime(ocr_runtime_context)
     monkeypatch.setattr(
         op,
         "convert_pdf_file",
@@ -475,7 +521,11 @@ def test_marker_ocr_process_row_failure(
     ocr_runtime_context: OpRuntimeContext,
 ) -> None:
     row = build_prepared_ocr_row(ocr_runtime_context)
-    op = ocr_ops.MarkerOcrDocumentOp(force_ocr=True).bind_runtime(ocr_runtime_context)
+    op = ocr_ops.MarkerOcrDocumentOp(
+        force_ocr=True,
+        timeout_sec=1800,
+        source_object_poll_interval_sec=2.0,
+    ).bind_runtime(ocr_runtime_context)
     captured: dict[str, Path] = {}
 
     def raise_error(pdf_path: Path, timeout_sec: int) -> tuple[str, dict[str, object]]:
@@ -495,7 +545,11 @@ def test_marker_ocr_process_row_timeout(
     ocr_runtime_context: OpRuntimeContext,
 ) -> None:
     row = build_prepared_ocr_row(ocr_runtime_context)
-    op = ocr_ops.MarkerOcrDocumentOp(force_ocr=True).bind_runtime(ocr_runtime_context)
+    op = ocr_ops.MarkerOcrDocumentOp(
+        force_ocr=True,
+        timeout_sec=300,
+        source_object_poll_interval_sec=2.0,
+    ).bind_runtime(ocr_runtime_context)
     captured: dict[str, Path] = {}
 
     def raise_timeout(pdf_path: Path, timeout_sec: int) -> tuple[str, dict[str, object]]:
@@ -508,6 +562,32 @@ def test_marker_ocr_process_row_timeout(
         op.process_row(row)
 
     assert captured["pdf_path"].exists() is False
+
+
+def test_marker_ocr_process_row_requires_timeout_option(
+    ocr_runtime_context: OpRuntimeContext,
+) -> None:
+    row = build_prepared_ocr_row(ocr_runtime_context)
+    op = ocr_ops.MarkerOcrDocumentOp(
+        force_ocr=True,
+        source_object_poll_interval_sec=2.0,
+    ).bind_runtime(ocr_runtime_context)
+
+    with pytest.raises(ValueError, match="timeout_sec"):
+        op.process_row(row)
+
+
+def test_marker_ocr_process_row_requires_source_poll_interval_option(
+    ocr_runtime_context: OpRuntimeContext,
+) -> None:
+    row = build_prepared_ocr_row(ocr_runtime_context)
+    op = ocr_ops.MarkerOcrDocumentOp(
+        force_ocr=True,
+        timeout_sec=1800,
+    ).bind_runtime(ocr_runtime_context)
+
+    with pytest.raises(ValueError, match="source_object_poll_interval_sec"):
+        op.process_row(row)
 
 
 def test_convert_pdf_bytes_with_timeout_uses_spawn_context(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -616,6 +696,7 @@ def test_wait_for_source_object_polls_until_available(monkeypatch: pytest.Monkey
         FakeObjectStore(),
         key="dataset/raw/pdf/example.pdf",
         timeout_sec=5,
+        poll_interval_sec=2.0,
     )
 
     assert calls["count"] == 3
@@ -636,6 +717,7 @@ def test_wait_for_source_object_times_out(monkeypatch: pytest.MonkeyPatch) -> No
             FakeObjectStore(),
             key="dataset/raw/pdf/example.pdf",
             timeout_sec=1,
+            poll_interval_sec=0.5,
         )
 
 

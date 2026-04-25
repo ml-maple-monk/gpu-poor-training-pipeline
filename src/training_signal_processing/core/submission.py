@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .models import R2Config, SshConfig
+from .models import R2Config, RemoteRuntimeConfig, SshConfig
 from .storage import build_r2_env
 from .utils import join_s3_key, utc_timestamp
 
@@ -426,10 +426,12 @@ class SshRemoteTransport(RemoteTransport):
     def __init__(
         self,
         ssh_config: SshConfig,
+        remote_config: RemoteRuntimeConfig,
         command_runner: CommandRunner | None = None,
         project_root: Path | None = None,
     ) -> None:
         self.ssh_config = ssh_config
+        self.remote_config = remote_config
         self.command_runner = command_runner or SubprocessCommandRunner()
         self.project_root = project_root or Path(__file__).resolve().parents[3]
 
@@ -469,10 +471,7 @@ class SshRemoteTransport(RemoteTransport):
             )
         )
 
-    REMOTE_JOBS_ROOT = "/root/ocr-jobs"
     HEREDOC_TERMINATOR = "__OCR_LAUNCHER_EOF__"
-    PGID_WAIT_ATTEMPTS = 20
-    PGID_WAIT_SLEEP_SECONDS = "0.25"
 
     def launch_detached(
         self,
@@ -500,7 +499,7 @@ class SshRemoteTransport(RemoteTransport):
         if not spec.command.strip():
             raise ValueError("Remote command must be explicit and non-empty.")
 
-        jobs_root = f"{self.REMOTE_JOBS_ROOT}/{run_id}"
+        jobs_root = f"{self.remote_config.remote_jobs_root.rstrip('/')}/{run_id}"
         log_path = f"{jobs_root}/job.log"
         pgid_path = f"{jobs_root}/job.pgid"
         launcher_path = f"{jobs_root}/launch.sh"
@@ -577,11 +576,12 @@ class SshRemoteTransport(RemoteTransport):
             f"setsid sh -c {shlex.quote(inner)} </dev/null >/dev/null 2>&1 &"
         )
         wait_command = (
-            f"i=0; while [ $i -lt {self.PGID_WAIT_ATTEMPTS} ]; do "
+            f"i=0; while [ $i -lt {self.remote_config.pgid_wait_attempts} ]; do "
             f"  if [ -s {shlex.quote(pgid_path)} ]; then exit 0; fi; "
-            f"  sleep {self.PGID_WAIT_SLEEP_SECONDS}; i=$((i+1)); "
+            f"  sleep {self.remote_config.pgid_wait_sleep_seconds}; i=$((i+1)); "
             f"done; "
-            f"echo 'pgid file not written within {self.PGID_WAIT_ATTEMPTS} attempts' >&2; "
+            f"echo 'pgid file not written within "
+            f"{self.remote_config.pgid_wait_attempts} attempts' >&2; "
             f"exit 1"
         )
         self._run_remote_shell(f"{start_command} {wait_command}")

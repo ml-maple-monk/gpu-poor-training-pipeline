@@ -234,6 +234,12 @@ The gitignored `infra/current-machine` carries each operator's box;
 hardcoding an SSH target poisons the repo for collaborators. This
 is documented in `pipelines/ocr/configs/baseline.yaml`.
 
+Operational launch/upload knobs are explicit YAML too. `remote` owns the
+detached-job root and pgid wait loop settings, `input` owns OCR upload
+parallelism, and the `marker_ocr` op options own OCR conversion timeout and
+source-object polling interval. These values should not be reintroduced as
+logic-level defaults.
+
 ---
 
 ## 6. Object storage and artifacts

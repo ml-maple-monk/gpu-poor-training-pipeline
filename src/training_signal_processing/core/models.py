@@ -18,6 +18,9 @@ class SshConfig:
 class RemoteRuntimeConfig:
     root_dir: str
     python_version: str
+    remote_jobs_root: str
+    pgid_wait_attempts: int
+    pgid_wait_sleep_seconds: float
     venv_dir: str = ".venv"
 
 

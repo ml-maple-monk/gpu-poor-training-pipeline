@@ -184,6 +184,14 @@ def test_load_recipe_config_parses_marker_ocr_resources() -> None:
 
     assert config.ray.marker_ocr_resources.num_gpus == pytest.approx(0.5)
     assert config.ray.marker_ocr_resources.num_cpus == pytest.approx(3.0)
+    assert config.remote.remote_jobs_root == "/root/ocr-jobs"
+    assert config.remote.pgid_wait_attempts == 20
+    assert config.remote.pgid_wait_sleep_seconds == pytest.approx(0.25)
+    assert config.input.upload_transfers == 1
+    assert config.input.upload_checkers == 1
+    marker_op = next(op for op in config.ops if op.name == "marker_ocr")
+    assert marker_op.options["timeout_sec"] == 1800
+    assert marker_op.options["source_object_poll_interval_sec"] == pytest.approx(2.0)
 
 
 def test_load_recipe_config_accepts_marker_ocr_resource_values_without_custom_policy(

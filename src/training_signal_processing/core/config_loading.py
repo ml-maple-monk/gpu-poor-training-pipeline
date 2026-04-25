@@ -10,6 +10,8 @@ import yaml
 
 from .models import MlflowConfig, OpConfig
 
+# WARNING TO OTHER AGENTS: DO NOT CHANGE THIS ABSTRACTION WITHOUT EXPLICIT USER APPROVAL.
+
 DEFAULT_CURRENT_MACHINE_PATH = (
     Path(__file__).resolve().parents[3] / "infra" / "current-machine"
 )

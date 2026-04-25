@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from training_signal_processing.core.models import SshConfig
+from training_signal_processing.core.models import RemoteRuntimeConfig, SshConfig
 from training_signal_processing.core.submission import (
     ArtifactRef,
     ArtifactStore,
@@ -57,6 +57,21 @@ def _ssh_config() -> SshConfig:
     )
 
 
+def _remote_config(
+    *,
+    remote_jobs_root: str = "/root/ocr-jobs",
+    pgid_wait_attempts: int = 20,
+    pgid_wait_sleep_seconds: float = 0.25,
+) -> RemoteRuntimeConfig:
+    return RemoteRuntimeConfig(
+        root_dir="/root/training-signal-processing",
+        python_version="3.12",
+        remote_jobs_root=remote_jobs_root,
+        pgid_wait_attempts=pgid_wait_attempts,
+        pgid_wait_sleep_seconds=pgid_wait_sleep_seconds,
+    )
+
+
 def _spec() -> RemoteInvocationSpec:
     # A non-trivial command containing single quotes to prove we don't reinterpret
     # it inside `bash -c '...'`. Single quotes would otherwise break naive wrappers.
@@ -76,7 +91,7 @@ def _remote_commands(runner: RecordingCommandRunner) -> list[str]:
 
 def test_launch_detached_writes_script_and_records_handle() -> None:
     runner = RecordingCommandRunner()
-    transport = SshRemoteTransport(_ssh_config(), command_runner=runner)
+    transport = SshRemoteTransport(_ssh_config(), _remote_config(), command_runner=runner)
     spec = _spec()
 
     handle = transport.launch_detached(
@@ -123,10 +138,35 @@ def test_launch_detached_writes_script_and_records_handle() -> None:
     assert "sleep 0.25" in start_cmd
 
 
+def test_launch_detached_uses_configured_jobs_root_and_pgid_wait() -> None:
+    runner = RecordingCommandRunner()
+    transport = SshRemoteTransport(
+        _ssh_config(),
+        _remote_config(
+            remote_jobs_root="/var/run/training-jobs",
+            pgid_wait_attempts=7,
+            pgid_wait_sleep_seconds=0.5,
+        ),
+        command_runner=runner,
+    )
+
+    handle = transport.launch_detached(
+        remote_root="/root/training-signal-processing",
+        spec=_spec(),
+        run_id="20260423T195035Z",
+    )
+
+    assert handle.remote_jobs_root == "/var/run/training-jobs/20260423T195035Z"
+    assert handle.pgid_path == "/var/run/training-jobs/20260423T195035Z/job.pgid"
+    start_cmd = _remote_commands(runner)[1]
+    assert "while [ $i -lt 7 ]" in start_cmd
+    assert "sleep 0.5" in start_cmd
+
+
 def test_launch_detached_never_uses_bang_pid() -> None:
     """$! captures the wrong PID when setsid forks; we must use $$ in the child."""
     runner = RecordingCommandRunner()
-    transport = SshRemoteTransport(_ssh_config(), command_runner=runner)
+    transport = SshRemoteTransport(_ssh_config(), _remote_config(), command_runner=runner)
 
     transport.launch_detached(
         remote_root="/root/app",
@@ -143,7 +183,7 @@ def test_launch_detached_never_uses_bang_pid() -> None:
 
 def test_launch_detached_rejects_dangerous_run_ids() -> None:
     runner = RecordingCommandRunner()
-    transport = SshRemoteTransport(_ssh_config(), command_runner=runner)
+    transport = SshRemoteTransport(_ssh_config(), _remote_config(), command_runner=runner)
 
     for bad in ("", "..", "../escape", "a/b", "has space"):
         with pytest.raises(ValueError):
@@ -158,7 +198,7 @@ def test_launch_detached_rejects_dangerous_run_ids() -> None:
 
 def test_launch_detached_rejects_empty_command() -> None:
     runner = RecordingCommandRunner()
-    transport = SshRemoteTransport(_ssh_config(), command_runner=runner)
+    transport = SshRemoteTransport(_ssh_config(), _remote_config(), command_runner=runner)
     empty_spec = RemoteInvocationSpec(command="   ", env={})
     with pytest.raises(ValueError):
         transport.launch_detached(
@@ -168,7 +208,7 @@ def test_launch_detached_rejects_empty_command() -> None:
 
 def test_launch_detached_refuses_heredoc_terminator_in_body() -> None:
     runner = RecordingCommandRunner()
-    transport = SshRemoteTransport(_ssh_config(), command_runner=runner)
+    transport = SshRemoteTransport(_ssh_config(), _remote_config(), command_runner=runner)
     # Attempting to inject the heredoc terminator via env value must be refused,
     # not silently accepted (which would prematurely close the heredoc).
     bad_spec = RemoteInvocationSpec(

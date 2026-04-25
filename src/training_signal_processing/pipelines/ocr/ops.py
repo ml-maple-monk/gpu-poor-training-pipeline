@@ -31,10 +31,6 @@ Design contract:
   to add a new op.
 """
 
-OCR_CONVERSION_TIMEOUT_SEC = 1800
-SOURCE_OBJECT_POLL_INTERVAL_SEC = 2.0
-
-
 def build_flat_markdown_name(relative_path: str) -> str:
     source_name = Path(relative_path).with_suffix(".md").name
     path_digest = sha256(relative_path.encode("utf-8")).hexdigest()[:16]
@@ -123,7 +119,7 @@ def convert_pdf_path_with_timeout(
 ) -> tuple[str, dict[str, object]]:
     mp_context = get_marker_mp_context()
     result_receiver, result_sender = mp_context.Pipe(duplex=False)
-    timeout_sec = int(options.get("timeout_sec", OCR_CONVERSION_TIMEOUT_SEC))
+    timeout_sec = require_positive_int_option(options, "timeout_sec")
     process = mp_context.Process(
         target=_run_marker_conversion,
         args=(str(pdf_path), options, result_sender),
@@ -189,6 +185,7 @@ def wait_for_source_object(
     *,
     key: str,
     timeout_sec: int,
+    poll_interval_sec: float,
 ) -> None:
     deadline = perf_counter() + timeout_sec
     while perf_counter() < deadline:
@@ -197,8 +194,26 @@ def wait_for_source_object(
         remaining = deadline - perf_counter()
         if remaining <= 0:
             break
-        sleep(min(SOURCE_OBJECT_POLL_INTERVAL_SEC, remaining))
+        sleep(min(poll_interval_sec, remaining))
     raise TimeoutError(f"OCR source object did not appear within {timeout_sec} seconds: {key}")
+
+
+def require_positive_int_option(options: dict[str, object], name: str) -> int:
+    if name not in options:
+        raise ValueError(f"marker_ocr option '{name}' is required.")
+    value = int(options[name])
+    if value <= 0:
+        raise ValueError(f"marker_ocr option '{name}' must be positive.")
+    return value
+
+
+def require_positive_float_option(options: dict[str, object], name: str) -> float:
+    if name not in options:
+        raise ValueError(f"marker_ocr option '{name}' is required.")
+    value = float(options[name])
+    if value <= 0:
+        raise ValueError(f"marker_ocr option '{name}' must be positive.")
+    return value
 
 
 class IdentityPreviewOp(BatchTransformOp):
@@ -257,14 +272,19 @@ class MarkerOcrDocumentOp(MarkerOcrMapper):
         runtime = self.require_runtime()
         started_at = utc_isoformat()
         started_clock = perf_counter()
+        timeout_sec = require_positive_int_option(self.options, "timeout_sec")
+        poll_interval_sec = require_positive_float_option(
+            self.options,
+            "source_object_poll_interval_sec",
+        )
         diagnostics = build_marker_diagnostics(dict(self.options))
-        timeout_sec = int(self.options.get("timeout_sec", OCR_CONVERSION_TIMEOUT_SEC))
         source_key = str(row["source_r2_key"])
         pdf_bytes = self.read_source_pdf(
             runtime=runtime,
             source_key=source_key,
             diagnostics=diagnostics,
             timeout_sec=timeout_sec,
+            poll_interval_sec=poll_interval_sec,
         )
         markdown_text, conversion_diagnostics = self.convert_source_pdf(
             runtime=runtime,
@@ -295,6 +315,7 @@ class MarkerOcrDocumentOp(MarkerOcrMapper):
         source_key: str,
         diagnostics: dict[str, object],
         timeout_sec: int,
+        poll_interval_sec: float,
     ) -> bytes:
         object_store = runtime.get_object_store()
         self.log_runtime_event(
@@ -307,6 +328,7 @@ class MarkerOcrDocumentOp(MarkerOcrMapper):
             object_store,
             key=source_key,
             timeout_sec=timeout_sec,
+            poll_interval_sec=poll_interval_sec,
         )
         diagnostics["source_object_ready"] = True
         pdf_bytes = object_store.read_bytes(source_key)

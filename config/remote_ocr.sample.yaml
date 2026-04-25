@@ -11,6 +11,9 @@ ssh:
 remote:
   root_dir: /root/training-signal-processing
   python_version: "3.12"
+  remote_jobs_root: /root/ocr-jobs
+  pgid_wait_attempts: 20
+  pgid_wait_sleep_seconds: 0.25
 
 ray:
   executor_type: ray
@@ -30,6 +33,8 @@ input:
   local_pdf_root: /home/geeyang/workspace/malay-data/bookscrape/data/downloads
   raw_pdf_prefix: dataset/raw/pdf
   include_glob: "**/*.pdf"
+  upload_transfers: 1
+  upload_checkers: 1
   max_files: 5
 
 mlflow:
@@ -55,3 +60,5 @@ ops:
   - name: marker_ocr
     type: mapper
     force_ocr: true
+    timeout_sec: 1800
+    source_object_poll_interval_sec: 2.0

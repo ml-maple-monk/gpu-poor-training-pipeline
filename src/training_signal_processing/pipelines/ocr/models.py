@@ -25,6 +25,8 @@ class InputConfig:
     local_pdf_root: str
     include_glob: str
     raw_pdf_prefix: str
+    upload_transfers: int
+    upload_checkers: int
     max_files: int | None = None
 
 

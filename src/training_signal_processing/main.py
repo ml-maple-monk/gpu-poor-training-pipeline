@@ -185,7 +185,7 @@ def submit_remote_pipeline(
             overlay_paths=overlay_paths,
         ),
         artifact_store=R2ArtifactStore.from_config_file(config.r2),
-        remote_transport=SshRemoteTransport(config.ssh),
+        remote_transport=SshRemoteTransport(config.ssh, config.remote),
     )
     return submission.submit(dry_run=dry_run, resume_run_id=resume_run_id).to_safe_dict()
 

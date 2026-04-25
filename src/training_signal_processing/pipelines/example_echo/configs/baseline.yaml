@@ -25,6 +25,9 @@ ssh:
 remote:
   root_dir: /root/training-signal-processing
   python_version: "3.12"
+  remote_jobs_root: /root/ocr-jobs
+  pgid_wait_attempts: 20
+  pgid_wait_sleep_seconds: 0.25
 
 ray:
   executor_type: ray

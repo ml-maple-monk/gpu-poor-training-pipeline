@@ -64,6 +64,9 @@ def build_recipe_config() -> RecipeConfig:
         remote=RemoteRuntimeConfig(
             root_dir="/tmp/ocr",
             python_version="3.12",
+            remote_jobs_root="/root/ocr-jobs",
+            pgid_wait_attempts=20,
+            pgid_wait_sleep_seconds=0.25,
         ),
         ray=OcrRayConfig(
             executor_type="ray",
@@ -84,6 +87,8 @@ def build_recipe_config() -> RecipeConfig:
             local_pdf_root="/tmp/pdfs",
             include_glob="**/*.pdf",
             raw_pdf_prefix="dataset/raw/pdf",
+            upload_transfers=1,
+            upload_checkers=1,
         ),
         mlflow=MlflowConfig(
             enabled=False,
