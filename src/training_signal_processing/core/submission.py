@@ -7,10 +7,11 @@ import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .models import R2Config, SshConfig
 from .storage import build_r2_env
+from .utils import join_s3_key, utc_timestamp
 
 if TYPE_CHECKING:
     from .storage import R2ObjectStore
@@ -82,6 +83,14 @@ class LocalAsyncUploadSpec:
             "env_keys": sorted(self.env),
             "cleanup_paths": list(self.cleanup_paths),
         }
+
+
+@dataclass(frozen=True)
+class SubmissionManifest:
+    rows: list[dict[str, object]]
+    discovered_items: int
+    uploaded_items: int = 0
+    async_upload: LocalAsyncUploadSpec | None = None
 
 
 @dataclass(frozen=True)
@@ -618,12 +627,147 @@ class SshRemoteTransport(RemoteTransport):
 
 
 class SubmissionAdapter(ABC):
-    @abstractmethod
+    """Template base for remote job submission.
+
+    Public methods prepare runs and are called by the coordinator. Concrete
+    pipelines customize only the hook methods below; internal helpers own the
+    stable control artifact layout and prepared-run shape.
+    """
+
+    def __init__(
+        self,
+        *,
+        config: Any,
+        config_path: Path,
+        overrides: list[str] | None = None,
+        overlay_paths: tuple[Path, ...] = (),
+    ) -> None:
+        self.config = config
+        self.config_path = config_path
+        self.overrides = overrides or []
+        self.overlay_paths = tuple(overlay_paths)
+
     def prepare_new_run(self, artifact_store: ArtifactStore, *, dry_run: bool) -> PreparedRun:
+        run_id = utc_timestamp()
+        input_manifest_key = self.build_control_key(run_id, "input_manifest.jsonl")
+        config_object_key = self.build_control_key(run_id, "recipe.json")
+        manifest = self.build_new_run_manifest(
+            artifact_store=artifact_store,
+            run_id=run_id,
+            dry_run=dry_run,
+        )
+        if not dry_run:
+            artifact_store.write_jsonl(input_manifest_key, manifest.rows)
+            artifact_store.write_json(config_object_key, self.load_resolved_recipe_mapping())
+        return self.build_prepared_run(
+            artifact_store=artifact_store,
+            run_id=run_id,
+            input_manifest_key=input_manifest_key,
+            config_object_key=config_object_key,
+            discovered_items=manifest.discovered_items,
+            uploaded_items=manifest.uploaded_items,
+            is_resume=False,
+            async_upload=manifest.async_upload,
+        )
+
+    def prepare_resume_run(self, artifact_store: ArtifactStore, run_id: str) -> PreparedRun:
+        input_manifest_key = self.build_control_key(run_id, "input_manifest.jsonl")
+        config_object_key = self.build_control_key(run_id, "recipe.json")
+        if not artifact_store.exists(input_manifest_key):
+            raise ValueError(f"Resume manifest not found in R2: {input_manifest_key}")
+        if not artifact_store.exists(config_object_key):
+            raise ValueError(f"Resume recipe object not found in R2: {config_object_key}")
+        manifest_rows = artifact_store.read_jsonl(input_manifest_key)
+        return self.build_prepared_run(
+            artifact_store=artifact_store,
+            run_id=run_id,
+            input_manifest_key=input_manifest_key,
+            config_object_key=config_object_key,
+            discovered_items=len(manifest_rows),
+            uploaded_items=0,
+            is_resume=True,
+        )
+
+    def build_prepared_run(
+        self,
+        *,
+        artifact_store: ArtifactStore,
+        run_id: str,
+        input_manifest_key: str,
+        config_object_key: str,
+        discovered_items: int,
+        uploaded_items: int,
+        is_resume: bool,
+        async_upload: LocalAsyncUploadSpec | None = None,
+    ) -> PreparedRun:
+        return PreparedRun(
+            run_id=run_id,
+            remote_root=self.config.remote.root_dir,
+            sync_paths=self.sync_paths(),
+            bootstrap=self.build_bootstrap_spec(),
+            invocation=self.build_invocation_spec(
+                artifact_store=artifact_store,
+                run_id=run_id,
+                config_object_key=config_object_key,
+                input_manifest_key=input_manifest_key,
+                uploaded_items=uploaded_items,
+            ),
+            artifacts=(
+                ArtifactRef(name="input_manifest", key=input_manifest_key, kind="jsonl"),
+                ArtifactRef(name="config_object", key=config_object_key, kind="json"),
+            ),
+            discovered_items=discovered_items,
+            uploaded_items=uploaded_items,
+            is_resume=is_resume,
+            async_upload=async_upload,
+            metadata={
+                "pipeline_family": self.pipeline_family(),
+                "input_manifest_key": input_manifest_key,
+                "config_object_key": config_object_key,
+            },
+        )
+
+    def sync_paths(self) -> tuple[str, ...]:
+        return ("pyproject.toml", "uv.lock", "src", "config")
+
+    def build_control_key(self, run_id: str, name: str) -> str:
+        return join_s3_key(self.build_run_root(run_id), f"control/{name}")
+
+    def build_run_root(self, run_id: str) -> str:
+        return join_s3_key(self.config.r2.output_prefix, run_id)
+
+    @abstractmethod
+    def pipeline_family(self) -> str:
         raise NotImplementedError
 
     @abstractmethod
-    def prepare_resume_run(self, artifact_store: ArtifactStore, run_id: str) -> PreparedRun:
+    def build_new_run_manifest(
+        self,
+        *,
+        artifact_store: ArtifactStore,
+        run_id: str,
+        dry_run: bool,
+    ) -> SubmissionManifest:
+        raise NotImplementedError
+
+    @abstractmethod
+    def load_resolved_recipe_mapping(self) -> dict[str, object]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def build_bootstrap_spec(self) -> BootstrapSpec:
+        raise NotImplementedError
+
+    @abstractmethod
+    def build_invocation_spec(
+        self,
+        *,
+        artifact_store: ArtifactStore,
+        run_id: str,
+        config_object_key: str,
+        input_manifest_key: str,
+        uploaded_items: int,
+    ) -> RemoteInvocationSpec:
         raise NotImplementedError
 
 class SubmissionCoordinator:
@@ -732,6 +876,7 @@ __all__ = [
     "SshRemoteTransport",
     "SubmissionAdapter",
     "SubmissionCoordinator",
+    "SubmissionManifest",
     "SubmissionResult",
     "SubprocessAsyncCommandHandle",
     "SubprocessAsyncCommandRunner",

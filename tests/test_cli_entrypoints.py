@@ -8,18 +8,19 @@ import pytest
 
 from training_signal_processing.core.submission import R2ArtifactStore
 from training_signal_processing.main import cli
+from training_signal_processing.pipelines.example_echo.cli import cli as example_echo_cli
 from training_signal_processing.pipelines.example_echo.config import (
     load_recipe_config as load_example_echo_config,
 )
+from training_signal_processing.pipelines.example_echo.submission import EchoSubmissionAdapter
 from training_signal_processing.pipelines.ocr import config as ocr_config
 from training_signal_processing.pipelines.ocr.config import load_recipe_config
 from training_signal_processing.pipelines.ocr.submission import OcrSubmissionAdapter
-from training_signal_processing.pipelines.tokenizer.config import (
-    load_recipe_config as load_tokenizer_config,
-)
-from training_signal_processing.pipelines.youtube_asr.config import (
-    load_recipe_config as load_youtube_asr_config,
-)
+
+
+class FakeRemoteEnvStore:
+    def build_remote_env(self) -> dict[str, str]:
+        return {"R2_BUCKET": "test-bucket"}
 
 
 def prepare_sample_ocr_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
@@ -39,6 +40,11 @@ def prepare_sample_ocr_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
 
 def test_main_cli_registers_ocr_remote_job_command() -> None:
     assert "ocr-remote-job" in cli.commands
+
+
+@pytest.mark.parametrize("family_cli", [example_echo_cli])
+def test_family_clis_register_remote_job_command(family_cli) -> None:
+    assert "remote-job" in family_cli.commands
 
 
 def test_main_module_entrypoint_shows_help() -> None:
@@ -63,6 +69,25 @@ def test_ocr_submission_uses_package_cli_entrypoint(
     assert prepared.invocation.command.startswith(
         "uv run --python 3.12 --group remote_ocr --group model python -m "
         "training_signal_processing.main ocr-remote-job "
+    )
+
+
+def test_example_echo_submission_uses_family_cli_remote_job() -> None:
+    config_path = Path(
+        "src/training_signal_processing/pipelines/example_echo/configs/baseline.yaml"
+    )
+    config = load_example_echo_config(config_path)
+    spec = EchoSubmissionAdapter(config=config, config_path=config_path).build_invocation_spec(
+        artifact_store=FakeRemoteEnvStore(),
+        run_id="run-001",
+        config_object_key="control/recipe.json",
+        input_manifest_key="control/input_manifest.jsonl",
+        uploaded_items=0,
+    )
+
+    assert (
+        "python -m training_signal_processing.pipelines.example_echo.cli remote-job"
+        in spec.command
     )
 
 
@@ -165,7 +190,7 @@ def test_load_recipe_config_parses_marker_ocr_resources() -> None:
     assert config.ray.marker_ocr_resources.num_cpus == pytest.approx(3.0)
 
 
-def test_load_recipe_config_rejects_non_positive_marker_ocr_resources(
+def test_load_recipe_config_accepts_marker_ocr_resource_values_without_custom_policy(
     tmp_path: Path,
 ) -> None:
     gpu_config_path = tmp_path / "invalid_marker_gpu.yaml"
@@ -175,9 +200,6 @@ def test_load_recipe_config_rejects_non_positive_marker_ocr_resources(
         .replace("num_gpus: 0.5", "num_gpus: 0"),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="marker_ocr_resources.num_gpus must be positive"):
-        load_recipe_config(gpu_config_path)
-
     cpu_config_path = tmp_path / "invalid_marker_cpu.yaml"
     cpu_config_path.write_text(
         Path("config/remote_ocr.sample.yaml")
@@ -185,8 +207,9 @@ def test_load_recipe_config_rejects_non_positive_marker_ocr_resources(
         .replace("num_cpus: 3", "num_cpus: 0"),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="marker_ocr_resources.num_cpus must be positive"):
-        load_recipe_config(cpu_config_path)
+
+    assert load_recipe_config(gpu_config_path).ray.marker_ocr_resources.num_gpus == 0
+    assert load_recipe_config(cpu_config_path).ray.marker_ocr_resources.num_cpus == 0
 
 
 @pytest.mark.parametrize(
@@ -197,8 +220,6 @@ def test_load_recipe_config_rejects_non_positive_marker_ocr_resources(
             load_example_echo_config,
             Path("src/training_signal_processing/pipelines/example_echo/configs/baseline.yaml"),
         ),
-        (load_tokenizer_config, Path("config/remote_tokenizer.sample.yaml")),
-        (load_youtube_asr_config, Path("config/remote_youtube_asr.sample.yaml")),
     ],
 )
 def test_recipe_configs_reject_removed_ray_async_upload(
@@ -227,12 +248,6 @@ def test_recipe_configs_reject_removed_ray_async_upload(
         (
             load_example_echo_config,
             Path("src/training_signal_processing/pipelines/example_echo/configs/baseline.yaml"),
-            "remote_tunnel_port",
-        ),
-        (load_tokenizer_config, Path("config/remote_tokenizer.sample.yaml"), "local_tracking_uri"),
-        (
-            load_youtube_asr_config,
-            Path("config/remote_youtube_asr.sample.yaml"),
             "remote_tunnel_port",
         ),
     ],

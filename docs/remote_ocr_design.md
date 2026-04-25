@@ -8,9 +8,9 @@ This repo now includes a small remote OCR pipeline with:
 - single-node remote `ray.data` execution
 - Marker OCR
 - R2 input/output
-- R2-backed progress through run state, manifests, and event objects
+- R2-backed completion tracking through materialized markdown outputs
 - optional MLflow only through a directly reachable tracking URI
-- resumability through batch manifests in R2
+- resumability by listing expected output objects in R2
 
 ## Main Entry Point
 
@@ -46,23 +46,21 @@ uv run --group remote_ocr python -m training_signal_processing.main run --config
 4. Apply:
    - `skip_existing`
    - `marker_ocr`
-   - `export_markdown`
 5. Materialize each Ray batch on the driver and write markdown outputs
-   synchronously to R2 before ledger commit.
-6. Commit each finished microbatch:
-   - manifest JSONL chunk
-   - event JSON chunk
-   - updated `run_state.json`
+   synchronously to R2.
+6. Update in-memory run progress and optional MLflow metrics; do not write
+   batch manifests, event objects, `run_state.json`, or `run.json`.
 
 ## Observability
 
-- `run_state.json`, batch manifests, and event objects in R2 are the durable
-  progress and recovery source of truth.
+- Materialized output objects in R2 are the durable completion source of truth.
+  Runtime progress is in memory and optionally mirrored to MLflow.
 - MLflow is optional. When enabled, `mlflow.tracking_uri` must be reachable from
   the logging process directly; the framework does not open SSH tunnels.
 
 ## Resumability
 
 - Outputs are stored under `dataset/processed/pdf_ocr/<run_id>/`.
-- The remote executor reads prior manifest chunks and skips already completed source keys.
+- The remote executor lists expected markdown output objects and skips source
+  keys whose outputs already exist.
 - `resume --config ... --run-id <run-id>` reruns the remote job against the same input manifest.

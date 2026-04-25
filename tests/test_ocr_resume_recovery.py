@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from training_signal_processing.core.models import (
@@ -11,23 +10,18 @@ from training_signal_processing.core.models import (
     R2Config,
     RayTransformResources,
     RemoteRuntimeConfig,
-    RunArtifactLayout,
-    RunState,
     RuntimeRunBindings,
     SshConfig,
 )
 from training_signal_processing.core.storage import ObjectStore
-from training_signal_processing.core.utils import join_s3_key
 from training_signal_processing.pipelines.ocr import ops as ocr_ops
 from training_signal_processing.pipelines.ocr.models import (
     InputConfig,
     OcrRayConfig,
     RecipeConfig,
     ResumeConfig,
-    build_markdown_r2_key,
 )
-from training_signal_processing.pipelines.ocr.resume import OcrCheckpointStore
-from training_signal_processing.pipelines.ocr.runtime import OcrPipelineRuntimeAdapter
+from training_signal_processing.pipelines.ocr.runtime import build_adapter
 
 
 class FakeObjectStore(ObjectStore):
@@ -110,13 +104,6 @@ def build_recipe_config() -> RecipeConfig:
     )
 
 
-def build_artifact_layout(run_id: str) -> RunArtifactLayout:
-    return RunArtifactLayout(
-        source_root_key="dataset/raw/pdf",
-        output_root_key=f"dataset/processed/pdf_ocr/{run_id}",
-    )
-
-
 def test_prepare_pdf_document_and_resume_recovery_share_markdown_key() -> None:
     config = build_recipe_config()
     bindings = RuntimeRunBindings(
@@ -124,11 +111,7 @@ def test_prepare_pdf_document_and_resume_recovery_share_markdown_key() -> None:
         input_manifest_key="memory://input.jsonl",
     )
     object_store = FakeObjectStore()
-    adapter = OcrPipelineRuntimeAdapter(
-        config=config,
-        bindings=bindings,
-        object_store=object_store,  # type: ignore[arg-type]
-    )
+    adapter = build_adapter(config, bindings, object_store)  # type: ignore[arg-type]
     artifact_layout = adapter.get_artifact_layout()
     runtime = OpRuntimeContext(
         config=config,
@@ -148,16 +131,15 @@ def test_prepare_pdf_document_and_resume_recovery_share_markdown_key() -> None:
     prepared = ocr_ops.PreparePdfDocumentOp().bind_runtime(runtime).process_row(row)
 
     assert prepared is not None
-    assert prepared["markdown_r2_key"] == build_markdown_r2_key(
+    assert prepared["markdown_r2_key"] == ocr_ops.build_markdown_r2_key(
         artifact_layout.output_root_key,
         "books/example.pdf",
     )
 
     object_store.write_bytes(str(prepared["markdown_r2_key"]), b"markdown")
 
-    recovered = adapter.resolve_completed_item_keys(
+    recovered = adapter.resolve_completed_source_keys(
         input_rows=[row],
-        completed_item_keys=set(),
     )
 
     assert recovered == {"dataset/raw/pdf/books/example.pdf"}
@@ -171,11 +153,7 @@ def test_ocr_resume_recovery_respects_allow_overwrite() -> None:
         allow_overwrite=True,
     )
     object_store = FakeObjectStore()
-    adapter = OcrPipelineRuntimeAdapter(
-        config=config,
-        bindings=bindings,
-        object_store=object_store,  # type: ignore[arg-type]
-    )
+    adapter = build_adapter(config, bindings, object_store)  # type: ignore[arg-type]
     output_root_key = adapter.get_artifact_layout().output_root_key
     row = {
         "source_r2_key": "dataset/raw/pdf/books/example.pdf",
@@ -186,112 +164,38 @@ def test_ocr_resume_recovery_respects_allow_overwrite() -> None:
     }
 
     object_store.write_bytes(
-        build_markdown_r2_key(output_root_key, "books/example.pdf"),
+        ocr_ops.build_markdown_r2_key(output_root_key, "books/example.pdf"),
         b"markdown",
     )
 
-    recovered = adapter.resolve_completed_item_keys(
+    recovered = adapter.resolve_completed_source_keys(
         input_rows=[row],
-        completed_item_keys={"dataset/raw/pdf/from-manifest.pdf"},
     )
 
     assert recovered == set()
 
 
-def test_ocr_resume_ledger_repairs_existing_state_from_durable_outputs() -> None:
+def test_ocr_completion_tracker_requires_expected_markdown_output() -> None:
     config = build_recipe_config()
+    bindings = RuntimeRunBindings(
+        run_id="resume-run",
+        input_manifest_key="memory://input.jsonl",
+    )
     object_store = FakeObjectStore()
-    ledger = OcrCheckpointStore(config=config, object_store=object_store)
-    run_id = "resume-run"
-    artifact_layout = build_artifact_layout(run_id)
-    existing_state = RunState(
-        run_id=run_id,
-        status="failed",
-        total_items=10,
-        pending_items=0,
-        success_count=10,
-        failed_count=2,
-        skipped_count=1,
-        last_committed_batch=7,
-        started_at="2026-04-22T00:00:00Z",
-        updated_at="2026-04-22T00:00:00Z",
-        source_root_key=artifact_layout.source_root_key,
-        output_root_key=artifact_layout.output_root_key,
-        tracking_run_id="old-tracking",
-        error_message="stale failure",
-        current_phase="resume_state_loaded",
-        last_phase_at="2026-04-22T00:00:00Z",
-    )
+    adapter = build_adapter(config, bindings, object_store)  # type: ignore[arg-type]
+    row = {
+        "source_r2_key": "dataset/raw/pdf/books/example.pdf",
+        "relative_path": "books/example.pdf",
+        "source_size_bytes": 123,
+        "source_page_count": 5,
+        "source_sha256": "abc123",
+    }
     object_store.write_bytes(
-        ledger.build_run_state_key(run_id),
-        json.dumps(existing_state.to_dict()).encode("utf-8"),
-    )
-    object_store.write_bytes(
-        join_s3_key(artifact_layout.output_root_key, "manifests/batch-00012.jsonl"),
-        b"",
-    )
-
-    repaired = ledger.initialize_run_state(
-        run_id=run_id,
-        total_items=10,
-        pending_items=10,
-        precompleted_count=8,
-        artifact_layout=artifact_layout,
-        tracking_run_id="new-tracking",
+        ocr_ops.build_markdown_r2_key(
+            adapter.get_artifact_layout().output_root_key,
+            "other.pdf",
+        ),
+        b"markdown",
     )
 
-    assert repaired.status == "running"
-    assert repaired.last_committed_batch == 12
-    assert repaired.pending_items == 2
-    assert repaired.success_count == 8
-    assert repaired.skipped_count == 0
-    assert repaired.failed_count == 2
-    assert repaired.tracking_run_id == "old-tracking"
-
-
-def test_ocr_resume_ledger_repairs_skipped_count_for_recovered_outputs() -> None:
-    config = build_recipe_config()
-    object_store = FakeObjectStore()
-    ledger = OcrCheckpointStore(config=config, object_store=object_store)
-    run_id = "resume-run"
-    artifact_layout = build_artifact_layout(run_id)
-    existing_state = RunState(
-        run_id=run_id,
-        status="partial",
-        total_items=10,
-        pending_items=5,
-        success_count=5,
-        failed_count=1,
-        skipped_count=0,
-        last_committed_batch=4,
-        started_at="2026-04-22T00:00:00Z",
-        updated_at="2026-04-22T00:00:00Z",
-        source_root_key=artifact_layout.source_root_key,
-        output_root_key=artifact_layout.output_root_key,
-        tracking_run_id="old-tracking",
-        current_phase="resume_state_loaded",
-        last_phase_at="2026-04-22T00:00:00Z",
-    )
-    object_store.write_bytes(
-        ledger.build_run_state_key(run_id),
-        json.dumps(existing_state.to_dict()).encode("utf-8"),
-    )
-    object_store.write_bytes(
-        join_s3_key(artifact_layout.output_root_key, "manifests/batch-00009.jsonl"),
-        b"",
-    )
-
-    repaired = ledger.initialize_run_state(
-        run_id=run_id,
-        total_items=10,
-        pending_items=10,
-        precompleted_count=8,
-        artifact_layout=artifact_layout,
-        tracking_run_id="new-tracking",
-    )
-
-    assert repaired.last_committed_batch == 9
-    assert repaired.pending_items == 2
-    assert repaired.success_count == 5
-    assert repaired.skipped_count == 3
-    assert repaired.failed_count == 1
+    assert adapter.resolve_completed_source_keys(input_rows=[row]) == set()

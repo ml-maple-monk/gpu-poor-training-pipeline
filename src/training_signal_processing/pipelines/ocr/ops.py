@@ -1,21 +1,21 @@
 from __future__ import annotations
 
 import multiprocessing as mp
+from hashlib import sha256
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from time import perf_counter, sleep
 
 from ...core.models import ExecutionLogEvent
-from ...core.utils import utc_isoformat
+from ...core.utils import join_s3_key, utc_isoformat
 from ...ops.base import Batch
 from ...ops.builtin import (
     BatchTransformOp,
-    ExportMarkdownMapper,
     MarkerOcrMapper,
     SkipExistingFilter,
     SourcePreparationOp,
 )
-from .models import PdfTask, build_markdown_r2_key
+from .models import PdfTask
 
 # WARNING TO OTHER AGENTS: DO NOT CHANGE ANYTHING IN THIS FILE WITHOUT EXPLICIT USER APPROVAL.
 
@@ -25,14 +25,24 @@ ADD NEW CONCRETE OCR OPS TO THIS FILE OR TO ANOTHER MODULE IN THIS PACKAGE.
 Design contract:
 - Define one concrete subclass per OCR pipeline op.
 - Set `op_name` so the class auto-registers on import.
-- Inherit from `SourcePreparationOp`, `BatchTransformOp`, `SkipExistingFilter`,
-  or `ExportMarkdownMapper` so the executor can infer the stage automatically.
+- Inherit from `SourcePreparationOp`, `BatchTransformOp`, or `SkipExistingFilter`
+  so the executor can infer the stage automatically.
 - The pipeline owner should only need to modify this package and the YAML recipe
   to add a new op.
 """
 
 OCR_CONVERSION_TIMEOUT_SEC = 1800
 SOURCE_OBJECT_POLL_INTERVAL_SEC = 2.0
+
+
+def build_flat_markdown_name(relative_path: str) -> str:
+    source_name = Path(relative_path).with_suffix(".md").name
+    path_digest = sha256(relative_path.encode("utf-8")).hexdigest()[:16]
+    return f"{path_digest}-{source_name}"
+
+
+def build_markdown_r2_key(output_root_key: str, relative_path: str) -> str:
+    return join_s3_key(output_root_key, f"markdown/{build_flat_markdown_name(relative_path)}")
 
 
 class MarkerConversionError(RuntimeError):
@@ -237,7 +247,7 @@ class SkipExistingDocumentsOp(SkipExistingFilter):
         runtime = self.require_runtime()
         if runtime.allow_overwrite:
             return True
-        return str(row["source_r2_key"]) not in runtime.completed_item_keys
+        return str(row["source_r2_key"]) not in runtime.completed_source_keys
 
 
 class MarkerOcrDocumentOp(MarkerOcrMapper):
@@ -249,25 +259,72 @@ class MarkerOcrDocumentOp(MarkerOcrMapper):
         started_clock = perf_counter()
         diagnostics = build_marker_diagnostics(dict(self.options))
         timeout_sec = int(self.options.get("timeout_sec", OCR_CONVERSION_TIMEOUT_SEC))
-        staged_pdf_path = ""
+        source_key = str(row["source_r2_key"])
+        pdf_bytes = self.read_source_pdf(
+            runtime=runtime,
+            source_key=source_key,
+            diagnostics=diagnostics,
+            timeout_sec=timeout_sec,
+        )
+        markdown_text, conversion_diagnostics = self.convert_source_pdf(
+            runtime=runtime,
+            pdf_bytes=pdf_bytes,
+            diagnostics=diagnostics,
+            timeout_sec=timeout_sec,
+            started_clock=started_clock,
+        )
+        diagnostics.update(conversion_diagnostics)
+        return {
+            **row,
+            "run_id": runtime.run_id,
+            "status": "success",
+            "error_message": "",
+            "started_at": started_at,
+            "finished_at": utc_isoformat(),
+            "duration_sec": perf_counter() - started_clock,
+            "marker_exit_code": 0,
+            "markdown_text": markdown_text,
+            "staged_pdf_path": "",
+            "diagnostics": diagnostics,
+        }
+
+    def read_source_pdf(
+        self,
+        *,
+        runtime: object,
+        source_key: str,
+        diagnostics: dict[str, object],
+        timeout_sec: int,
+    ) -> bytes:
+        object_store = runtime.get_object_store()
+        self.log_runtime_event(
+            runtime,
+            code="ocr.pdf.read.start",
+            message="Starting PDF read for OCR.",
+            details={"source_r2_key": source_key, "diagnostics": diagnostics},
+        )
+        wait_for_source_object(
+            object_store,
+            key=source_key,
+            timeout_sec=timeout_sec,
+        )
+        diagnostics["source_object_ready"] = True
+        pdf_bytes = object_store.read_bytes(source_key)
+        diagnostics["pdf_bytes_loaded"] = len(pdf_bytes)
+        return pdf_bytes
+
+    def convert_source_pdf(
+        self,
+        *,
+        runtime: object,
+        pdf_bytes: bytes,
+        diagnostics: dict[str, object],
+        timeout_sec: int,
+        started_clock: float,
+    ) -> tuple[str, dict[str, object]]:
+        staged_pdf_path = stage_pdf_bytes_for_ocr(pdf_bytes)
+        diagnostics["staged_pdf_path"] = str(staged_pdf_path)
         try:
-            object_store = runtime.get_object_store()
-            self.log_runtime_event(
-                runtime,
-                code="ocr.pdf.read.start",
-                message="Starting PDF read for OCR.",
-                details={"source_r2_key": str(row["source_r2_key"]), "diagnostics": diagnostics},
-            )
-            wait_for_source_object(
-                object_store,
-                key=str(row["source_r2_key"]),
-                timeout_sec=timeout_sec,
-            )
-            diagnostics["source_object_ready"] = True
-            pdf_bytes = object_store.read_bytes(str(row["source_r2_key"]))
-            diagnostics["pdf_bytes_loaded"] = len(pdf_bytes)
-            staged_pdf_path = str(stage_pdf_bytes_for_ocr(pdf_bytes))
-            diagnostics["staged_pdf_path"] = staged_pdf_path
             self.log_runtime_event(
                 runtime,
                 code="ocr.converter.init.start",
@@ -275,48 +332,19 @@ class MarkerOcrDocumentOp(MarkerOcrMapper):
                 details={"diagnostics": diagnostics},
             )
             elapsed_sec = perf_counter() - started_clock
-            remaining_timeout_sec = max(int(timeout_sec - elapsed_sec), 1)
             markdown_text, conversion_diagnostics = self.convert_pdf_file(
-                Path(staged_pdf_path),
-                timeout_sec=remaining_timeout_sec,
+                staged_pdf_path,
+                timeout_sec=max(int(timeout_sec - elapsed_sec), 1),
             )
-            diagnostics.update(conversion_diagnostics)
-            status = "success"
-            error_message = ""
-            marker_exit_code = 0
             self.log_runtime_event(
                 runtime,
                 code="ocr.converter.init.finish",
                 message="OCR converter process completed successfully.",
-                details={"diagnostics": diagnostics},
+                details={"diagnostics": {**diagnostics, **conversion_diagnostics}},
             )
-        except Exception as exc:
-            markdown_text = ""
-            status = "failed"
-            error_message = str(exc)
-            marker_exit_code = 1
-            diagnostics.update(getattr(exc, "diagnostics", {}))
-            diagnostics["failure"] = error_message
-            self.log_runtime_event(
-                runtime,
-                code="ocr.converter.failed",
-                message="OCR converter process failed.",
-                details={"diagnostics": diagnostics, "error": error_message},
-            )
-        finished_at = utc_isoformat()
-        return {
-            **row,
-            "run_id": runtime.run_id,
-            "status": status,
-            "error_message": error_message,
-            "started_at": started_at,
-            "finished_at": finished_at,
-            "duration_sec": perf_counter() - started_clock,
-            "marker_exit_code": marker_exit_code,
-            "markdown_text": markdown_text,
-            "staged_pdf_path": staged_pdf_path,
-            "diagnostics": diagnostics,
-        }
+            return markdown_text, conversion_diagnostics
+        finally:
+            staged_pdf_path.unlink(missing_ok=True)
 
     def convert_pdf_bytes(self, pdf_bytes: bytes) -> tuple[str, dict[str, object]]:
         return convert_pdf_bytes_with_timeout(pdf_bytes, dict(self.options))
@@ -354,18 +382,3 @@ class MarkerOcrDocumentOp(MarkerOcrMapper):
                 details=details,
             )
         )
-
-
-class ExportMarkdownResultOp(ExportMarkdownMapper):
-    op_name = "export_markdown"
-
-    def process_row(self, row: dict[str, object]) -> dict[str, object]:
-        status = str(row["status"])
-        if status != "success":
-            return {**row, "markdown_text": ""}
-        markdown_text = str(row.get("markdown_text", ""))
-        if not markdown_text:
-            raise ValueError("Successful OCR rows must include non-empty markdown_text.")
-        if not str(row.get("markdown_r2_key", "")):
-            raise ValueError("Successful OCR rows must include markdown_r2_key.")
-        return dict(row)

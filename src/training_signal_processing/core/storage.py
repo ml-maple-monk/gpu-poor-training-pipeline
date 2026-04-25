@@ -54,18 +54,24 @@ class ObjectStore(ABC):
         return payload
 
     def read_jsonl(self, key: str) -> list[dict[str, object]]:
+        lines = [
+            line.strip()
+            for line in self.read_bytes(key).decode("utf-8").splitlines()
+            if line.strip()
+        ]
+        if not lines:
+            return []
+        try:
+            payload = json.loads(f"[{','.join(lines)}]")
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Object store JSONL key '{key}' contains invalid JSONL.") from exc
+        if not isinstance(payload, list):
+            raise ValueError(f"Object store JSONL key '{key}' must contain JSON objects.")
         rows: list[dict[str, object]] = []
-        for line_number, raw_line in enumerate(
-            self.read_bytes(key).decode("utf-8").splitlines(),
-            start=1,
-        ):
-            line = raw_line.strip()
-            if not line:
-                continue
-            value = json.loads(line)
+        for item_number, value in enumerate(payload, start=1):
             if not isinstance(value, dict):
                 raise ValueError(
-                    f"Object store JSONL key '{key}' line {line_number} must be a JSON object."
+                    f"Object store JSONL key '{key}' item {item_number} must be a JSON object."
                 )
             rows.append(value)
         return rows

@@ -65,9 +65,9 @@ Set these up once; you won't touch them again.
   ```
   This writes an `mlflow.db` in the CWD. A remote pod cannot reach
   your laptop's `127.0.0.1`, and the framework no longer creates SSH
-  reverse tunnels. The default OCR path uses R2 `run_state.json`,
-  batch manifests, event objects, and `/root/ocr-jobs/<run_id>/job.log`
-  for progress. See §3 *Running-job runbook* for the one-liners.
+  reverse tunnels. The default OCR path uses R2 output objects and
+  `/root/ocr-jobs/<run_id>/job.log` for durable evidence. See §3
+  *Running-job runbook* for the one-liners.
 
 ### Credentials
 
@@ -226,8 +226,8 @@ override `ssh.host` / `ssh.port` in the recipe.
    Validated remote OCR recipe: src/.../baseline.yaml
    Run name: marker-ocr-baseline
    Executor type: ray
-   Declared ops: 4
-   Resolved pipeline: prepare_pdf_document, skip_existing, marker_ocr, export_markdown
+   Declared ops: 3
+   Resolved pipeline: prepare_pdf_document, skip_existing, marker_ocr
    ```
 2. **Dry run** (writes control artifacts to R2 but doesn't execute
    remotely):
@@ -263,20 +263,19 @@ override `ssh.host` / `ssh.port` in the recipe.
       goes to `.../job.log`. The local CLI then prints a
       `LaunchHandle` JSON and exits. **Exit code 0 means
       *launched successfully*, not *run complete*** — check
-      completion by reading `run_state.json` from R2 or tailing the
+      completion by listing OCR markdown outputs in R2 or tailing the
       remote log.
    7. Remote: `uv run python -m ...main ocr-remote-job …` runs
       under PID 1 (reparented to init), loops through the ops, and
-      writes per-batch manifests + final markdown bytes to R2.
+      writes final markdown bytes to R2.
       Because it is detached, closing the terminal or losing the
       SSH link does not affect it.
 4. **Watch progress.** The local CLI is fire-and-forget: it prints a
    `LaunchHandle` and exits after the detached process starts. Progress
-   is durable in R2 and verbose in the remote log. Watch the log with
-   `ssh <pod> 'tail -F /root/ocr-jobs/<run_id>/job.log'` and inspect
-   `dataset/processed/pdf_ocr/<run_id>/run_state.json` for
-   `status`, `success_count`, `failed_count`, `skipped_count`, and
-   `pending_items`.
+   is durable in R2 outputs and verbose in the remote log. Watch the log with
+   `ssh <pod> 'tail -F /root/ocr-jobs/<run_id>/job.log'` and list
+   `dataset/processed/pdf_ocr/<run_id>/markdown/` to count completed
+   documents.
 
    MLflow is optional. Enable it only when `mlflow.tracking_uri` is
    directly reachable from the process doing the logging; the framework
@@ -289,13 +288,10 @@ override `ssh.host` / `ssh.port` in the recipe.
      --config src/training_signal_processing/pipelines/ocr/configs/baseline.yaml \
      --run-id 20260423T132754Z
    ```
-   The `OcrCheckpointStore.load_completed_item_keys` reads all prior
-   batch manifests and feeds them to `SkipExistingDocumentsOp`, so
-   already-successful PDFs are filtered out without being reprocessed.
-   On older runs with thousands of tiny batch manifests, the first
-   resume can spend several minutes replaying manifests before Ray
-   starts. That is expected; once recovery finishes, the remote log
-   shows Ray startup and new `[batch:commit]` lines.
+   `OcrCompletionTracker` lists existing markdown objects and feeds their
+   source keys to `SkipExistingDocumentsOp`, so already-successful PDFs are
+   filtered out without being reprocessed. Once output discovery finishes,
+   the remote log shows Ray startup and new `[batch:finish]` lines.
 
    > ⚠ **Double-launch hazard.** `resume --run-id X` does **not**
    > currently detect a still-live run on the pod; it will blindly
@@ -351,14 +347,11 @@ reference template.
 TL;DR:
 
 - Create `pipelines/<new>/` with `models.py`, `config.py`, `ops.py`,
-  `runtime.py`, `exporter.py`, `resume.py`, `submission.py`, `remote_job.py`,
-  `cli.py`, and configs.
+  `runtime.py`, `submission.py`, `cli.py`, and configs.
 - Ops self-register when `pipelines/<new>/__init__.py` imports `ops.py`.
   `op_name` is globally unique across imported pipeline ops.
-- `main.py` is frozen; each new pipeline gets its own `cli.py` +
-  `remote_job.py` — mirror
-  [pipelines/youtube_asr/cli.py](src/training_signal_processing/pipelines/youtube_asr/cli.py)
-  or
+- `main.py` is frozen; each new pipeline gets its own `cli.py` with
+  a `remote-job` command — mirror
   [pipelines/example_echo/cli.py](src/training_signal_processing/pipelines/example_echo/cli.py).
 - Runnable means `ruff` + `lint-imports` + `cli validate` +
   `cli run --dry-run` all pass. Remote execution drags in
@@ -485,7 +478,7 @@ ssh <pod> 'p=$(cat /root/ocr-jobs/<run_id>/job.pgid); kill -TERM -$p; sleep 10; 
 ```
 
 **Progress.** MLflow is no longer forwarded through SSH. Use R2
-`run_state.json`, batch manifests, and event objects for progress;
+output objects plus the detached remote log for durable progress;
 enable MLflow only with a directly reachable `mlflow.tracking_uri`.
 <!-- /TRANSITIONAL -->
 

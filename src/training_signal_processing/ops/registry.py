@@ -16,10 +16,12 @@ TransformOp = MapperOp | FilterOp | PipelineOp
 class ResolvedOpPipeline:
     prepare_op: MapperOp
     transform_ops: tuple[TransformOp, ...]
-    export_op: MapperOp
+    export_op: MapperOp | None
 
     @property
     def all_ops(self) -> tuple[Op, ...]:
+        if self.export_op is None:
+            return (self.prepare_op, *self.transform_ops)
         return (self.prepare_op, *self.transform_ops, self.export_op)
 
     @property
@@ -37,7 +39,7 @@ class OpRegistry(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def resolve_export_op(self, configs: list[OpConfig]) -> MapperOp:
+    def resolve_export_op(self, configs: list[OpConfig]) -> MapperOp | None:
         raise NotImplementedError
 
     @abstractmethod
@@ -80,8 +82,19 @@ class RegisteredOpRegistry(OpRegistry):
             raise ValueError("Pipeline must declare at least one transform op.")
         return resolved
 
-    def resolve_export_op(self, configs: list[OpConfig]) -> MapperOp:
-        return cast(MapperOp, self._resolve_single_stage(configs, "export"))
+    def resolve_export_op(self, configs: list[OpConfig]) -> MapperOp | None:
+        matching = [
+            self._build_configured_op(config)
+            for config in configs
+            if self._resolve_declared_stage(config) == "export"
+        ]
+        if len(matching) > 1:
+            raise ValueError(
+                f"Pipeline must declare at most one 'export' op, found {len(matching)}."
+            )
+        if not matching:
+            return None
+        return cast(MapperOp, matching[0])
 
     def resolve_named_op(self, configs: list[OpConfig], op_name: str) -> Op:
         for config in configs:

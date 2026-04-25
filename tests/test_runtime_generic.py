@@ -3,19 +3,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from training_signal_processing.core.checkpoint import ResumeLedger
 from training_signal_processing.core.dataset import (
     ConfiguredRayDatasetBuilder,
     DatasetBuilder,
     DatasetHandle,
 )
 from training_signal_processing.core.execution import (
+    Exporter,
+    OutputCompletionTracker,
     PipelineRuntimeAdapter,
     StreamingRayExecutor,
 )
-from training_signal_processing.core.exporter import Exporter
 from training_signal_processing.core.models import (
-    BatchCommit,
     OpConfig,
     OpRuntimeContext,
     RayConfig,
@@ -26,8 +25,38 @@ from training_signal_processing.core.models import (
     RuntimeTrackingContext,
 )
 from training_signal_processing.core.observability import ExecutionLogger
+from training_signal_processing.core.storage import ObjectStore
+from training_signal_processing.core.utils import join_s3_key
 from training_signal_processing.ops.base import Batch, MapperOp
 from training_signal_processing.ops.registry import RegisteredOpRegistry
+
+
+class MemoryObjectStore(ObjectStore):
+    bucket = "memory"
+
+    def __init__(self, payloads: dict[str, bytes]) -> None:
+        self.payloads = payloads
+
+    def exists(self, key: str) -> bool:
+        return key in self.payloads
+
+    def list_keys(self, prefix: str) -> list[str]:
+        return [key for key in self.payloads if key.startswith(prefix)]
+
+    def read_bytes(self, key: str) -> bytes:
+        return self.payloads[key]
+
+    def write_bytes(self, key: str, body: bytes) -> None:
+        self.payloads[key] = body
+
+    def upload_file(self, path: Path, key: str) -> None:
+        self.payloads[key] = path.read_bytes()
+
+    def make_url(self, key: str) -> str:
+        return f"memory://{key}"
+
+    def build_pyarrow_filesystem(self):
+        raise NotImplementedError
 
 
 class SimpleDatasetHandle(DatasetHandle):
@@ -105,7 +134,12 @@ class PrepareGenericOp(MapperOp):
     op_stage = "prepare"
 
     def process_batch(self, batch: Batch) -> Batch:
-        return [{**row, "prepared": True} for row in batch]
+        runtime = self.require_runtime()
+        return [
+            {**row, "prepared": True}
+            for row in batch
+            if str(row["id"]) not in runtime.completed_source_keys
+        ]
 
 
 class TransformGenericOp(MapperOp):
@@ -122,11 +156,20 @@ class ExportGenericOp(MapperOp):
     op_stage = "export"
 
     def process_batch(self, batch: Batch) -> Batch:
-        return [{**row, "ready_for_export": True} for row in batch]
+        return [
+            {
+                **row,
+                "ready_for_export": True,
+                "status": "success",
+                "duration_sec": 0.1,
+            }
+            for row in batch
+        ]
 
 
 class FakeExporter(Exporter):
-    def __init__(self) -> None:
+    def __init__(self, object_store: MemoryObjectStore) -> None:
+        self.object_store = object_store
         self.finalized_run_state: RunState | None = None
         self.fail_on_batch_id = ""
 
@@ -135,127 +178,44 @@ class FakeExporter(Exporter):
 
         if batch_id == self.fail_on_batch_id:
             raise RuntimeError(f"injected export failure on {batch_id}")
+        output_keys = [
+            join_s3_key(
+                "output/items/fake-run-001",
+                f"outputs/{row.get('id') or row.get('relative_path') or index}.json",
+            )
+            for index, row in enumerate(rows, start=1)
+        ]
+        for output_key in output_keys:
+            self.object_store.write_bytes(output_key, b"{}")
         return ExportBatchResult(
             batch_id=batch_id,
             row_count=len(rows),
-            output_keys=[
-                f"memory://{row.get('id') or row.get('relative_path') or index}"
-                for index, row in enumerate(rows, start=1)
-            ],
+            output_keys=output_keys,
         )
 
     def finalize_run(self, run_state: RunState) -> None:
         self.finalized_run_state = run_state
 
 
-class FakeResumeLedger(ResumeLedger):
-    def __init__(self) -> None:
-        self.run_state: RunState | None = None
-        self.write_history: list[RunState] = []
+class FakeCompletionTracker(OutputCompletionTracker):
+    def source_key_for_input(self, row: dict[str, Any]) -> str:
+        return str(row["id"])
 
-    def find_latest_partial_run(self) -> str | None:
-        return None
-
-    def load_run_state(self, run_id: str) -> RunState | None:
-        if self.run_state is not None and self.run_state.run_id == run_id:
-            return self.run_state
-        return None
-
-    def load_completed_item_keys(self, run_id: str) -> set[str]:
-        return set()
-
-    def initialize_run_state(
+    def output_key_for_input(
         self,
-        *,
-        run_id: str,
-        total_items: int,
-        pending_items: int,
-        precompleted_count: int,
+        row: dict[str, Any],
         artifact_layout: RunArtifactLayout,
-        tracking_run_id: str,
-    ) -> RunState:
-        if self.run_state is not None and self.run_state.run_id == run_id:
-            return self.run_state
-        self.run_state = RunState(
-            run_id=run_id,
-            status="running",
-            total_items=total_items,
-            pending_items=pending_items,
-            success_count=0,
-            failed_count=0,
-            skipped_count=precompleted_count,
-            last_committed_batch=0,
-            started_at="2026-04-22T00:00:00Z",
-            updated_at="2026-04-22T00:00:00Z",
-            source_root_key=artifact_layout.source_root_key,
-            output_root_key=artifact_layout.output_root_key,
-            tracking_run_id=tracking_run_id,
-            current_phase="run_initialized",
-            last_phase_at="2026-04-22T00:00:00Z",
-        )
-        return self.run_state
+    ) -> str:
+        return join_s3_key(artifact_layout.output_root_key, f"outputs/{row['id']}.json")
 
-    def commit_batch(
-        self,
-        *,
-        run_state: RunState,
-        batch_index: int,
-        input_row_count: int,
-        rows: list[dict[str, Any]],
-    ) -> tuple[BatchCommit, RunState]:
-        self.run_state = RunState(
-            run_id=run_state.run_id,
-            status="running",
-            total_items=run_state.total_items,
-            pending_items=max(run_state.pending_items - input_row_count, 0),
-            success_count=run_state.success_count + len(rows),
-            failed_count=run_state.failed_count,
-            skipped_count=run_state.skipped_count,
-            last_committed_batch=batch_index,
-            started_at=run_state.started_at,
-            updated_at="2026-04-22T00:00:01Z",
-            source_root_key=run_state.source_root_key,
-            output_root_key=run_state.output_root_key,
-            tracking_run_id=run_state.tracking_run_id,
-            current_phase=run_state.current_phase,
-            last_phase_at=run_state.last_phase_at,
-        )
-        return (
-            BatchCommit(
-                batch_id=f"batch-{batch_index:05d}",
-                input_row_count=input_row_count,
-                output_row_count=len(rows),
-                success_count=len(rows),
-                failed_count=0,
-                skipped_count=0,
-                duration_sec=0.1,
-                manifest_key=f"memory://manifest/{batch_index}",
-                event_key=f"memory://event/{batch_index}",
-            ),
-            self.run_state,
-        )
-
-    def write_run_state(self, run_state: RunState) -> None:
-        self.run_state = run_state
-        self.write_history.append(run_state)
-
-    def mark_run_finished(self, run_state: RunState) -> RunState:
-        self.run_state = RunState(
-            **{**run_state.to_dict(), "status": "success", "pending_items": 0}
-        )
-        return self.run_state
-
-    def mark_run_failed(self, run_state: RunState, message: str) -> RunState:
-        self.run_state = RunState(
-            **{**run_state.to_dict(), "status": "failed", "error_message": message}
-        )
-        return self.run_state
+    def output_listing_prefix(self, artifact_layout: RunArtifactLayout) -> str:
+        return join_s3_key(artifact_layout.output_root_key, "outputs")
 
 
 class FakePipelineAdapter(PipelineRuntimeAdapter):
     def __init__(self) -> None:
-        self.exporter = FakeExporter()
-        self.resume_ledger = FakeResumeLedger()
+        self.object_store = MemoryObjectStore({})
+        self.exporter = FakeExporter(self.object_store)
         self.dataset_builder = SimpleDatasetBuilder()
         self.bindings = RuntimeRunBindings(
             run_id="fake-run-001",
@@ -305,15 +265,15 @@ class FakePipelineAdapter(PipelineRuntimeAdapter):
         self,
         *,
         logger: ExecutionLogger,
-        completed_item_keys: set[str],
+        completed_source_keys: set[str],
     ) -> OpRuntimeContext:
         return OpRuntimeContext(
             config={"name": "fake"},
             run_id=self.bindings.run_id,
-            object_store=object(),
+            object_store=self.object_store,
             output_root_key="output/items/fake-run-001",
             source_root_key="source/items",
-            completed_item_keys=completed_item_keys,
+            completed_source_keys=completed_source_keys,
             logger=logger,
         )
 
@@ -323,19 +283,11 @@ class FakePipelineAdapter(PipelineRuntimeAdapter):
     def build_exporter(self) -> Exporter:
         return self.exporter
 
-    def build_resume_ledger(self) -> ResumeLedger:
-        return self.resume_ledger
+    def build_completion_tracker(self) -> OutputCompletionTracker:
+        return FakeCompletionTracker(self.object_store)
 
     def build_dataset_builder(self) -> DatasetBuilder:
         return self.dataset_builder
-
-    def resolve_completed_item_keys(
-        self,
-        *,
-        input_rows: list[dict[str, object]],
-        completed_item_keys: set[str],
-    ) -> set[str]:
-        return completed_item_keys
 
 
 def test_runtime_modules_do_not_import_pipeline_packages(capsys) -> None:
@@ -378,6 +330,34 @@ def test_root_package_exposes_only_main_entrypoint() -> None:
     assert not (package_dir / "utils.py").exists()
 
 
+def test_object_store_read_jsonl_parses_memory_body_and_ignores_blank_lines() -> None:
+    store = MemoryObjectStore(
+        {"input.jsonl": b'{"id": "a"}\n\n  {"id": "b", "value": 2}\n'}
+    )
+
+    assert store.read_jsonl("input.jsonl") == [
+        {"id": "a"},
+        {"id": "b", "value": 2},
+    ]
+
+
+def test_object_store_read_jsonl_returns_empty_list_for_blank_body() -> None:
+    store = MemoryObjectStore({"input.jsonl": b"\n  \n"})
+
+    assert store.read_jsonl("input.jsonl") == []
+
+
+def test_object_store_read_jsonl_rejects_non_object_entries() -> None:
+    store = MemoryObjectStore({"input.jsonl": b'{"id": "a"}\n42\n'})
+
+    try:
+        store.read_jsonl("input.jsonl")
+    except ValueError as exc:
+        assert "item 2 must be a JSON object" in str(exc)
+    else:
+        raise AssertionError("expected non-object JSONL entry to fail")
+
+
 def test_streaming_executor_runs_with_fake_pipeline_adapter(capsys) -> None:
     adapter = FakePipelineAdapter()
     summary = StreamingRayExecutor(adapter).run()
@@ -391,69 +371,69 @@ def test_streaming_executor_runs_with_fake_pipeline_adapter(capsys) -> None:
         "test_export_generic",
     ]
     assert summary["exported_batches"] == 2
-    assert summary["output_keys"] == ["memory://row-a", "memory://row-b"]
+    assert summary["output_keys"] == [
+        "output/items/fake-run-001/outputs/row-a.json",
+        "output/items/fake-run-001/outputs/row-b.json",
+    ]
     assert adapter.exporter.finalized_run_state is not None
     assert adapter.exporter.finalized_run_state.status == "success"
-    assert adapter.resume_ledger.run_state is not None
-    assert adapter.resume_ledger.run_state.status == "success"
     assert "[run] run_id=fake-run-001" in captured.out
     assert "[phase] run_id=fake-run-001 phase=dataset_build_start" in captured.out
     assert "[phase] run_id=fake-run-001 phase=iter_batches_start" in captured.out
     assert "[batch:start] batch_id=batch-00001" in captured.out
-    assert "[batch:commit] batch_id=batch-00002" in captured.out
+    assert "[batch:finish] batch_id=batch-00002" in captured.out
     assert "[run:finish] run_id=fake-run-001 status=success" in captured.out
     assert "run fake-run-001:" in captured.err
-    phases = [
-        state.current_phase
-        for state in adapter.resume_ledger.write_history
-        if state.current_phase
-    ]
-    assert "manifest_loaded" in phases
-    assert "resume_state_loaded" in phases
-    assert "dataset_build_start" in phases
-    assert "dataset_build_complete" in phases
-    assert "iter_batches_start" in phases
-    assert "first_batch_materialized" in phases
+    assert "[phase] run_id=fake-run-001 phase=manifest_loaded" in captured.out
+    assert "[phase] run_id=fake-run-001 phase=resume_state_loaded" in captured.out
+    assert "[phase] run_id=fake-run-001 phase=dataset_build_complete" in captured.out
+    assert "[phase] run_id=fake-run-001 phase=first_batch_materialized" in captured.out
 
 
-def test_streaming_executor_resume_continues_batch_numbering(capsys) -> None:
+def test_output_completion_tracker_maps_existing_outputs_to_source_keys() -> None:
     adapter = FakePipelineAdapter()
-    adapter.resume_ledger.run_state = RunState(
-        run_id="fake-run-001",
-        status="running",
-        total_items=2,
-        pending_items=2,
-        success_count=7,
-        failed_count=0,
-        skipped_count=0,
-        last_committed_batch=7,
-        started_at="2026-04-22T00:00:00Z",
-        updated_at="2026-04-22T00:00:00Z",
-        source_root_key="source/items",
-        output_root_key="output/items/fake-run-001",
-        tracking_run_id="disabled:fake-run-001",
-        current_phase="resume_state_loaded",
-        last_phase_at="2026-04-22T00:00:00Z",
+    adapter.object_store.write_bytes(
+        "output/items/fake-run-001/outputs/row-a.json",
+        b"{}",
     )
 
+    assert adapter.resolve_completed_source_keys(
+        input_rows=adapter.load_input_rows(),
+    ) == {"row-a"}
+
+
+def test_output_completion_tracker_ignores_outputs_when_overwrite_allowed() -> None:
+    adapter = FakePipelineAdapter()
+    adapter.bindings.allow_overwrite = True
+    adapter.object_store.write_bytes(
+        "output/items/fake-run-001/outputs/row-a.json",
+        b"{}",
+    )
+
+    assert adapter.resolve_completed_source_keys(
+        input_rows=adapter.load_input_rows(),
+    ) == set()
+
+
+def test_streaming_executor_writes_outputs_without_checkpoint_artifacts() -> None:
+    adapter = FakePipelineAdapter()
+
     summary = StreamingRayExecutor(adapter).run()
-    captured = capsys.readouterr()
 
     assert summary["status"] == "success"
-    assert adapter.resume_ledger.run_state is not None
-    assert adapter.resume_ledger.run_state.last_committed_batch == 9
-    assert adapter.resume_ledger.run_state.success_count == 9
-    assert "[batch:start] batch_id=batch-00008" in captured.out
-    assert "[batch:commit] batch_id=batch-00009" in captured.out
-    phases = [
-        state.current_phase
-        for state in adapter.resume_ledger.write_history
-        if state.current_phase
+    assert sorted(adapter.object_store.payloads) == [
+        "output/items/fake-run-001/outputs/row-a.json",
+        "output/items/fake-run-001/outputs/row-b.json",
     ]
-    assert "first_batch_materialized" in phases
+    forbidden_fragments = ("manifests/", "events/", "run_state.json", "run.json")
+    assert not any(
+        fragment in key
+        for key in adapter.object_store.payloads
+        for fragment in forbidden_fragments
+    )
 
 
-def test_streaming_executor_does_not_commit_batch_when_export_fails() -> None:
+def test_streaming_executor_does_not_mark_missing_output_complete_when_export_fails() -> None:
     adapter = FakePipelineAdapter()
     adapter.exporter.fail_on_batch_id = "batch-00002"
 
@@ -461,73 +441,12 @@ def test_streaming_executor_does_not_commit_batch_when_export_fails() -> None:
 
     assert summary["status"] == "failed"
     assert "injected export failure on batch-00002" in summary["error_message"]
-    assert adapter.resume_ledger.run_state is not None
-    assert adapter.resume_ledger.run_state.status == "failed"
-    assert adapter.resume_ledger.run_state.last_committed_batch == 1
-
-
-class RepairingResumeLedger(FakeResumeLedger):
-    def initialize_run_state(
-        self,
-        *,
-        run_id: str,
-        total_items: int,
-        pending_items: int,
-        precompleted_count: int,
-        artifact_layout: RunArtifactLayout,
-        tracking_run_id: str,
-    ) -> RunState:
-        existing = super().initialize_run_state(
-            run_id=run_id,
-            total_items=total_items,
-            pending_items=pending_items,
-            precompleted_count=precompleted_count,
-            artifact_layout=artifact_layout,
-            tracking_run_id=tracking_run_id,
-        )
-        self.run_state = RunState(
-            **{
-                **existing.to_dict(),
-                "last_committed_batch": 12,
-            }
-        )
-        return self.run_state
-
-
-class RepairingResumePipelineAdapter(FakePipelineAdapter):
-    def __init__(self) -> None:
-        super().__init__()
-        self.resume_ledger = RepairingResumeLedger()
-
-
-def test_streaming_executor_uses_repaired_batch_baseline(capsys) -> None:
-    adapter = RepairingResumePipelineAdapter()
-    adapter.resume_ledger.run_state = RunState(
-        run_id="fake-run-001",
-        status="running",
-        total_items=2,
-        pending_items=2,
-        success_count=7,
-        failed_count=0,
-        skipped_count=0,
-        last_committed_batch=7,
-        started_at="2026-04-22T00:00:00Z",
-        updated_at="2026-04-22T00:00:00Z",
-        source_root_key="source/items",
-        output_root_key="output/items/fake-run-001",
-        tracking_run_id="disabled:fake-run-001",
-        current_phase="resume_state_loaded",
-        last_phase_at="2026-04-22T00:00:00Z",
-    )
-
-    summary = StreamingRayExecutor(adapter).run()
-    captured = capsys.readouterr()
-
-    assert summary["status"] == "success"
-    assert adapter.resume_ledger.run_state is not None
-    assert adapter.resume_ledger.run_state.last_committed_batch == 14
-    assert "[batch:start] batch_id=batch-00013" in captured.out
-    assert "[batch:commit] batch_id=batch-00014" in captured.out
+    assert sorted(adapter.object_store.payloads) == [
+        "output/items/fake-run-001/outputs/row-a.json",
+    ]
+    assert adapter.resolve_completed_source_keys(
+        input_rows=adapter.load_input_rows(),
+    ) == {"row-a"}
 
 
 def test_configured_ray_dataset_builder_clamps_target_num_blocks(monkeypatch) -> None:

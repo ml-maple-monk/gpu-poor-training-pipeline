@@ -7,41 +7,35 @@ import tempfile
 from pathlib import Path
 
 from ...core.submission import (
-    ArtifactRef,
     ArtifactStore,
     BootstrapSpec,
     LocalAsyncUploadSpec,
-    PreparedRun,
     RemoteInvocationSpec,
     SubmissionAdapter,
+    SubmissionManifest,
 )
-from ...core.utils import compute_sha256_file, join_s3_key, parse_env_file, utc_timestamp
+from ...core.utils import compute_sha256_file, join_s3_key, parse_env_file
 from .config import load_resolved_recipe_mapping
 from .models import PdfTask, RecipeConfig
 
 
 class OcrSubmissionAdapter(SubmissionAdapter):
-    def __init__(
+    config: RecipeConfig
+
+    def pipeline_family(self) -> str:
+        return "ocr"
+
+    def build_new_run_manifest(
         self,
         *,
-        config: RecipeConfig,
-        config_path: Path,
-        overrides: list[str] | None = None,
-        overlay_paths: tuple[Path, ...] = (),
-    ) -> None:
-        self.config = config
-        self.config_path = config_path
-        self.overrides = overrides or []
-        self.overlay_paths = tuple(overlay_paths)
-
-    def prepare_new_run(self, artifact_store: ArtifactStore, *, dry_run: bool) -> PreparedRun:
-        run_id = utc_timestamp()
+        artifact_store: ArtifactStore,
+        run_id: str,
+        dry_run: bool,
+    ) -> SubmissionManifest:
         pdf_root = Path(self.config.input.local_pdf_root).expanduser()
         discovered_pdf_paths = self.discover_pdf_paths(pdf_root)
         manifest_rows = self.build_pdf_tasks(pdf_root, discovered_pdf_paths)
         pdf_paths = [pdf_root / task.relative_path for task in manifest_rows]
-        input_manifest_key = self.build_control_key(run_id, "input_manifest.jsonl")
-        config_object_key = self.build_control_key(run_id, "recipe.json")
         async_upload: LocalAsyncUploadSpec | None = None
         if not dry_run:
             async_upload = self.build_async_upload_spec(
@@ -50,84 +44,17 @@ class OcrSubmissionAdapter(SubmissionAdapter):
                 pdf_paths=pdf_paths,
                 run_id=run_id,
             )
-            artifact_store.write_jsonl(
-                input_manifest_key,
-                [task.to_dict() for task in manifest_rows],
-            )
-            artifact_store.write_json(
-                config_object_key,
-                load_resolved_recipe_mapping(
-                    self.config_path,
-                    self.overrides,
-                    overlay_paths=self.overlay_paths,
-                ),
-            )
-        return self.build_prepared_run(
-            artifact_store=artifact_store,
-            run_id=run_id,
-            input_manifest_key=input_manifest_key,
-            config_object_key=config_object_key,
+        return SubmissionManifest(
+            rows=[task.to_dict() for task in manifest_rows],
             discovered_items=len(manifest_rows),
-            uploaded_items=0,
-            is_resume=False,
             async_upload=async_upload,
         )
 
-    def prepare_resume_run(self, artifact_store: ArtifactStore, run_id: str) -> PreparedRun:
-        input_manifest_key = self.build_control_key(run_id, "input_manifest.jsonl")
-        config_object_key = self.build_control_key(run_id, "recipe.json")
-        if not artifact_store.exists(input_manifest_key):
-            raise ValueError(f"Resume manifest not found in R2: {input_manifest_key}")
-        if not artifact_store.exists(config_object_key):
-            raise ValueError(f"Resume recipe object not found in R2: {config_object_key}")
-        manifest_rows = artifact_store.read_jsonl(input_manifest_key)
-        return self.build_prepared_run(
-            artifact_store=artifact_store,
-            run_id=run_id,
-            input_manifest_key=input_manifest_key,
-            config_object_key=config_object_key,
-            discovered_items=len(manifest_rows),
-            uploaded_items=0,
-            is_resume=True,
-        )
-
-    def build_prepared_run(
-        self,
-        *,
-        artifact_store: ArtifactStore,
-        run_id: str,
-        input_manifest_key: str,
-        config_object_key: str,
-        discovered_items: int,
-        uploaded_items: int,
-        is_resume: bool,
-        async_upload: LocalAsyncUploadSpec | None = None,
-    ) -> PreparedRun:
-        return PreparedRun(
-            run_id=run_id,
-            remote_root=self.config.remote.root_dir,
-            sync_paths=("pyproject.toml", "uv.lock", "src", "config"),
-            bootstrap=self.build_bootstrap_spec(),
-            invocation=self.build_invocation_spec(
-                artifact_store=artifact_store,
-                run_id=run_id,
-                config_object_key=config_object_key,
-                input_manifest_key=input_manifest_key,
-                uploaded_items=uploaded_items,
-            ),
-            artifacts=(
-                ArtifactRef(name="input_manifest", key=input_manifest_key, kind="jsonl"),
-                ArtifactRef(name="config_object", key=config_object_key, kind="json"),
-            ),
-            discovered_items=discovered_items,
-            uploaded_items=uploaded_items,
-            is_resume=is_resume,
-            async_upload=async_upload,
-            metadata={
-                "pipeline_family": "ocr",
-                "input_manifest_key": input_manifest_key,
-                "config_object_key": config_object_key,
-            },
+    def load_resolved_recipe_mapping(self) -> dict[str, object]:
+        return load_resolved_recipe_mapping(
+            self.config_path,
+            self.overrides,
+            overlay_paths=self.overlay_paths,
         )
 
     def build_bootstrap_spec(self) -> BootstrapSpec:
@@ -323,9 +250,3 @@ class OcrSubmissionAdapter(SubmissionAdapter):
             f"{prefix}ENDPOINT": config_values["MLFLOW_S3_ENDPOINT_URL"],
             f"{prefix}NO_CHECK_BUCKET": "true",
         }
-
-    def build_control_key(self, run_id: str, name: str) -> str:
-        return join_s3_key(self.build_run_root(run_id), f"control/{name}")
-
-    def build_run_root(self, run_id: str) -> str:
-        return join_s3_key(self.config.r2.output_prefix, run_id)

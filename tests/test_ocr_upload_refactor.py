@@ -16,14 +16,13 @@ from training_signal_processing.core.submission import (
     PreparedRun,
     RemoteInvocationSpec,
     RemoteTransport,
-    SubmissionAdapter,
     SubmissionCoordinator,
 )
 from training_signal_processing.pipelines.ocr import config as ocr_config
 from training_signal_processing.pipelines.ocr import ops as ocr_ops
 from training_signal_processing.pipelines.ocr.config import load_recipe_config
-from training_signal_processing.pipelines.ocr.exporter import OcrMarkdownExporter
 from training_signal_processing.pipelines.ocr.models import PdfTask
+from training_signal_processing.pipelines.ocr.runtime import OcrMarkdownExporter
 from training_signal_processing.pipelines.ocr.submission import OcrSubmissionAdapter
 
 
@@ -139,7 +138,7 @@ class FakeRemoteTransport(RemoteTransport):
         )
 
 
-class FakeSubmissionAdapter(SubmissionAdapter):
+class FakeSubmissionAdapter:
     def __init__(self, prepared_run: PreparedRun) -> None:
         self.prepared_run = prepared_run
 
@@ -221,8 +220,6 @@ ops:
   - name: marker_ocr
     type: mapper
     force_ocr: true
-  - name: export_markdown
-    type: mapper
 """,
         encoding="utf-8",
     )
@@ -486,17 +483,18 @@ def test_marker_ocr_process_row_failure(
 ) -> None:
     row = build_prepared_ocr_row(ocr_runtime_context)
     op = ocr_ops.MarkerOcrDocumentOp(force_ocr=True).bind_runtime(ocr_runtime_context)
+    captured: dict[str, Path] = {}
 
     def raise_error(pdf_path: Path, timeout_sec: int) -> tuple[str, dict[str, object]]:
+        captured["pdf_path"] = pdf_path
         raise RuntimeError("converter exploded")
 
     monkeypatch.setattr(op, "convert_pdf_file", raise_error)
 
-    result = op.process_row(row)
+    with pytest.raises(RuntimeError, match="converter exploded"):
+        op.process_row(row)
 
-    assert result["status"] == "failed"
-    assert result["marker_exit_code"] == 1
-    assert "converter exploded" in result["error_message"]
+    assert captured["pdf_path"].exists() is False
 
 
 def test_marker_ocr_process_row_timeout(
@@ -505,16 +503,18 @@ def test_marker_ocr_process_row_timeout(
 ) -> None:
     row = build_prepared_ocr_row(ocr_runtime_context)
     op = ocr_ops.MarkerOcrDocumentOp(force_ocr=True).bind_runtime(ocr_runtime_context)
+    captured: dict[str, Path] = {}
 
     def raise_timeout(pdf_path: Path, timeout_sec: int) -> tuple[str, dict[str, object]]:
+        captured["pdf_path"] = pdf_path
         raise TimeoutError("Marker OCR conversion timed out after 300 seconds.")
 
     monkeypatch.setattr(op, "convert_pdf_file", raise_timeout)
 
-    result = op.process_row(row)
+    with pytest.raises(TimeoutError, match="timed out"):
+        op.process_row(row)
 
-    assert result["status"] == "failed"
-    assert "timed out" in result["error_message"]
+    assert captured["pdf_path"].exists() is False
 
 
 def test_convert_pdf_bytes_with_timeout_uses_spawn_context(monkeypatch: pytest.MonkeyPatch) -> None:

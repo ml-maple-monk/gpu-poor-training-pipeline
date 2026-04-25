@@ -1,23 +1,20 @@
 from __future__ import annotations
 
+from ...core.execution import ObjectStorePipelineRuntimeAdapter
 from ...core.models import RuntimeRunBindings
 from ...core.remote import build_remote_job_cli
 from ...core.storage import R2ObjectStore
 from .config import build_recipe_config
 from .models import RecipeConfig
-from .runtime import EchoPipelineRuntimeAdapter
+from .runtime import build_adapter
 
 
 def _build_adapter(
     config: RecipeConfig,
     bindings: RuntimeRunBindings,
     object_store: R2ObjectStore,
-) -> EchoPipelineRuntimeAdapter:
-    return EchoPipelineRuntimeAdapter(
-        config=config,
-        bindings=bindings,
-        object_store=object_store,
-    )
+) -> ObjectStorePipelineRuntimeAdapter:
+    return build_adapter(config, bindings, object_store)
 
 
 cli = build_remote_job_cli(

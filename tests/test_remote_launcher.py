@@ -26,7 +26,6 @@ from training_signal_processing.core.submission import (
     RemoteInvocationSpec,
     RemoteTransport,
     SshRemoteTransport,
-    SubmissionAdapter,
     SubmissionCoordinator,
     SubmissionResult,
 )
@@ -253,7 +252,7 @@ class FakeArtifactStore(ArtifactStore):
         return {}
 
 
-class FakeAdapter(SubmissionAdapter):
+class FakeAdapter:
     def __init__(self, prepared: PreparedRun) -> None:
         self.prepared = prepared
         self.prepare_new_calls = 0

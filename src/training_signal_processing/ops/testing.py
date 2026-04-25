@@ -96,7 +96,8 @@ class RayOpTestHarness(OpTestHarness):
         dataset = self._apply_op(dataset, pipeline.prepare_op, batch_size)
         for op in pipeline.transform_ops:
             dataset = self._apply_op(dataset, op, batch_size)
-        dataset = self._apply_op(dataset, pipeline.export_op, batch_size)
+        if pipeline.export_op is not None:
+            dataset = self._apply_op(dataset, pipeline.export_op, batch_size)
         result_rows = self._collect_rows(dataset, batch_size)
         self.logger.log_event(
             ExecutionLogEvent(

@@ -27,22 +27,22 @@ The package-level wrapper `python -m training_signal_processing ...` is not supp
 Editable surfaces:
 - `config/`: YAML recipes and run-time tuning values
 - `src/training_signal_processing/pipelines/<family>/`: pipeline-family schemas,
-  ops, exporters, ledgers, submission adapters, and remote jobs
+  ops, exporters, output completion trackers, submission adapters, and remote jobs
 
 Protected infrastructure:
 - `src/training_signal_processing/main.py`: CLI entrypoint
 - `src/training_signal_processing/core/`: shared executor, submission, storage,
-  checkpoint, observability, typed models, and utilities
+  observability, typed models, and utilities
 - `src/training_signal_processing/ops/`: shared op base classes and registry
 
 The `core/` package is intentionally pipeline-generic:
 - it must not import `pipelines.ocr` or any other concrete pipeline package
 - it owns generic contracts such as submission orchestration, executor flow,
-  object storage, exporter interfaces, checkpoint interfaces, and observability
+  object storage, exporter interfaces, output completion tracking, and observability
 - it should only depend on neutral runtime types like run bindings, artifact layout, and tracking context
 
 Concrete behavior belongs in a pipeline family package:
-- row schemas, dataset semantics, exporters, ledgers, and remote jobs live in `pipelines/<name>/`
+- row schemas, dataset semantics, exporters, completion trackers, and remote jobs live in `pipelines/<name>/`
 - OCR-specific behavior lives in `pipelines/ocr/`
 - user-customized OCR transforms belong in `pipelines/ocr/ops.py` or in a new
   pipeline package, depending on ownership
@@ -167,17 +167,17 @@ uv run --group remote_ocr python -m training_signal_processing.main test-op --he
 uv run --group remote_ocr python -m training_signal_processing.main run --help
 uv run --group remote_ocr python -m training_signal_processing.main resume --help
 uv run --group remote_ocr python -m training_signal_processing.main ocr-remote-job --help
-uv run --group remote_ocr python -m training_signal_processing.pipelines.tokenizer.cli validate --help
-uv run --group remote_ocr python -m training_signal_processing.pipelines.tokenizer.cli run --help
-uv run --group remote_ocr python -m training_signal_processing.pipelines.tokenizer.cli resume --help
+uv run --group remote_ocr python -m training_signal_processing.pipelines.example_echo.cli validate --help
+uv run --group remote_ocr python -m training_signal_processing.pipelines.example_echo.cli run --help
+uv run --group remote_ocr python -m training_signal_processing.pipelines.example_echo.cli resume --help
 ```
 
 ## Project Shape
 
 - `config/`: YAML recipes
-- `src/training_signal_processing/pipelines/`: pipeline-family packages such as OCR and tokenizer
+- `src/training_signal_processing/pipelines/`: pipeline-family packages such as OCR and example_echo
 - `src/training_signal_processing/core/`: protected shared runtime, submission,
-  storage, checkpoint, observability, dataclasses, and utility helpers
+  storage, observability, dataclasses, and utility helpers
 - `src/training_signal_processing/ops/`: shared base classes and registry
 - `tests/test_runtime_generic.py`: import-boundary and fake-pipeline verification for the generic core runtime
 
@@ -187,17 +187,18 @@ uv run --group remote_ocr python -m training_signal_processing.pipelines.tokeniz
 - Add a brand-new pipeline family in `pipelines/<name>/`.
 - Do not edit `core/submission.py` to add a new dataset or pipeline family.
 - Do not edit the protected executor loop to add normal OCR transforms.
-- Keep pipeline-owned row schemas, exporters, ledgers, and remote jobs inside `pipelines/<name>/`.
+- Keep pipeline-owned row schemas, exporters, output completion trackers, and
+  remote commands inside `pipelines/<name>/`.
 
 The executor loop and shared submission core are intentionally fixed. Extend the
 workspace by editing recipes, pipeline-owned ops, or a pipeline family package.
 
 ## Progress Checks
 
-For any long-running remote task, check durable R2 state before assuming a run is
-stuck. The detached launcher returns once the process is started; completion is
-recorded in `run_state.json`, batch manifests, event objects, and the remote log
-under `/root/ocr-jobs/<run_id>/job.log`.
+For any long-running remote task, check durable R2 outputs before assuming a run
+is stuck. The detached launcher returns once the process is started; completed
+OCR work is represented by markdown objects under the run output prefix, with
+the remote log under `/root/ocr-jobs/<run_id>/job.log`.
 
 MLflow is optional and direct-only. Use it only when `mlflow.enabled=true` and
 `mlflow.tracking_uri` is reachable from the process doing the logging. The
@@ -205,7 +206,7 @@ framework does not create SSH reverse tunnels.
 
 Always look up the experiment name from the active recipe:
 - shared OCR CLI recipes use `mlflow.experiment_name` from the YAML you passed to `python -m training_signal_processing.main ...`
-- family-local CLIs such as `python -m training_signal_processing.pipelines.tokenizer.cli ...` also use `mlflow.experiment_name` from their YAML
+- family-local CLIs such as `python -m training_signal_processing.pipelines.example_echo.cli ...` also use `mlflow.experiment_name` from their YAML
 
 Useful launch examples:
 
@@ -213,12 +214,12 @@ Useful launch examples:
 uv run --group remote_ocr python -m training_signal_processing.main run \
   --config config/remote_ocr.sample.yaml
 
-uv run --group remote_ocr python -m training_signal_processing.pipelines.tokenizer.cli run \
-  --config config/remote_tokenizer.sample.yaml
+uv run --group remote_ocr python -m training_signal_processing.pipelines.example_echo.cli run \
+  --config src/training_signal_processing/pipelines/example_echo/configs/baseline.yaml
 ```
 
-To resume an existing OCR sink and skip successfully processed PDFs recorded in
-that sink's batch manifests, pass the run ID explicitly:
+To resume an existing OCR sink and skip PDFs whose markdown outputs already
+exist in that run prefix, pass the run ID explicitly:
 
 ```bash
 uv run --group remote_ocr python -m training_signal_processing.main resume \
@@ -233,7 +234,7 @@ uv run --group remote_ocr python - <<'PY'
 from mlflow.tracking import MlflowClient
 
 tracking_uri = "http://127.0.0.1:5000"
-experiment_name = "remote-tokenizer"  # replace with mlflow.experiment_name from your recipe
+experiment_name = "remote-ocr"  # replace with mlflow.experiment_name from your recipe
 
 client = MlflowClient(tracking_uri=tracking_uri)
 experiment = next(
@@ -260,8 +261,9 @@ What to look for in MLflow:
 - `last_execution_event_code` advancing as the executor moves through phases
 - metrics such as `execution_event_count` increasing over time
 
-If MLflow is disabled or not updating, inspect R2 `run_state.json`, the latest
-batch manifest/event objects, and the remote job log.
+If MLflow is disabled or not updating, inspect R2 output objects and the remote
+job log. The runtime no longer writes batch manifests, event objects,
+`run_state.json`, or `run.json`.
 
 ## Experiment Workflow
 

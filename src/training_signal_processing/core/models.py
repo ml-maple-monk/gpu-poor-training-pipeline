@@ -72,7 +72,7 @@ class OpConfig:
 
 
 @dataclass
-class BatchCommit:
+class BatchProgress:
     batch_id: str
     input_row_count: int
     output_row_count: int
@@ -80,8 +80,6 @@ class BatchCommit:
     failed_count: int
     skipped_count: int
     duration_sec: float
-    manifest_key: str
-    event_key: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -236,7 +234,7 @@ class OpRuntimeContext:
     object_store: Any
     output_root_key: str
     source_root_key: str
-    completed_item_keys: set[str] = field(default_factory=set)
+    completed_source_keys: set[str] = field(default_factory=set)
     allow_overwrite: bool = False
     logger: Any = None
 
@@ -245,7 +243,7 @@ class OpRuntimeContext:
             "run_id": self.run_id,
             "output_root_key": self.output_root_key,
             "source_root_key": self.source_root_key,
-            "completed_item_keys": sorted(self.completed_item_keys),
+            "completed_source_keys": sorted(self.completed_source_keys),
             "allow_overwrite": self.allow_overwrite,
         }
 

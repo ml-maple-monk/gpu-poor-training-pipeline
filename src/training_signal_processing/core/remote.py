@@ -94,8 +94,8 @@ def build_remote_job_cli(
 @click.command()
 def cli() -> None:
     raise click.ClickException(
-        "Use a pipeline-specific remote job module under "
-        "training_signal_processing.pipelines.<name>.remote_job."
+        "Use a pipeline-specific CLI command: "
+        "python -m training_signal_processing.pipelines.<name>.cli remote-job."
     )
 
 

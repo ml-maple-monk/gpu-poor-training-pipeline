@@ -70,5 +70,3 @@ ops:
   - name: marker_ocr
     type: mapper
     force_ocr: true
-  - name: export_markdown
-    type: mapper

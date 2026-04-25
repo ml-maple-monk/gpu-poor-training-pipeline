@@ -5,15 +5,37 @@ from pathlib import Path
 
 import click
 
+from ...core.models import RuntimeRunBindings
+from ...core.remote import build_remote_job_cli
+from ...core.storage import R2ObjectStore
 from ...core.submission import R2ArtifactStore, SshRemoteTransport, SubmissionCoordinator
 from ...ops.registry import RegisteredOpRegistry
-from .config import load_recipe_config
+from .config import build_recipe_config, load_recipe_config
+from .models import RecipeConfig
+from .runtime import build_adapter
 from .submission import EchoSubmissionAdapter
 
 
 @click.group()
 def cli() -> None:
     """Example echo pipeline commands."""
+
+
+def build_runtime_adapter(
+    config: RecipeConfig,
+    bindings: RuntimeRunBindings,
+    object_store: R2ObjectStore,
+):
+    return build_adapter(config, bindings, object_store)
+
+
+cli.add_command(
+    build_remote_job_cli(
+        recipe_loader=build_recipe_config,
+        adapter_factory=build_runtime_adapter,
+    ),
+    name="remote-job",
+)
 
 
 @cli.command("validate")
