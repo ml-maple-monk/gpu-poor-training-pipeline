@@ -649,8 +649,8 @@ class SubmissionAdapter(ABC):
 
     def prepare_new_run(self, artifact_store: ArtifactStore, *, dry_run: bool) -> PreparedRun:
         run_id = utc_timestamp()
-        input_manifest_key = self.build_control_key(run_id, "input_manifest.jsonl")
-        config_object_key = self.build_control_key(run_id, "recipe.json")
+        input_manifest_key = self._build_control_key(run_id, "input_manifest.jsonl")
+        config_object_key = self._build_control_key(run_id, "recipe.json")
         manifest = self.build_new_run_manifest(
             artifact_store=artifact_store,
             run_id=run_id,
@@ -659,7 +659,7 @@ class SubmissionAdapter(ABC):
         if not dry_run:
             artifact_store.write_jsonl(input_manifest_key, manifest.rows)
             artifact_store.write_json(config_object_key, self.load_resolved_recipe_mapping())
-        return self.build_prepared_run(
+        return self._build_prepared_run(
             artifact_store=artifact_store,
             run_id=run_id,
             input_manifest_key=input_manifest_key,
@@ -671,14 +671,14 @@ class SubmissionAdapter(ABC):
         )
 
     def prepare_resume_run(self, artifact_store: ArtifactStore, run_id: str) -> PreparedRun:
-        input_manifest_key = self.build_control_key(run_id, "input_manifest.jsonl")
-        config_object_key = self.build_control_key(run_id, "recipe.json")
+        input_manifest_key = self._build_control_key(run_id, "input_manifest.jsonl")
+        config_object_key = self._build_control_key(run_id, "recipe.json")
         if not artifact_store.exists(input_manifest_key):
             raise ValueError(f"Resume manifest not found in R2: {input_manifest_key}")
         if not artifact_store.exists(config_object_key):
             raise ValueError(f"Resume recipe object not found in R2: {config_object_key}")
         manifest_rows = artifact_store.read_jsonl(input_manifest_key)
-        return self.build_prepared_run(
+        return self._build_prepared_run(
             artifact_store=artifact_store,
             run_id=run_id,
             input_manifest_key=input_manifest_key,
@@ -688,7 +688,7 @@ class SubmissionAdapter(ABC):
             is_resume=True,
         )
 
-    def build_prepared_run(
+    def _build_prepared_run(
         self,
         *,
         artifact_store: ArtifactStore,
@@ -703,7 +703,7 @@ class SubmissionAdapter(ABC):
         return PreparedRun(
             run_id=run_id,
             remote_root=self.config.remote.root_dir,
-            sync_paths=self.sync_paths(),
+            sync_paths=self._sync_paths(),
             bootstrap=self.build_bootstrap_spec(),
             invocation=self.build_invocation_spec(
                 artifact_store=artifact_store,
@@ -727,13 +727,13 @@ class SubmissionAdapter(ABC):
             },
         )
 
-    def sync_paths(self) -> tuple[str, ...]:
-        return ("pyproject.toml", "uv.lock", "src", "config")
+    def _sync_paths(self) -> tuple[str, ...]:
+        return tuple(self.config.remote.sync_paths)
 
-    def build_control_key(self, run_id: str, name: str) -> str:
-        return join_s3_key(self.build_run_root(run_id), f"control/{name}")
+    def _build_control_key(self, run_id: str, name: str) -> str:
+        return join_s3_key(self._build_run_root(run_id), f"control/{name}")
 
-    def build_run_root(self, run_id: str) -> str:
+    def _build_run_root(self, run_id: str) -> str:
         return join_s3_key(self.config.r2.output_prefix, run_id)
 
     @abstractmethod
@@ -849,9 +849,9 @@ class SubmissionCoordinator:
             raise
         finally:
             if prepared_run.async_upload is not None:
-                self.cleanup_local_paths(prepared_run.async_upload.cleanup_paths)
+                self._cleanup_local_paths(prepared_run.async_upload.cleanup_paths)
 
-    def cleanup_local_paths(self, paths: tuple[str, ...]) -> None:
+    def _cleanup_local_paths(self, paths: tuple[str, ...]) -> None:
         for raw_path in paths:
             try:
                 Path(raw_path).unlink(missing_ok=True)

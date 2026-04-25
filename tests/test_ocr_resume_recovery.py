@@ -67,6 +67,7 @@ def build_recipe_config() -> RecipeConfig:
             remote_jobs_root="/root/ocr-jobs",
             pgid_wait_attempts=20,
             pgid_wait_sleep_seconds=0.25,
+            sync_paths=("pyproject.toml", "uv.lock", "src", "config"),
         ),
         ray=OcrRayConfig(
             executor_type="ray",

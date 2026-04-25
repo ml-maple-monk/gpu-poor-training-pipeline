@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from training_signal_processing.core.models import OpRuntimeContext
+from training_signal_processing.core.storage import resolve_runtime_object_store
 from training_signal_processing.core.submission import (
     ArtifactStore,
     AsyncCommandHandle,
@@ -186,6 +187,11 @@ remote:
   remote_jobs_root: /root/ocr-jobs
   pgid_wait_attempts: 20
   pgid_wait_sleep_seconds: 0.25
+  sync_paths:
+    - pyproject.toml
+    - uv.lock
+    - src
+    - config
 ray:
   executor_type: ray
   batch_size: 1
@@ -251,6 +257,8 @@ def test_ocr_prepare_new_run_builds_async_upload_spec(
     )
     prepared = adapter.prepare_new_run(artifact_store, dry_run=False)
 
+    assert config.remote.sync_paths == ("pyproject.toml", "uv.lock", "src", "config")
+    assert prepared.sync_paths == config.remote.sync_paths
     assert prepared.uploaded_items == 0
     assert artifact_store.uploaded_files == []
     assert prepared.async_upload is not None
@@ -472,6 +480,13 @@ def build_prepared_ocr_row(runtime_context: OpRuntimeContext) -> dict[str, objec
     return ocr_ops.PreparePdfDocumentOp().bind_runtime(runtime_context).process_row(task.to_dict())
 
 
+def test_op_runtime_context_does_not_own_object_store_resolution(
+    ocr_runtime_context: OpRuntimeContext,
+) -> None:
+    assert not hasattr(OpRuntimeContext, "get_object_store")
+    assert resolve_runtime_object_store(ocr_runtime_context) is ocr_runtime_context.object_store
+
+
 def test_prepare_pdf_document_uses_flat_markdown_key(
     ocr_runtime_context: OpRuntimeContext,
 ) -> None:
@@ -502,9 +517,16 @@ def test_marker_ocr_process_row_success(
         timeout_sec=1800,
         source_object_poll_interval_sec=2.0,
     ).bind_runtime(ocr_runtime_context)
+    resolved_runtime: dict[str, object] = {}
+
+    def resolve_store(runtime: object) -> object:
+        resolved_runtime["runtime"] = runtime
+        return resolve_runtime_object_store(runtime)
+
+    monkeypatch.setattr(ocr_ops, "resolve_runtime_object_store", resolve_store)
     monkeypatch.setattr(
         op,
-        "convert_pdf_file",
+        "_convert_pdf_file",
         lambda pdf_path, timeout_sec: ("hello markdown", {"torch_cuda_available": False}),
     )
 
@@ -514,6 +536,7 @@ def test_marker_ocr_process_row_success(
     assert result["markdown_text"] == "hello markdown"
     assert result["marker_exit_code"] == 0
     assert isinstance(result["diagnostics"], dict)
+    assert resolved_runtime["runtime"] is ocr_runtime_context
 
 
 def test_marker_ocr_process_row_failure(
@@ -532,7 +555,7 @@ def test_marker_ocr_process_row_failure(
         captured["pdf_path"] = pdf_path
         raise RuntimeError("converter exploded")
 
-    monkeypatch.setattr(op, "convert_pdf_file", raise_error)
+    monkeypatch.setattr(op, "_convert_pdf_file", raise_error)
 
     with pytest.raises(RuntimeError, match="converter exploded"):
         op.process_row(row)
@@ -556,7 +579,7 @@ def test_marker_ocr_process_row_timeout(
         captured["pdf_path"] = pdf_path
         raise TimeoutError("Marker OCR conversion timed out after 300 seconds.")
 
-    monkeypatch.setattr(op, "convert_pdf_file", raise_timeout)
+    monkeypatch.setattr(op, "_convert_pdf_file", raise_timeout)
 
     with pytest.raises(TimeoutError, match="timed out"):
         op.process_row(row)

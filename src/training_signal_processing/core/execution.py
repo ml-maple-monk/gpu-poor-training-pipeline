@@ -339,23 +339,23 @@ class StreamingRayExecutor(Executor):
         self.pipeline = pipeline
 
     def run(self) -> dict[str, object]:
-        context = self.start_run_context()
+        context = self._start_run_context()
         try:
-            dataset = self.build_run_dataset(context)
+            dataset = self._build_run_dataset(context)
             for op in context.resolved_pipeline.all_ops:
-                dataset = self.apply_dataset_transform(context, dataset, op)
-            return self.materialize_run_dataset(context, dataset)
+                dataset = self._apply_dataset_transform(context, dataset, op)
+            return self._materialize_run_dataset(context, dataset)
         except Exception as exc:
-            return self.fail_run(context, exc)
+            return self._fail_run(context, exc)
 
-    def start_run_context(self) -> ExecutorRunContext:
+    def _start_run_context(self) -> ExecutorRunContext:
         run_spec = self.pipeline.run_spec()
         bindings = run_spec.bindings
         execution = run_spec.execution
         tracking = run_spec.tracking
         artifact_layout = run_spec.artifact_layout
         op_configs = run_spec.op_configs
-        self.validate_contract(
+        self._validate_contract(
             bindings=bindings,
             execution=execution,
             tracking=tracking,
@@ -363,7 +363,7 @@ class StreamingRayExecutor(Executor):
             op_configs=op_configs,
         )
 
-        logger = self.build_execution_logger(tracking)
+        logger = self._build_execution_logger(tracking)
         progress_tracker = MlflowProgressTracker(
             tracking=tracking,
             run_id=bindings.run_id,
@@ -373,11 +373,11 @@ class StreamingRayExecutor(Executor):
         if not input_rows:
             raise PipelineContractError("Pipeline adapter returned zero input rows.")
 
-        self.log_manifest_loaded(run_spec, input_rows, logger)
+        self._log_manifest_loaded(run_spec, input_rows, logger)
         completed_source_keys = self.pipeline.resolve_completed_source_keys(
             input_rows=input_rows,
         )
-        self.log_resume_loaded(run_spec, completed_source_keys, logger)
+        self._log_resume_loaded(run_spec, completed_source_keys, logger)
         runtime_context = self.pipeline.build_runtime_context(
             logger=logger,
             completed_source_keys=completed_source_keys,
@@ -389,7 +389,7 @@ class StreamingRayExecutor(Executor):
 
         total_items = len(input_rows)
         pending_items = max(total_items - len(completed_source_keys), 0)
-        progress_reporter = self.build_progress_reporter(
+        progress_reporter = self._build_progress_reporter(
             run_id=bindings.run_id,
             total_items=total_items,
             pending_items=pending_items,
@@ -399,7 +399,7 @@ class StreamingRayExecutor(Executor):
             total_items=total_items,
             uploaded_items=bindings.uploaded_items,
         )
-        run_state = self.initialize_run_state(
+        run_state = self._initialize_run_state(
             run_spec=run_spec,
             total_items=total_items,
             pending_items=pending_items,
@@ -425,19 +425,19 @@ class StreamingRayExecutor(Executor):
             dataset_builder=dataset_builder,
             run_state=run_state,
         )
-        self.transition_run_phase(
+        self._transition_run_phase(
             context,
             phase="manifest_loaded",
             detail=f"input_manifest_key={bindings.input_manifest_key}",
         )
-        self.transition_run_phase(
+        self._transition_run_phase(
             context,
             phase="resume_state_loaded",
             detail=f"completed_source_keys={len(completed_source_keys)}",
         )
         return context
 
-    def log_manifest_loaded(
+    def _log_manifest_loaded(
         self,
         run_spec: RunSpec,
         input_rows: list[dict[str, Any]],
@@ -456,7 +456,7 @@ class StreamingRayExecutor(Executor):
             )
         )
 
-    def log_resume_loaded(
+    def _log_resume_loaded(
         self,
         run_spec: RunSpec,
         completed_source_keys: set[str],
@@ -472,7 +472,7 @@ class StreamingRayExecutor(Executor):
             )
         )
 
-    def initialize_run_state(
+    def _initialize_run_state(
         self,
         *,
         run_spec: RunSpec,
@@ -501,13 +501,13 @@ class StreamingRayExecutor(Executor):
             last_phase_at=timestamp,
         )
 
-    def build_run_dataset(self, context: ExecutorRunContext):
-        self.transition_run_phase(context, phase="dataset_build_start")
+    def _build_run_dataset(self, context: ExecutorRunContext):
+        self._transition_run_phase(context, phase="dataset_build_start")
         dataset = context.dataset_builder.build_for_run(context.input_rows)
-        self.transition_run_phase(context, phase="dataset_build_complete")
+        self._transition_run_phase(context, phase="dataset_build_complete")
         return dataset
 
-    def apply_dataset_transform(self, context: ExecutorRunContext, dataset, op: Op):
+    def _apply_dataset_transform(self, context: ExecutorRunContext, dataset, op: Op):
         execution = context.run_spec.execution
         resources = self.pipeline.resolve_transform_resources(op=op, execution=execution)
         context.tracer.trace_before_op(op)
@@ -535,8 +535,8 @@ class StreamingRayExecutor(Executor):
         context.tracer.trace_after_op(op)
         return transformed
 
-    def materialize_run_dataset(self, context: ExecutorRunContext, dataset) -> dict[str, object]:
-        self.transition_run_phase(context, phase="iter_batches_start")
+    def _materialize_run_dataset(self, context: ExecutorRunContext, dataset) -> dict[str, object]:
+        self._transition_run_phase(context, phase="iter_batches_start")
         for batch_offset, current_batch in enumerate(
             context.dataset_builder.iter_batches(
                 dataset,
@@ -546,16 +546,16 @@ class StreamingRayExecutor(Executor):
         ):
             batch_index = batch_offset
             batch_id = f"batch-{batch_index:05d}"
-            self.export_and_record_batch(
+            self._export_and_record_batch(
                 context,
                 batch_id,
                 batch_index,
                 batch_offset,
                 current_batch,
             )
-        return self.finish_run(context)
+        return self._finish_run(context)
 
-    def export_and_record_batch(
+    def _export_and_record_batch(
         self,
         context: ExecutorRunContext,
         batch_id: str,
@@ -564,14 +564,14 @@ class StreamingRayExecutor(Executor):
         rows: Batch,
     ) -> None:
         if batch_offset == 1:
-            self.transition_run_phase(
+            self._transition_run_phase(
                 context,
                 phase="first_batch_materialized",
                 detail=f"batch_id={batch_id} input_rows={len(rows)}",
             )
         context.progress_reporter.start_batch(batch_id, batch_index, len(rows))
         export_result = context.exporter.export_batch(batch_id=batch_id, rows=rows)
-        self.validate_export_result(
+        self._validate_export_result(
             batch_id=batch_id,
             input_row_count=len(rows),
             rows=rows,
@@ -579,12 +579,12 @@ class StreamingRayExecutor(Executor):
             reported_batch_id=export_result.batch_id,
             reported_row_count=export_result.row_count,
         )
-        batch_progress = self.build_batch_progress(
+        batch_progress = self._build_batch_progress(
             batch_id=batch_id,
             input_row_count=len(rows),
             rows=rows,
         )
-        self.validate_batch_progress(
+        self._validate_batch_progress(
             batch_id=batch_id,
             input_row_count=len(rows),
             output_row_count=len(rows),
@@ -592,7 +592,7 @@ class StreamingRayExecutor(Executor):
             reported_input_row_count=batch_progress.input_row_count,
             reported_output_row_count=batch_progress.output_row_count,
         )
-        context.run_state = self.advance_run_state(
+        context.run_state = self._advance_run_state(
             run_state=context.run_state,
             batch_index=batch_index,
             input_row_count=len(rows),
@@ -603,7 +603,7 @@ class StreamingRayExecutor(Executor):
         context.exported_batches += 1
         context.output_keys.extend(export_result.output_keys)
 
-    def build_batch_progress(
+    def _build_batch_progress(
         self,
         *,
         batch_id: str,
@@ -633,7 +633,7 @@ class StreamingRayExecutor(Executor):
             duration_sec=duration_sec,
         )
 
-    def advance_run_state(
+    def _advance_run_state(
         self,
         *,
         run_state: RunState,
@@ -653,23 +653,23 @@ class StreamingRayExecutor(Executor):
             }
         )
 
-    def finish_run(self, context: ExecutorRunContext) -> dict[str, object]:
-        context.run_state = self.mark_run_finished(context.run_state)
+    def _finish_run(self, context: ExecutorRunContext) -> dict[str, object]:
+        context.run_state = self._mark_run_finished(context.run_state)
         context.exporter.finalize_run(context.run_state)
         context.monitor.finish_run(context.run_state)
         context.progress_tracker.log_run_finished(context.run_state.status)
         context.progress_reporter.finish_run(context.run_state.status)
-        return self.build_run_summary(context, status=context.run_state.status)
+        return self._build_run_summary(context, status=context.run_state.status)
 
-    def fail_run(self, context: ExecutorRunContext, exc: Exception) -> dict[str, object]:
+    def _fail_run(self, context: ExecutorRunContext, exc: Exception) -> dict[str, object]:
         message = str(exc)
-        context.run_state = self.mark_run_failed(context.run_state, message)
+        context.run_state = self._mark_run_failed(context.run_state, message)
         context.monitor.fail_run(context.run_state)
         context.progress_tracker.log_run_failed(message)
         context.progress_reporter.fail_run(message)
-        return self.build_run_summary(context, status="failed", error_message=message)
+        return self._build_run_summary(context, status="failed", error_message=message)
 
-    def mark_run_finished(self, run_state: RunState) -> RunState:
+    def _mark_run_finished(self, run_state: RunState) -> RunState:
         if (
             run_state.failed_count > 0
             and run_state.success_count == 0
@@ -689,7 +689,7 @@ class StreamingRayExecutor(Executor):
             }
         )
 
-    def mark_run_failed(self, run_state: RunState, message: str) -> RunState:
+    def _mark_run_failed(self, run_state: RunState, message: str) -> RunState:
         return RunState(
             **{
                 **run_state.to_dict(),
@@ -699,7 +699,7 @@ class StreamingRayExecutor(Executor):
             }
         )
 
-    def build_run_summary(
+    def _build_run_summary(
         self,
         context: ExecutorRunContext,
         *,
@@ -716,7 +716,7 @@ class StreamingRayExecutor(Executor):
             error_message=error_message,
         ).to_dict()
 
-    def transition_run_phase(
+    def _transition_run_phase(
         self,
         context: ExecutorRunContext,
         phase: str,
@@ -743,7 +743,7 @@ class StreamingRayExecutor(Executor):
             )
         )
 
-    def build_execution_logger(self, tracking: RuntimeTrackingContext) -> ExecutionLogger:
+    def _build_execution_logger(self, tracking: RuntimeTrackingContext) -> ExecutionLogger:
         if tracking.enabled:
             return MlflowExecutionLogger(
                 tracking=tracking,
@@ -751,7 +751,7 @@ class StreamingRayExecutor(Executor):
             )
         return StructuredExecutionLogger("training_signal_processing")
 
-    def build_progress_reporter(
+    def _build_progress_reporter(
         self,
         *,
         run_id: str,
@@ -768,7 +768,7 @@ class StreamingRayExecutor(Executor):
             batch_size=batch_size,
         )
 
-    def validate_contract(
+    def _validate_contract(
         self,
         *,
         bindings: RuntimeRunBindings,
@@ -794,7 +794,7 @@ class StreamingRayExecutor(Executor):
         if not op_configs:
             raise PipelineContractError("Pipeline adapter must declare at least one op config.")
 
-    def validate_export_result(
+    def _validate_export_result(
         self,
         *,
         batch_id: str,
@@ -819,7 +819,7 @@ class StreamingRayExecutor(Executor):
         if any(not key.strip() for key in output_keys):
             raise PipelineContractError("Exporter output_keys must not contain empty values.")
 
-    def validate_batch_progress(
+    def _validate_batch_progress(
         self,
         *,
         batch_id: str,

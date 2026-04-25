@@ -21,7 +21,16 @@ class RemoteRuntimeConfig:
     remote_jobs_root: str
     pgid_wait_attempts: int
     pgid_wait_sleep_seconds: float
+    sync_paths: tuple[str, ...]
     venv_dir: str = ".venv"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.sync_paths, (list, tuple)):
+            raise ValueError("remote.sync_paths must be a non-empty list of paths.")
+        sync_paths = tuple(str(path).strip() for path in self.sync_paths)
+        if not sync_paths or any(not path for path in sync_paths):
+            raise ValueError("remote.sync_paths must be a non-empty list of paths.")
+        self.sync_paths = sync_paths
 
 
 @dataclass
@@ -234,7 +243,7 @@ class OpTestResult:
 class OpRuntimeContext:
     config: Any
     run_id: str
-    object_store: Any
+    object_store: Any | None
     output_root_key: str
     source_root_key: str
     completed_source_keys: set[str] = field(default_factory=set)
@@ -249,19 +258,6 @@ class OpRuntimeContext:
             "completed_source_keys": sorted(self.completed_source_keys),
             "allow_overwrite": self.allow_overwrite,
         }
-
-    def get_object_store(self):  # type: ignore[no-untyped-def]
-        if self.object_store is not None:
-            return self.object_store
-        import os
-
-        from .storage import R2ObjectStore
-
-        if os.environ.get("R2_ACCESS_KEY_ID"):
-            self.object_store = R2ObjectStore.from_environment(self.config.r2)
-        else:
-            self.object_store = R2ObjectStore.from_config_file(self.config.r2)
-        return self.object_store
 
     def __getstate__(self) -> dict[str, Any]:
         state = dict(self.__dict__)

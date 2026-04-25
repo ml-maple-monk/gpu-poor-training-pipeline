@@ -7,6 +7,7 @@ from tempfile import NamedTemporaryFile
 from time import perf_counter, sleep
 
 from ...core.models import ExecutionLogEvent
+from ...core.storage import resolve_runtime_object_store
 from ...core.utils import join_s3_key, utc_isoformat
 from ...ops.base import Batch
 from ...ops.builtin import (
@@ -270,33 +271,66 @@ class MarkerOcrDocumentOp(MarkerOcrMapper):
 
     def process_row(self, row: dict[str, object]) -> dict[str, object]:
         runtime = self.require_runtime()
-        started_at = utc_isoformat()
-        started_clock = perf_counter()
-        timeout_sec = require_positive_int_option(self.options, "timeout_sec")
-        poll_interval_sec = require_positive_float_option(
-            self.options,
-            "source_object_poll_interval_sec",
-        )
-        diagnostics = build_marker_diagnostics(dict(self.options))
+        started_at, started_clock = self._start_row()
+        timeout_sec, poll_interval_sec = self._read_runtime_options()
+        diagnostics = self._build_diagnostics()
         source_key = str(row["source_r2_key"])
-        pdf_bytes = self.read_source_pdf(
+        pdf_bytes = self._read_source_pdf(
             runtime=runtime,
             source_key=source_key,
             diagnostics=diagnostics,
             timeout_sec=timeout_sec,
             poll_interval_sec=poll_interval_sec,
         )
-        markdown_text, conversion_diagnostics = self.convert_source_pdf(
+        markdown_text, conversion_diagnostics = self._convert_source_pdf(
             runtime=runtime,
             pdf_bytes=pdf_bytes,
             diagnostics=diagnostics,
             timeout_sec=timeout_sec,
             started_clock=started_clock,
         )
+        self._record_conversion_diagnostics(diagnostics, conversion_diagnostics)
+        return self._build_success_row(
+            row=row,
+            run_id=runtime.run_id,
+            started_at=started_at,
+            started_clock=started_clock,
+            markdown_text=markdown_text,
+            diagnostics=diagnostics,
+        )
+
+    def _start_row(self) -> tuple[str, float]:
+        return utc_isoformat(), perf_counter()
+
+    def _read_runtime_options(self) -> tuple[int, float]:
+        return (
+            require_positive_int_option(self.options, "timeout_sec"),
+            require_positive_float_option(self.options, "source_object_poll_interval_sec"),
+        )
+
+    def _build_diagnostics(self) -> dict[str, object]:
+        return build_marker_diagnostics(dict(self.options))
+
+    def _record_conversion_diagnostics(
+        self,
+        diagnostics: dict[str, object],
+        conversion_diagnostics: dict[str, object],
+    ) -> None:
         diagnostics.update(conversion_diagnostics)
+
+    def _build_success_row(
+        self,
+        *,
+        row: dict[str, object],
+        run_id: str,
+        started_at: str,
+        started_clock: float,
+        markdown_text: str,
+        diagnostics: dict[str, object],
+    ) -> dict[str, object]:
         return {
             **row,
-            "run_id": runtime.run_id,
+            "run_id": run_id,
             "status": "success",
             "error_message": "",
             "started_at": started_at,
@@ -308,7 +342,7 @@ class MarkerOcrDocumentOp(MarkerOcrMapper):
             "diagnostics": diagnostics,
         }
 
-    def read_source_pdf(
+    def _read_source_pdf(
         self,
         *,
         runtime: object,
@@ -317,14 +351,14 @@ class MarkerOcrDocumentOp(MarkerOcrMapper):
         timeout_sec: int,
         poll_interval_sec: float,
     ) -> bytes:
-        object_store = runtime.get_object_store()
-        self.log_runtime_event(
+        object_store = resolve_runtime_object_store(runtime)
+        self._log_runtime_event(
             runtime,
             code="ocr.pdf.read.start",
             message="Starting PDF read for OCR.",
             details={"source_r2_key": source_key, "diagnostics": diagnostics},
         )
-        wait_for_source_object(
+        self._wait_for_source_object(
             object_store,
             key=source_key,
             timeout_sec=timeout_sec,
@@ -335,7 +369,22 @@ class MarkerOcrDocumentOp(MarkerOcrMapper):
         diagnostics["pdf_bytes_loaded"] = len(pdf_bytes)
         return pdf_bytes
 
-    def convert_source_pdf(
+    def _wait_for_source_object(
+        self,
+        object_store: object,
+        *,
+        key: str,
+        timeout_sec: int,
+        poll_interval_sec: float,
+    ) -> None:
+        wait_for_source_object(
+            object_store,
+            key=key,
+            timeout_sec=timeout_sec,
+            poll_interval_sec=poll_interval_sec,
+        )
+
+    def _convert_source_pdf(
         self,
         *,
         runtime: object,
@@ -347,18 +396,17 @@ class MarkerOcrDocumentOp(MarkerOcrMapper):
         staged_pdf_path = stage_pdf_bytes_for_ocr(pdf_bytes)
         diagnostics["staged_pdf_path"] = str(staged_pdf_path)
         try:
-            self.log_runtime_event(
+            self._log_runtime_event(
                 runtime,
                 code="ocr.converter.init.start",
                 message="Starting OCR converter process.",
                 details={"diagnostics": diagnostics},
             )
-            elapsed_sec = perf_counter() - started_clock
-            markdown_text, conversion_diagnostics = self.convert_pdf_file(
+            markdown_text, conversion_diagnostics = self._convert_pdf_file(
                 staged_pdf_path,
-                timeout_sec=max(int(timeout_sec - elapsed_sec), 1),
+                timeout_sec=self._remaining_timeout_sec(timeout_sec, started_clock),
             )
-            self.log_runtime_event(
+            self._log_runtime_event(
                 runtime,
                 code="ocr.converter.init.finish",
                 message="OCR converter process completed successfully.",
@@ -366,12 +414,19 @@ class MarkerOcrDocumentOp(MarkerOcrMapper):
             )
             return markdown_text, conversion_diagnostics
         finally:
-            staged_pdf_path.unlink(missing_ok=True)
+            self._cleanup_staged_pdf(staged_pdf_path)
 
-    def convert_pdf_bytes(self, pdf_bytes: bytes) -> tuple[str, dict[str, object]]:
+    def _remaining_timeout_sec(self, timeout_sec: int, started_clock: float) -> int:
+        elapsed_sec = perf_counter() - started_clock
+        return max(int(timeout_sec - elapsed_sec), 1)
+
+    def _cleanup_staged_pdf(self, staged_pdf_path: Path) -> None:
+        staged_pdf_path.unlink(missing_ok=True)
+
+    def _convert_pdf_bytes(self, pdf_bytes: bytes) -> tuple[str, dict[str, object]]:
         return convert_pdf_bytes_with_timeout(pdf_bytes, dict(self.options))
 
-    def convert_pdf_file(
+    def _convert_pdf_file(
         self,
         pdf_path: Path,
         *,
@@ -382,7 +437,7 @@ class MarkerOcrDocumentOp(MarkerOcrMapper):
             {**dict(self.options), "timeout_sec": timeout_sec},
         )
 
-    def log_runtime_event(
+    def _log_runtime_event(
         self,
         runtime: object,
         *,

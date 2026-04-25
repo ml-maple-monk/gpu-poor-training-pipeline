@@ -187,6 +187,7 @@ def test_load_recipe_config_parses_marker_ocr_resources() -> None:
     assert config.remote.remote_jobs_root == "/root/ocr-jobs"
     assert config.remote.pgid_wait_attempts == 20
     assert config.remote.pgid_wait_sleep_seconds == pytest.approx(0.25)
+    assert config.remote.sync_paths == ("pyproject.toml", "uv.lock", "src", "config")
     assert config.input.upload_transfers == 1
     assert config.input.upload_checkers == 1
     marker_op = next(op for op in config.ops if op.name == "marker_ocr")
@@ -214,6 +215,27 @@ def test_load_recipe_config_accepts_marker_ocr_resource_values_without_custom_po
 
     assert load_recipe_config(gpu_config_path).ray.marker_ocr_resources.num_gpus == 0
     assert load_recipe_config(cpu_config_path).ray.marker_ocr_resources.num_cpus == 0
+
+
+def test_recipe_config_requires_remote_sync_paths(tmp_path: Path) -> None:
+    config_path = tmp_path / "missing_sync_paths.yaml"
+    config_path.write_text(
+        Path("config/remote_ocr.sample.yaml")
+        .read_text(encoding="utf-8")
+        .replace(
+            "  sync_paths:\n"
+            "    - pyproject.toml\n"
+            "    - uv.lock\n"
+            "    - src\n"
+            "    - config\n",
+            "  sync_paths: []\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="remote.sync_paths"):
+        load_recipe_config(config_path)
 
 
 @pytest.mark.parametrize(

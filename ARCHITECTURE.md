@@ -53,7 +53,7 @@ self-register when that package is imported. The foundation layer
 observability, event sinks, and outputs-only completion tracking. The top layer
 (`pipelines/`) wires per-pipeline `RecipeConfig`, runtime adapter, and
 submission adapter. A run is two halves: a local **submission** that
-syncs code, uploads inputs to R2, and SSHes a `python -m
+syncs YAML-declared paths, uploads inputs to R2, and SSHes a `python -m
 training_signal_processing.main ocr-remote-job …` invocation onto a
 remote GPU box; and a **remote execution** that rebuilds the config
 from R2, runs ops via Ray Data `map_batches`, and writes outputs +
@@ -95,6 +95,19 @@ in-memory progress per batch.
                                    | enforced by [tool.importlinter]:
                                    | "shared layers must not import
                                    |  from pipelines"
+```
+
+The runtime flow is intentionally small enough to draw:
+
+```
+YAML recipe
+  -> core/models.py dataclasses
+  -> SubmissionCoordinator.submit()  -> SSH/R2/rclone
+  -> ObjectStoreRemoteJob.run()
+  -> StreamingRayExecutor.run()
+  -> observability helpers
+  -> ops/base.py + concrete pipeline ops
+  -> R2 outputs
 ```
 
 The contract at `pyproject.toml [[tool.importlinter.contracts]]`
@@ -234,8 +247,8 @@ The gitignored `infra/current-machine` carries each operator's box;
 hardcoding an SSH target poisons the repo for collaborators. This
 is documented in `pipelines/ocr/configs/baseline.yaml`.
 
-Operational launch/upload knobs are explicit YAML too. `remote` owns the
-detached-job root and pgid wait loop settings, `input` owns OCR upload
+Operational launch/upload knobs are explicit YAML too. `remote` owns
+`sync_paths`, the detached-job root, and pgid wait loop settings; `input` owns OCR upload
 parallelism, and the `marker_ocr` op options own OCR conversion timeout and
 source-object polling interval. These values should not be reintroduced as
 logic-level defaults.
@@ -252,6 +265,12 @@ The only concrete is `R2ObjectStore` ([:80](src/training_signal_processing/core/
 which uses `boto3` against a Cloudflare R2 endpoint and accepts
 credentials via either an env file (`from_config_file`) or process
 environment (`from_environment`).
+
+Runtime ops do not construct stores through `OpRuntimeContext`. The context
+only carries the current store slot and typed run metadata; `core.storage`
+owns `resolve_runtime_object_store(...)`, which reuses an attached store or
+builds `R2ObjectStore` from remote env/config when Ray has deserialized the
+context with unpicklable services cleared.
 
 `ArtifactStore` ([core/submission.py:284](src/training_signal_processing/core/submission.py#L284))
 is the runtime-side façade — same contract plus `upload_file` and
@@ -388,11 +407,12 @@ StreamingRayExecutor.run()  (core/execution.py:114)
         +--- pipeline.get_run_bindings / get_execution_config /
         |    get_tracking_context / get_artifact_layout / get_op_configs
         |
-        +--- validate_contract                       (executor.py:444)
+        +--- _validate_contract
         |    raises PipelineContractError on misuse
         |
-        +--- build MlflowExecutionLogger             (observability.py:32)
-        +--- build MlflowProgressTracker             (observability.py:364)
+        +--- _build_execution_logger                 (observability.py)
+        +--- MlflowProgressTracker                   (observability.py)
+        +--- pipeline.load_input_rows()              # reads input_manifest.jsonl
         |
         +--- pipeline.build_completion_tracker()
         |     completed_source_keys(input_rows, artifact_layout, allow_overwrite)
@@ -404,9 +424,8 @@ StreamingRayExecutor.run()  (core/execution.py:114)
         |
         +--- pipeline.build_dataset_builder()
         |     default: ConfiguredRayDatasetBuilder
-        +--- pipeline.load_input_rows()              # reads input_manifest.jsonl
         |
-        +--- apply_pipeline_transforms               (executor.py:405)
+        +--- _apply_dataset_transform                # lazy Ray transforms
         |     dataset.map_batches(prepare_op, ...)
         |     for op in transform_ops:
         |         resources = pipeline.resolve_transform_resources(op, execution)
@@ -419,9 +438,9 @@ StreamingRayExecutor.run()  (core/execution.py:114)
         |    for batch in dataset_builder.iter_batches(dataset, batch_size):
         |       # FIRST iter materializes the lazy plan
         |       exporter.export_batch(batch_id, rows)         # writes outputs
-        |       build_batch_progress(rows)                   # in-memory counters
+        |       _build_batch_progress(rows)                  # in-memory counters
         |       progress_tracker.log_batch_progress(...)      # MLflow metrics
-        |       transition_run_phase(..., "first_batch_materialized")
+        |       _transition_run_phase(..., "first_batch_materialized")
         |
         |    mark_run_finished(run_state)
         |    exporter.finalize_run(run_state)
@@ -648,7 +667,7 @@ to the final markdown writes. Step numbers below match the diagram.
         # before in-memory progress records the row below.
                                                                 |
                                                                 v
-[8] StreamingRayExecutor.build_batch_progress
+[8] StreamingRayExecutor._build_batch_progress
         - count success / failed / skipped rows
         - update in-memory RunState
         - optionally log MLflow progress

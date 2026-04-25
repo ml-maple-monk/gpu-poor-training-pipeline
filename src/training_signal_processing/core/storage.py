@@ -4,6 +4,7 @@ import json
 import os
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import boto3
@@ -203,10 +204,27 @@ def strip_endpoint_scheme(endpoint_url: str) -> str:
     return endpoint_url.removeprefix("https://").removeprefix("http://")
 
 
+def resolve_runtime_object_store(runtime_context: Any) -> ObjectStore:
+    object_store = getattr(runtime_context, "object_store", None)
+    if object_store is not None:
+        return object_store
+    config = getattr(runtime_context, "config", None)
+    r2_config = getattr(config, "r2", None)
+    if r2_config is None:
+        raise ValueError("Runtime context config must include an r2 configuration.")
+    if os.environ.get("R2_ACCESS_KEY_ID"):
+        object_store = R2ObjectStore.from_environment(r2_config)
+    else:
+        object_store = R2ObjectStore.from_config_file(r2_config)
+    runtime_context.object_store = object_store
+    return object_store
+
+
 __all__ = [
     "ObjectStore",
     "R2ObjectStore",
     "build_r2_env",
     "ensure_r2_config_complete",
+    "resolve_runtime_object_store",
     "strip_endpoint_scheme",
 ]

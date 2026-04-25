@@ -30,6 +30,11 @@ remote:
   remote_jobs_root: /root/ocr-jobs
   pgid_wait_attempts: 20
   pgid_wait_sleep_seconds: 0.25
+  sync_paths:
+    - pyproject.toml
+    - uv.lock
+    - src
+    - config
 
 ray:
   executor_type: ray

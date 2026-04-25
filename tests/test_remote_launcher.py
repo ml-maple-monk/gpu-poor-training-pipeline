@@ -69,6 +69,7 @@ def _remote_config(
         remote_jobs_root=remote_jobs_root,
         pgid_wait_attempts=pgid_wait_attempts,
         pgid_wait_sleep_seconds=pgid_wait_sleep_seconds,
+        sync_paths=("pyproject.toml", "uv.lock", "src", "config"),
     )
 
 
