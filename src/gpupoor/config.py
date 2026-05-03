@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 import shutil
 import subprocess
 
+import tomli_w
+
 try:
     import tomllib
 except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore[no-redef]
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
 from gpupoor.utils import repo_path
@@ -181,111 +184,6 @@ def training_intermediate_size_default(hidden_size: int) -> int:
     ) * DEFAULT_TRAINING_INTERMEDIATE_SIZE_ALIGNMENT
 
 
-def containerize_data_path(path: str) -> str:
-    if path == "data":
-        return DEFAULT_CONTAINER_DATA_ROOT
-    if path.startswith("data/"):
-        return "/" + path
-    return path
-
-
-def bool01(value: bool) -> str:
-    return "1" if value else "0"
-
-
-def runtime_env_from_tables(
-    *,
-    recipe: dict[str, object],
-    training: dict[str, object],
-    mlflow: dict[str, object],
-) -> dict[str, str]:
-    hidden_size = int(training.get("hidden_size", DEFAULT_TRAINING_HIDDEN_SIZE))
-    intermediate_size = int(training.get("intermediate_size", training_intermediate_size_default(hidden_size)))
-    moe_intermediate_size = int(training.get("moe_intermediate_size", intermediate_size))
-    recipe_dataset_path = str(recipe.get("dataset_path", DEFAULT_RECIPE_DATASET_PATH))
-    recipe_output_dir = str(recipe.get("output_dir", DEFAULT_RECIPE_OUTPUT_DIR))
-
-    return {
-        "MLFLOW_TRACKING_URI": str(mlflow.get("tracking_uri", DEFAULT_MLFLOW_TRACKING_URI)),
-        "MLFLOW_EXPERIMENT_NAME": str(mlflow.get("experiment_name", DEFAULT_MLFLOW_EXPERIMENT_NAME)),
-        "MLFLOW_ARTIFACT_UPLOAD": bool01(bool(mlflow.get("artifact_upload", DEFAULT_MLFLOW_ARTIFACT_UPLOAD))),
-        "MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING": "true"
-        if bool(mlflow.get("enable_system_metrics_logging", DEFAULT_MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING))
-        else "false",
-        "MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL": str(
-            mlflow.get("system_metrics_sampling_interval", DEFAULT_MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL)
-        ),
-        "MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING": str(
-            mlflow.get(
-                "system_metrics_samples_before_logging",
-                DEFAULT_MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING,
-            )
-        ),
-        "MLFLOW_HTTP_REQUEST_MAX_RETRIES": str(
-            mlflow.get("http_request_max_retries", DEFAULT_MLFLOW_HTTP_REQUEST_MAX_RETRIES)
-        ),
-        "MLFLOW_HTTP_REQUEST_TIMEOUT": str(
-            mlflow.get("http_request_timeout_seconds", DEFAULT_MLFLOW_HTTP_REQUEST_TIMEOUT_SECONDS)
-        ),
-        "MLFLOW_START_TIMEOUT_SECONDS": str(mlflow.get("start_timeout_seconds", DEFAULT_MLFLOW_START_TIMEOUT_SECONDS)),
-        "MLFLOW_START_RETRY_SECONDS": str(mlflow.get("start_retry_seconds", DEFAULT_MLFLOW_START_RETRY_SECONDS)),
-        "MLFLOW_PEAK_TFLOPS_PER_GPU": str(mlflow.get("peak_tflops_per_gpu") or DEFAULT_MLFLOW_PEAK_TFLOPS_PER_GPU),
-        "MLFLOW_TIME_TO_TARGET_METRIC": str(mlflow.get("time_to_target_metric", DEFAULT_MLFLOW_TIME_TO_TARGET_METRIC)),
-        "MLFLOW_TIME_TO_TARGET_VALUE": str(mlflow.get("time_to_target_value") or DEFAULT_MLFLOW_TIME_TO_TARGET_VALUE),
-        "TRAIN_EPOCHS": str(training.get("epochs", DEFAULT_TRAINING_EPOCHS)),
-        "TRAIN_BATCH_SIZE": str(training.get("batch_size", DEFAULT_TRAINING_BATCH_SIZE)),
-        "TRAIN_LEARNING_RATE": str(training.get("learning_rate", DEFAULT_TRAINING_LEARNING_RATE)),
-        "TRAIN_ACCUMULATION_STEPS": str(training.get("accumulation_steps", DEFAULT_TRAINING_ACCUMULATION_STEPS)),
-        "TRAIN_NUM_WORKERS": str(training.get("num_workers", DEFAULT_TRAINING_NUM_WORKERS)),
-        "TRAIN_GRAD_CLIP": str(training.get("grad_clip", DEFAULT_TRAINING_GRAD_CLIP)),
-        "TRAIN_HIDDEN_SIZE": str(hidden_size),
-        "TRAIN_NUM_HIDDEN_LAYERS": str(training.get("num_hidden_layers", DEFAULT_TRAINING_NUM_HIDDEN_LAYERS)),
-        "TRAIN_DROPOUT": str(training.get("dropout", DEFAULT_TRAINING_DROPOUT)),
-        "TRAIN_VOCAB_SIZE": str(training.get("vocab_size", DEFAULT_TRAINING_VOCAB_SIZE)),
-        "TRAIN_FLASH_ATTN": bool01(bool(training.get("flash_attn", DEFAULT_TRAINING_FLASH_ATTN))),
-        "TRAIN_NUM_ATTENTION_HEADS": str(training.get("num_attention_heads", DEFAULT_TRAINING_NUM_ATTENTION_HEADS)),
-        "TRAIN_NUM_KEY_VALUE_HEADS": str(training.get("num_key_value_heads", DEFAULT_TRAINING_NUM_KEY_VALUE_HEADS)),
-        "TRAIN_HIDDEN_ACT": str(training.get("hidden_act", DEFAULT_TRAINING_HIDDEN_ACT)),
-        "TRAIN_INTERMEDIATE_SIZE": str(intermediate_size),
-        "TRAIN_MAX_POSITION_EMBEDDINGS": str(
-            training.get("max_position_embeddings", DEFAULT_TRAINING_MAX_POSITION_EMBEDDINGS)
-        ),
-        "TRAIN_RMS_NORM_EPS": str(training.get("rms_norm_eps", DEFAULT_TRAINING_RMS_NORM_EPS)),
-        "TRAIN_ROPE_THETA": str(training.get("rope_theta", DEFAULT_TRAINING_ROPE_THETA)),
-        "TRAIN_INFERENCE_ROPE_SCALING": bool01(
-            bool(training.get("inference_rope_scaling", DEFAULT_TRAINING_INFERENCE_ROPE_SCALING))
-        ),
-        "TRAIN_DTYPE": str(training.get("dtype", DEFAULT_TRAINING_DTYPE)),
-        "TRAIN_LOG_INTERVAL": str(training.get("log_interval", DEFAULT_TRAINING_LOG_INTERVAL)),
-        "TRAIN_SAVE_INTERVAL": str(training.get("save_interval", DEFAULT_TRAINING_SAVE_INTERVAL)),
-        "TRAIN_USE_COMPILE": bool01(bool(training.get("use_compile", DEFAULT_TRAINING_USE_COMPILE))),
-        "TRAIN_USE_MOE": bool01(bool(training.get("use_moe", DEFAULT_TRAINING_USE_MOE))),
-        "TRAIN_NUM_EXPERTS": str(training.get("num_experts", DEFAULT_TRAINING_NUM_EXPERTS)),
-        "TRAIN_NUM_EXPERTS_PER_TOK": str(training.get("num_experts_per_tok", DEFAULT_TRAINING_NUM_EXPERTS_PER_TOK)),
-        "TRAIN_MOE_INTERMEDIATE_SIZE": str(moe_intermediate_size),
-        "TRAIN_NORM_TOPK_PROB": bool01(bool(training.get("norm_topk_prob", DEFAULT_TRAINING_NORM_TOPK_PROB))),
-        "TRAIN_ROUTER_AUX_LOSS_COEF": str(training.get("router_aux_loss_coef", DEFAULT_TRAINING_ROUTER_AUX_LOSS_COEF)),
-        "TRAIN_SAVE_WEIGHT": str(training.get("save_weight", DEFAULT_TRAINING_SAVE_WEIGHT)),
-        "TRAIN_FROM_WEIGHT": str(training.get("from_weight", DEFAULT_TRAINING_FROM_WEIGHT)),
-        "TRAIN_FROM_RESUME": bool01(bool(training.get("from_resume", DEFAULT_TRAINING_FROM_RESUME))),
-        "TRAIN_LR_SCHEDULE": str(training.get("lr_schedule", DEFAULT_TRAINING_LR_SCHEDULE)),
-        "TRAIN_LR_WARMUP_STEPS": str(training.get("lr_warmup_steps", DEFAULT_TRAINING_LR_WARMUP_STEPS)),
-        "TRAIN_LR_MIN_RATIO": str(training.get("lr_min_ratio", DEFAULT_TRAINING_LR_MIN_RATIO)),
-        "RECIPE_KIND": str(recipe.get("kind", DEFAULT_RECIPE_KIND)),
-        "RECIPE_PREPARE_DATA": bool01(bool(recipe.get("prepare_data", DEFAULT_RECIPE_PREPARE_DATA))),
-        "RECIPE_DATASET_PATH_RAW": recipe_dataset_path,
-        "RECIPE_OUTPUT_DIR_RAW": recipe_output_dir,
-        "DATASET_PATH": containerize_data_path(recipe_dataset_path),
-        "OUTPUT_DIR": containerize_data_path(recipe_output_dir),
-        "TIME_CAP_SECONDS": str(recipe.get("time_cap_seconds", DEFAULT_RECIPE_TIME_CAP_SECONDS)),
-        "MAX_SEQ_LEN": str(recipe.get("max_seq_len", DEFAULT_RECIPE_MAX_SEQ_LEN)),
-        "VALIDATION_SPLIT_RATIO": str(recipe.get("validation_split_ratio", DEFAULT_RECIPE_VALIDATION_SPLIT_RATIO)),
-        "VALIDATION_INTERVAL_STEPS": str(
-            recipe.get("validation_interval_steps", DEFAULT_RECIPE_VALIDATION_INTERVAL_STEPS)
-        ),
-    }
-
-
 @dataclass(slots=True)
 class RecipeConfig:
     kind: str = DEFAULT_RECIPE_KIND
@@ -336,46 +234,6 @@ class TrainingConfig:
     lr_warmup_steps: int = DEFAULT_TRAINING_LR_WARMUP_STEPS
     lr_min_ratio: float = DEFAULT_TRAINING_LR_MIN_RATIO
 
-    def to_env(self) -> dict[str, str]:
-        return {
-            "TRAIN_EPOCHS": str(self.epochs),
-            "TRAIN_BATCH_SIZE": str(self.batch_size),
-            "TRAIN_LEARNING_RATE": str(self.learning_rate),
-            "TRAIN_ACCUMULATION_STEPS": str(self.accumulation_steps),
-            "TRAIN_NUM_WORKERS": str(self.num_workers),
-            "TRAIN_GRAD_CLIP": str(self.grad_clip),
-            "TRAIN_HIDDEN_SIZE": str(self.hidden_size),
-            "TRAIN_NUM_HIDDEN_LAYERS": str(self.num_hidden_layers),
-            "TRAIN_DROPOUT": str(self.dropout),
-            "TRAIN_VOCAB_SIZE": str(self.vocab_size),
-            "TRAIN_FLASH_ATTN": "1" if self.flash_attn else "0",
-            "TRAIN_NUM_ATTENTION_HEADS": str(self.num_attention_heads),
-            "TRAIN_NUM_KEY_VALUE_HEADS": str(self.num_key_value_heads),
-            "TRAIN_HIDDEN_ACT": self.hidden_act,
-            "TRAIN_INTERMEDIATE_SIZE": str(self.intermediate_size),
-            "TRAIN_MAX_POSITION_EMBEDDINGS": str(self.max_position_embeddings),
-            "TRAIN_RMS_NORM_EPS": str(self.rms_norm_eps),
-            "TRAIN_ROPE_THETA": str(self.rope_theta),
-            "TRAIN_INFERENCE_ROPE_SCALING": "1" if self.inference_rope_scaling else "0",
-            "TRAIN_DTYPE": self.dtype,
-            "TRAIN_LOG_INTERVAL": str(self.log_interval),
-            "TRAIN_SAVE_INTERVAL": str(self.save_interval),
-            "TRAIN_USE_COMPILE": "1" if self.use_compile else "0",
-            "TRAIN_USE_MOE": "1" if self.use_moe else "0",
-            "TRAIN_NUM_EXPERTS": str(self.num_experts),
-            "TRAIN_NUM_EXPERTS_PER_TOK": str(self.num_experts_per_tok),
-            "TRAIN_MOE_INTERMEDIATE_SIZE": str(self.moe_intermediate_size),
-            "TRAIN_NORM_TOPK_PROB": "1" if self.norm_topk_prob else "0",
-            "TRAIN_ROUTER_AUX_LOSS_COEF": str(self.router_aux_loss_coef),
-            "TRAIN_SAVE_WEIGHT": self.save_weight,
-            "TRAIN_FROM_WEIGHT": self.from_weight,
-            "TRAIN_FROM_RESUME": "1" if self.from_resume else "0",
-            "TRAIN_LR_SCHEDULE": self.lr_schedule,
-            "TRAIN_LR_WARMUP_STEPS": str(self.lr_warmup_steps),
-            "TRAIN_LR_MIN_RATIO": str(self.lr_min_ratio),
-        }
-
-
 @dataclass(slots=True)
 class BackendConfig:
     kind: str
@@ -398,29 +256,6 @@ class MlflowConfig:
     peak_tflops_per_gpu: float | None = None
     time_to_target_metric: str = "none"
     time_to_target_value: float | None = None
-
-    def to_env(self) -> dict[str, str]:
-        """Return MLFLOW_* env vars shared by local and dstack training entrypoints.
-
-        Callers may override MLFLOW_TRACKING_URI (e.g. dstack uses the
-        Cloudflare tunnel URL instead of self.tracking_uri).
-        """
-        return {
-            "MLFLOW_TRACKING_URI": self.tracking_uri,
-            "MLFLOW_EXPERIMENT_NAME": self.experiment_name,
-            "MLFLOW_ARTIFACT_UPLOAD": "1" if self.artifact_upload else "0",
-            "MLFLOW_ENABLE_SYSTEM_METRICS_LOGGING": "true" if self.enable_system_metrics_logging else "false",
-            "MLFLOW_SYSTEM_METRICS_SAMPLING_INTERVAL": str(self.system_metrics_sampling_interval),
-            "MLFLOW_SYSTEM_METRICS_SAMPLES_BEFORE_LOGGING": str(self.system_metrics_samples_before_logging),
-            "MLFLOW_HTTP_REQUEST_MAX_RETRIES": str(self.http_request_max_retries),
-            "MLFLOW_HTTP_REQUEST_TIMEOUT": str(self.http_request_timeout_seconds),
-            "MLFLOW_START_TIMEOUT_SECONDS": str(self.start_timeout_seconds),
-            "MLFLOW_START_RETRY_SECONDS": str(self.start_retry_seconds),
-            "MLFLOW_PEAK_TFLOPS_PER_GPU": str(self.peak_tflops_per_gpu or 0.0),
-            "MLFLOW_TIME_TO_TARGET_METRIC": self.time_to_target_metric,
-            "MLFLOW_TIME_TO_TARGET_VALUE": str(self.time_to_target_value or 0.0),
-        }
-
 
 @dataclass(slots=True)
 class DoctorConfig:
@@ -466,9 +301,7 @@ class RemoteConfig:
 
         Only fields the user set materialize as entries; unset fields
         stay out of the dict so the shell defaults in
-        render-pretrain-task.sh keep their authority. Mirrors
-        ``MlflowConfig.to_env()`` so callers pick the dataclass API
-        instead of repeating the field-by-field mapping at call sites.
+        render-pretrain-task.sh keep their authority.
         """
         env: dict[str, str] = {}
         if self.backends:
@@ -516,6 +349,55 @@ class RunConfig:
     remote: RemoteConfig
     seeker: SeekerConfig
     source: Path
+
+
+def write_merged_toml(config: RunConfig, path: str | Path) -> None:
+    """Write a fully merged RunConfig as TOML for container-side entrypoints."""
+    data = _config_to_dict(config)
+    with open(path, "wb") as handle:
+        tomli_w.dump(data, handle)
+
+
+def merged_toml_b64(config: RunConfig) -> str:
+    """Serialize a fully merged RunConfig as base64-encoded TOML."""
+    data = _config_to_dict(config)
+    toml_bytes = tomli_w.dumps(data).encode("utf-8")
+    return base64.b64encode(toml_bytes).decode("ascii")
+
+
+def _sanitize_value(value: object) -> object:
+    if isinstance(value, tuple):
+        return [_sanitize_value(item) for item in value]
+    if isinstance(value, list):
+        return [_sanitize_value(item) for item in value]
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return _strip_nones({key: _sanitize_value(item) for key, item in value.items()})
+    return value
+
+
+def _strip_nones(data: dict) -> dict:
+    return {key: value for key, value in data.items() if value is not None}
+
+
+def _config_to_dict(config: RunConfig) -> dict:
+    """Convert a RunConfig to TOML-safe data, including non-dataclass defaults."""
+    result: dict = {"name": config.name}
+    skip_fields = {"name", "source"}
+    dataclass_fields = {field.name for field in fields(config)}
+
+    for field in fields(config):
+        if field.name in skip_fields:
+            continue
+        result[field.name] = _sanitize_value(asdict(getattr(config, field.name)))
+
+    for key, value in _DEFAULTS.items():
+        if key in dataclass_fields or key in skip_fields or key in result:
+            continue
+        result[key] = _sanitize_value(value)
+
+    return result
 
 
 def _require_table(data: dict[str, object], key: str) -> dict[str, object]:

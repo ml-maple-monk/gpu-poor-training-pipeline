@@ -8,6 +8,7 @@ import platform
 import subprocess
 import threading
 import time
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,11 +31,9 @@ from gpupoor.config import (
     DEFAULT_DSTACK_RUN_START_POLL_INTERVAL,
     DEFAULT_DSTACK_TARGETED_MAX_OFFERS,
     DEFAULT_DSTACK_TASK_DURATION_BUFFER_MINUTES,
-    DEFAULT_DSTACK_TASK_SIGTERM_GRACE,
     DEFAULT_DSTACK_TUNNEL_JOIN_TIMEOUT,
     DEFAULT_HF_DATASET_REPO,
     DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME,
-    DEFAULT_REMOTE_DATASET_PATH,
     DEFAULT_REMOTE_IMAGE_TAG,
     DEFAULT_REMOTE_OUTPUT_DIR,
     DEFAULT_REMOTE_RUN_START_TIMEOUT_SECONDS,
@@ -42,9 +41,9 @@ from gpupoor.config import (
     RunConfig,
     find_dstack_bin,
     load_remote_settings,
+    merged_toml_b64,
     require_remote_settings,
 )
-from gpupoor.runtime_config import merged_toml_b64
 from gpupoor.subprocess_utils import CommandError, bash_script, run_command
 from gpupoor.utils import repo_path
 from gpupoor.utils.http import http_ok
@@ -59,7 +58,6 @@ _TUNNEL_JOIN_TIMEOUT = DEFAULT_DSTACK_TUNNEL_JOIN_TIMEOUT
 _MIN_RESTART_WAIT_SECONDS = DEFAULT_DSTACK_MIN_RESTART_WAIT
 _HEALTH_RECHECK_TIMEOUT_SECONDS = DEFAULT_DSTACK_HEALTH_RECHECK_TIMEOUT
 _DEFAULT_REMOTE_IMAGE_TAG = DEFAULT_REMOTE_IMAGE_TAG
-_TASK_SIGTERM_GRACE_SECONDS = DEFAULT_DSTACK_TASK_SIGTERM_GRACE
 _TASK_DURATION_BUFFER_MINUTES = DEFAULT_DSTACK_TASK_DURATION_BUFFER_MINUTES
 _DEFAULT_OFFER_TIMEOUT_SECONDS = DEFAULT_DSTACK_OFFER_TIMEOUT
 _OFFER_QUERY_TIMEOUT_SECONDS = DEFAULT_DSTACK_OFFER_QUERY_TIMEOUT
@@ -67,7 +65,6 @@ _DEFAULT_PROVIDER_MAX_OFFERS = DEFAULT_DSTACK_PROVIDER_MAX_OFFERS
 _DEFAULT_TARGETED_MAX_OFFERS = DEFAULT_DSTACK_TARGETED_MAX_OFFERS
 _RUN_START_POLL_INTERVAL_SECONDS = DEFAULT_DSTACK_RUN_START_POLL_INTERVAL
 _DRY_RUN_MLFLOW_URL = DEFAULT_DSTACK_DRY_RUN_MLFLOW_URL
-_CONTAINER_REMOTE_DATASET_PATH = DEFAULT_REMOTE_DATASET_PATH
 _DEFAULT_REMOTE_OUTPUT_DIR = DEFAULT_REMOTE_OUTPUT_DIR
 _DEFAULT_HF_DATASET_REPO = DEFAULT_HF_DATASET_REPO
 _DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME = DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME
@@ -289,6 +286,48 @@ def remote_image_tag(
     if skip_build:
         return backend.remote_image_tag or cached_tag or settings.get("REMOTE_IMAGE_TAG", _DEFAULT_REMOTE_IMAGE_TAG)
     return git_short_sha()
+
+
+def remote_worker_env(
+    config: RunConfig,
+    settings: Mapping[str, str],
+    *,
+    run_config_b64: str,
+    profile: str,
+    out_dir: str,
+    hf_token: str = "",
+    connector_env: Mapping[str, str] | None = None,
+    mlflow_tracking_uri: str = "",
+    hf_dataset_filename_default: str | None = None,
+) -> dict[str, str]:
+    """Build the env contract shared by remote dstack and local-emulator workers."""
+    env = dict(connector_env or {})
+    env.pop("GPUPOOR_RUN_CONFIG", None)
+    hf_dataset_repo = settings.get("HF_DATASET_REPO", _DEFAULT_HF_DATASET_REPO)
+    injected = {
+        "GPUPOOR_RUN_CONFIG_B64": run_config_b64,
+        "VERDA_PROFILE": profile,
+        "DSTACK_RUN_NAME": config.name,
+        "OUT_DIR": out_dir,
+        "HF_TOKEN": hf_token,
+        "HF_DATASET_REPO": hf_dataset_repo,
+        "HF_DATASET_FILENAME": settings.get(
+            "HF_DATASET_FILENAME",
+            hf_dataset_filename_default or Path(config.recipe.dataset_path).name,
+        ),
+        "HF_PRETOKENIZED_DATASET_REPO": settings.get(
+            "HF_PRETOKENIZED_DATASET_REPO",
+            hf_dataset_repo,
+        ),
+        "HF_PRETOKENIZED_DATASET_FILENAME": settings.get(
+            "HF_PRETOKENIZED_DATASET_FILENAME",
+            _DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME,
+        ),
+    }
+    env.update({key: value for key, value in injected.items() if value})
+    if mlflow_tracking_uri:
+        env["MLFLOW_TRACKING_URI"] = mlflow_tracking_uri
+    return env
 
 
 def task_max_duration(time_cap_seconds: int) -> str:
@@ -614,7 +653,10 @@ def launch_remote(
 
     ops.run_preflight(remote=True, doctor=config.doctor, remote_config=config.remote)
     if configure_server:
-        bash_script(repo_path("dstack", "scripts", "setup-config.sh"))
+        if dry_run:
+            print("[DRY-RUN] Would configure dstack server")
+        else:
+            bash_script(repo_path("dstack", "scripts", "setup-config.sh"))
     restart_dstack_server_if_needed(
         dstack_bin,
         health_url=config.remote.dstack_server_health_url,
@@ -721,25 +763,16 @@ def launch_remote(
             return
 
         rendered_task = render_task(settings, config, image_sha)
-        apply_env = {
-            "HF_TOKEN": read_required_secret("hf_token"),
-            "GPUPOOR_RUN_CONFIG_B64": merged_toml_b64(config),
-            "VERDA_PROFILE": "remote",
-            "DSTACK_RUN_NAME": config.name,
-            "OUT_DIR": settings.get("OUT_DIR", _DEFAULT_REMOTE_OUTPUT_DIR),
-            "MLFLOW_TRACKING_URI": mlflow_url,
-            "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", _DEFAULT_HF_DATASET_REPO),
-            "HF_DATASET_FILENAME": settings.get("HF_DATASET_FILENAME", Path(config.recipe.dataset_path).name),
-            "HF_PRETOKENIZED_DATASET_REPO": settings.get(
-                "HF_PRETOKENIZED_DATASET_REPO",
-                settings.get("HF_DATASET_REPO", _DEFAULT_HF_DATASET_REPO),
-            ),
-            "HF_PRETOKENIZED_DATASET_FILENAME": settings.get(
-                "HF_PRETOKENIZED_DATASET_FILENAME",
-                _DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME,
-            ),
-            **(connection_bundle.to_runtime_env() if connection_bundle is not None else {}),
-        }
+        apply_env = remote_worker_env(
+            config,
+            settings,
+            run_config_b64=merged_toml_b64(config),
+            profile="remote",
+            out_dir=settings.get("OUT_DIR", _DEFAULT_REMOTE_OUTPUT_DIR),
+            hf_token=read_required_secret("hf_token"),
+            connector_env=connection_bundle.to_runtime_env() if connection_bundle is not None else None,
+            mlflow_tracking_uri=mlflow_url,
+        )
         # `dstack apply` can hang indefinitely on registry auth or
         # network stalls; without a timeout the CLI freezes with no
         # liveness signal. Budget: the existing run-start window plus a

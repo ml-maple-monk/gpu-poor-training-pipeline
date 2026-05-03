@@ -88,10 +88,6 @@ class ConnectionBundle:
             env.setdefault("AWS_SESSION_TOKEN", "")
         return env
 
-    def apply_to_config(self, config: RunConfig) -> RunConfig:
-        mlflow = replace(config.mlflow, tracking_uri=self.mlflow_tracking_uri)
-        return replace(config, mlflow=mlflow)
-
 
 class ConnectorRuntime:
     """Owns launch-time connector readiness and bundle construction."""
@@ -172,31 +168,6 @@ class ConnectorRuntime:
         )
 
 
-def default_connector_runtime() -> ConnectorRuntime:
-    return ConnectorRuntime()
-
-
-def ensure_remote_runtime(config: RunConfig) -> ConnectionBundle:
-    return default_connector_runtime().ensure_remote_runtime(config)
-
-
-def ensure_local_debug_runtime(config: RunConfig) -> ConnectionBundle:
-    return default_connector_runtime().ensure_local_debug_runtime(config)
-
-
-def connection_bundle_for_request(
-    request: ConnectionProfileRequest,
-    config: RunConfig,
-    *,
-    ensure_ready: bool = False,
-) -> ConnectionBundle:
-    return default_connector_runtime().connection_bundle_for_request(
-        request,
-        config,
-        ensure_ready=ensure_ready,
-    )
-
-
 def _truthy_env(name: str) -> bool:
     raw = os.environ.get(name, "")
     return raw.strip().lower() in {"1", "true", "yes", "on"}
@@ -254,6 +225,9 @@ def _rewrite_legacy_experiment_name(config: RunConfig, bundle: ConnectionBundle)
 class LaunchOrchestrator:
     """Owns launch-config loading, operator warnings, and backend dispatch."""
 
+    def __init__(self, connector_runtime: ConnectorRuntime | None = None) -> None:
+        self.connector_runtime = connector_runtime or ConnectorRuntime()
+
     def deploy_remote_request(
         self,
         request: DeploymentRequest,
@@ -275,7 +249,7 @@ class LaunchOrchestrator:
             artifact_upload_requested=launch_config.mlflow.artifact_upload,
         )
         if dry_run:
-            bundle = connection_bundle_for_request(
+            bundle = self.connector_runtime.connection_bundle_for_request(
                 connector_request,
                 launch_config,
                 ensure_ready=False,
@@ -283,7 +257,7 @@ class LaunchOrchestrator:
             self._report_dry_run_connector_verdict(bundle)
             dstack_backend.launch_remote(launch_config, skip_build=skip_build, dry_run=True)
             return
-        bundle = connection_bundle_for_request(
+        bundle = self.connector_runtime.connection_bundle_for_request(
             connector_request,
             launch_config,
             ensure_ready=True,
@@ -327,7 +301,7 @@ class LaunchOrchestrator:
         config = load_run_config(config_path_text)
         if config.backend.kind not in {BACKEND_DSTACK, BACKEND_LOCAL}:
             raise RuntimeError("gpupoor deploy local-emulator requires backend.kind='dstack' or 'local'")
-        bundle = connection_bundle_for_request(
+        bundle = self.connector_runtime.connection_bundle_for_request(
             ConnectionProfileRequest(
                 lane=LANE_REMOTE,
                 config_path=str(config.source),

@@ -8,15 +8,8 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
-from gpupoor.backends.dstack import read_cached_remote_image_tag, remote_image_tag
-from gpupoor.config import (
-    DEFAULT_HF_DATASET_REPO,
-    DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME,
-    RunConfig,
-    load_remote_settings,
-)
-from gpupoor.recipes.minimind import ensure_local_dataset
-from gpupoor.runtime_config import merged_toml_b64, write_merged_toml
+from gpupoor.backends.dstack import read_cached_remote_image_tag, remote_image_tag, remote_worker_env
+from gpupoor.config import RunConfig, load_remote_settings, merged_toml_b64, write_merged_toml
 from gpupoor.subprocess_utils import CommandError, bash_script, run_command
 from gpupoor.utils import repo_path
 from gpupoor.utils.compose import build_compose_cmd
@@ -34,12 +27,31 @@ _CONTAINER_DATA_ROOT = Path("/data")
 _REMOTE_WRAPPER_SERVICE = "minimind-remote-wrapper"
 _REMOTE_WRAPPER_DATASET_PATH = "/workspace/data/datasets/pretrain_t2t_mini"
 _REMOTE_WRAPPER_OUTPUT_DIR = "/workspace/out"
-_REMOTE_WRAPPER_ENTRYPOINT = "/opt/training/scripts/remote-entrypoint.sh"
 _REMOTE_WRAPPER_IMAGE_ENV = "REMOTE_WRAPPER_IMAGE"
 _PRETOKENIZED_DATASET_DIR = ("data", "datasets", "pretrain_t2t_mini")
 _PRETOKENIZED_DATASET_REQUIRED_FILES = ("metadata.json", "tokens.bin", "index.bin")
 _DEFAULT_HF_DATASET_FILENAME = "pretrain_t2t_mini.jsonl"
 _SENSITIVE_ENV_KEYS = frozenset({"HF_TOKEN"})
+
+
+def _assert_minimind_recipe(config: RunConfig) -> None:
+    if config.recipe.kind != "minimind_pretrain":
+        raise ValueError(f"Unsupported recipe kind: {config.recipe.kind}")
+
+
+def ensure_local_dataset(config: RunConfig) -> Path:
+    """Prepare or verify the local dataset for MiniMind training."""
+    _assert_minimind_recipe(config)
+    dataset_path = repo_path(*Path(config.recipe.dataset_path).parts)
+    if (dataset_path / "metadata.json").is_file():
+        return dataset_path
+    if config.recipe.prepare_data:
+        bash_script(repo_path("training", "scripts", "prepare-data.sh"))
+    elif not dataset_path.exists():
+        raise FileNotFoundError(
+            f"{dataset_path} not found and prepare_data=false; run gpupoor data prep or enable prepare_data"
+        )
+    return dataset_path
 
 
 def _train_compose() -> Path:
@@ -202,29 +214,16 @@ def _remote_wrapper_env(
 ) -> dict[str, str]:
     settings = dict(remote_settings or {})
     hf_token = settings.get("HF_TOKEN") or _hf_token_env().get("HF_TOKEN", "")
-    runtime_env = {
-        "GPUPOOR_RUN_CONFIG_B64": merged_toml_b64(_remote_wrapper_runtime_config(config)),
-    }
-    runtime_env.update({key: value for key, value in connector_env.items() if key != "GPUPOOR_RUN_CONFIG"})
-    injected = {
-        "VERDA_PROFILE": "local-emulator",
-        "DSTACK_RUN_NAME": config.name,
-        "OUT_DIR": _REMOTE_WRAPPER_OUTPUT_DIR,
-        "HF_TOKEN": hf_token,
-        "HF_DATASET_REPO": settings.get("HF_DATASET_REPO", DEFAULT_HF_DATASET_REPO),
-        "HF_DATASET_FILENAME": settings.get("HF_DATASET_FILENAME", _DEFAULT_HF_DATASET_FILENAME),
-        "HF_PRETOKENIZED_DATASET_REPO": settings.get(
-            "HF_PRETOKENIZED_DATASET_REPO",
-            settings.get("HF_DATASET_REPO", DEFAULT_HF_DATASET_REPO),
-        ),
-        "HF_PRETOKENIZED_DATASET_FILENAME": settings.get(
-            "HF_PRETOKENIZED_DATASET_FILENAME",
-            DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME,
-        ),
-    }
-    runtime_env.update({key: value for key, value in injected.items() if value})
-    runtime_env.pop("GPUPOOR_RUN_CONFIG", None)
-    return runtime_env
+    return remote_worker_env(
+        config,
+        settings,
+        run_config_b64=merged_toml_b64(_remote_wrapper_runtime_config(config)),
+        profile="local-emulator",
+        out_dir=_REMOTE_WRAPPER_OUTPUT_DIR,
+        hf_token=hf_token,
+        connector_env=connector_env,
+        hf_dataset_filename_default=_DEFAULT_HF_DATASET_FILENAME,
+    )
 
 
 def run_remote_wrapper(

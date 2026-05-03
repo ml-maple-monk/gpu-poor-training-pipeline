@@ -63,10 +63,10 @@ from gpupoor.config import (
     SeekerConfig,
     SeekerTarget,
     load_run_config,
+    merged_toml_b64,
     normalize_backend_name,
 )
 from gpupoor.deployer import DeploymentRequest, deploy_remote_request
-from gpupoor.runtime_config import merged_toml_b64
 from gpupoor.subprocess_utils import CommandError, bash_script
 from gpupoor.utils import repo_path
 from gpupoor.utils.logging import get_logger
