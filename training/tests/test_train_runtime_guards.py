@@ -77,6 +77,55 @@ def test_train_pretrain_marks_mlflow_failed_on_exception(train_pretrain_module, 
     assert finish_statuses == ["FAILED"]
 
 
+def test_lm_checkpoint_preserves_step_versions_and_latest_alias(import_minimind_module, tmp_path) -> None:
+    trainer_utils = import_minimind_module("minimind.trainer.trainer_utils")
+    lm_config = SimpleNamespace(use_moe=False, hidden_size=2)
+    model = torch.nn.Linear(2, 2)
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+
+    step_200_ckp, step_200_resume = trainer_utils.lm_checkpoint(
+        lm_config,
+        weight="pretrain",
+        model=model,
+        optimizer=optimizer,
+        epoch=0,
+        step=3200,
+        optimizer_step=200,
+        save_dir=tmp_path,
+        checkpoint_tag="step000000200",
+    )
+    with torch.no_grad():
+        model.weight.add_(1.0)
+
+    step_400_ckp, step_400_resume = trainer_utils.lm_checkpoint(
+        lm_config,
+        weight="pretrain",
+        model=model,
+        optimizer=optimizer,
+        epoch=0,
+        step=6400,
+        optimizer_step=400,
+        save_dir=tmp_path,
+        checkpoint_tag="step000000400",
+    )
+
+    latest_ckp = tmp_path / "pretrain_2.pth"
+    latest_resume = tmp_path / "pretrain_2_resume.pth"
+    assert step_200_ckp != step_400_ckp
+    assert step_200_resume != step_400_resume
+    assert latest_ckp.is_file()
+    assert latest_resume.is_file()
+    assert (tmp_path / "pretrain_2_step000000200.pth").is_file()
+    assert (tmp_path / "pretrain_2_step000000200_resume.pth").is_file()
+    assert (tmp_path / "pretrain_2_step000000400.pth").is_file()
+    assert (tmp_path / "pretrain_2_step000000400_resume.pth").is_file()
+
+    old_resume = torch.load(tmp_path / "pretrain_2_step000000200_resume.pth", map_location="cpu")
+    current_resume = torch.load(latest_resume, map_location="cpu")
+    assert old_resume["optimizer_step"] == 200
+    assert current_resume["optimizer_step"] == 400
+
+
 def test_train_window_logs_learning_progress_metrics(train_pretrain_module, monkeypatch) -> None:
     logged_steps: list[dict] = []
 

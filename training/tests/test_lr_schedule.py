@@ -58,3 +58,19 @@ def test_cosine_schedule_respects_min_ratio(import_minimind_module) -> None:
     get_lr = trainer_utils.get_lr
 
     assert get_lr(10, 10, 2.0, schedule="cosine", min_lr_ratio=0.25) == 0.5
+
+
+def test_linear_schedule_warms_up_then_decays_to_floor(import_minimind_module) -> None:
+    trainer_utils = import_minimind_module("minimind.trainer.trainer_utils")
+    get_lr = trainer_utils.get_lr
+
+    assert get_lr(100, 1000, 1e-4, schedule="linear", warmup_steps=200, min_lr_ratio=0.0) == pytest.approx(
+        5e-5
+    )
+    assert get_lr(200, 1000, 1e-4, schedule="linear", warmup_steps=200, min_lr_ratio=0.0) == pytest.approx(
+        1e-4
+    )
+    assert get_lr(600, 1000, 1e-4, schedule="linear", warmup_steps=200, min_lr_ratio=0.0) == pytest.approx(
+        5e-5
+    )
+    assert get_lr(1000, 1000, 1e-4, schedule="linear", warmup_steps=200, min_lr_ratio=0.0) == 0.0

@@ -45,9 +45,6 @@ from trainer.trainer_utils import (
     setup_seed,
 )
 from trainer.trainer_utils import (
-    atomic_torch_save as _atomic_torch_save,
-)
-from trainer.trainer_utils import (
     build_autocast_context as _build_autocast_context,
 )
 from trainer.trainer_utils import (
@@ -119,13 +116,8 @@ def _build_metric_state(
 
 def _save_checkpoint(epoch: int, step: int) -> None:
     model.eval()
-    moe_suffix = "_moe" if lm_config.use_moe else ""
-    ckp = f"{args.save_dir}/{args.save_weight}_{lm_config.hidden_size}{moe_suffix}.pth"
-    raw_model = model.module if isinstance(model, DistributedDataParallel) else model
-    raw_model = getattr(raw_model, "_orig_mod", raw_model)
-    state_dict = raw_model.state_dict()
-    _atomic_torch_save({k: v.half().cpu() for k, v in state_dict.items()}, ckp)
-    lm_checkpoint(
+    checkpoint_tag = f"step{int(metric_state['optimizer_step']):08d}"
+    ckp, _resume = lm_checkpoint(
         lm_config,
         weight=args.save_weight,
         model=model,
@@ -135,10 +127,10 @@ def _save_checkpoint(epoch: int, step: int) -> None:
         step=step,
         optimizer_step=int(metric_state["optimizer_step"]),
         save_dir=args.save_dir,
+        checkpoint_tag=checkpoint_tag,
     )
     mlflow_logger.log_checkpoint(ckp, step)
     model.train()
-    del state_dict
 
 
 def _target_update_steps(iters: int) -> int:

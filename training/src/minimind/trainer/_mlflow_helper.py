@@ -55,6 +55,10 @@ def _safe_log_dict(mlflow, payload: dict, path: str) -> None:
 def _log_runtime_config(mlflow, args, model_config, mlflow_config: dict) -> None:
     recipe_cfg = _recipe_config_from_runtime(args, mlflow_config)
     training_cfg = {k: v for k, v in vars(args).items() if v is not None}
+    accumulation_steps = int(getattr(args, "accumulation_steps", 1) or 1)
+    batch_size = int(getattr(args, "batch_size", 0) or 0)
+    training_cfg["gradient_accumulation_steps"] = accumulation_steps
+    training_cfg["effective_batch_size_per_process"] = batch_size * accumulation_steps
 
     mlflow.log_params({k: str(v) for k, v in training_cfg.items()})
     mlflow.log_params({f"recipe.{k}": str(v) for k, v in recipe_cfg.items() if v is not None})
@@ -302,9 +306,10 @@ def start(runtime_args, model_config, mlflow_config: dict) -> None:
             exp_name = str(mlflow_config.get("experiment_name", "minimind-pretrain"))
             mlflow.set_experiment(exp_name)
             script_name = str(mlflow_config.get("script_name", "train_pretrain"))
+            accumulation_steps = int(getattr(runtime_args, "accumulation_steps", 1) or 1)
             run_name = (
                 f"{script_name}-h{runtime_args.hidden_size}-L{runtime_args.num_hidden_layers}"
-                f"-bs{runtime_args.batch_size}-lr{runtime_args.learning_rate}"
+                f"-bs{runtime_args.batch_size}-ga{accumulation_steps}-lr{runtime_args.learning_rate}"
             )
             log_sys = bool(mlflow_config.get("enable_system_metrics_logging", False))
             tags = {

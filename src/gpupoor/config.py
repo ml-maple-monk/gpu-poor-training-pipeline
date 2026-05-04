@@ -1049,8 +1049,8 @@ def load_run_config(path: str | Path) -> RunConfig:
         raise ConfigError("training.moe_intermediate_size must be > 0")
     if training.router_aux_loss_coef < 0.0:
         raise ConfigError("training.router_aux_loss_coef must be >= 0.0")
-    if training.lr_schedule not in {"cosine", "constant"}:
-        raise ConfigError("training.lr_schedule must be one of: cosine, constant")
+    if training.lr_schedule not in {"cosine", "constant", "linear"}:
+        raise ConfigError("training.lr_schedule must be one of: cosine, constant, linear")
     if training.lr_warmup_steps < 0:
         raise ConfigError("training.lr_warmup_steps must be >= 0")
     if not 0.0 <= training.lr_min_ratio <= 1.0:

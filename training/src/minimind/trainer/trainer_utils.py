@@ -9,6 +9,7 @@ __package__ = "trainer"
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import math
 import random
+import shutil
 from contextlib import nullcontext
 
 import numpy as np
@@ -135,16 +136,18 @@ def get_lr(current_step, total_steps, lr, *, schedule="cosine", warmup_steps=0, 
     if warmup_steps > 0 and step <= warmup_steps:
         return lr * (step / warmup_steps)
 
-    if schedule == "constant":
-        return lr
-    if schedule != "cosine":
-        raise ValueError(f"Unsupported lr schedule: {schedule}")
-
     if total_steps <= warmup_steps:
         return lr
 
     decay_progress = (step - warmup_steps) / (total_steps - warmup_steps)
     decay_progress = max(0.0, min(decay_progress, 1.0))
+    if schedule == "constant":
+        return lr
+    if schedule == "linear":
+        return lr * (min_lr_ratio + (1.0 - min_lr_ratio) * (1.0 - decay_progress))
+    if schedule != "cosine":
+        raise ValueError(f"Unsupported lr schedule: {schedule}")
+
     cosine = 0.5 * (1.0 + math.cos(math.pi * decay_progress))
     return lr * (min_lr_ratio + (1.0 - min_lr_ratio) * cosine)
 
@@ -169,6 +172,20 @@ def setup_seed(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
+def _replace_with_hardlink_or_copy(source_path, destination_path):
+    temp_path = destination_path + ".tmp"
+    try:
+        os.remove(temp_path)
+    except FileNotFoundError:
+        pass
+
+    try:
+        os.link(source_path, temp_path)
+    except OSError:
+        shutil.copy2(source_path, temp_path)
+    os.replace(temp_path, destination_path)
+
+
 def lm_checkpoint(
     lm_config,
     weight="full_sft",
@@ -177,12 +194,17 @@ def lm_checkpoint(
     epoch=0,
     step=0,
     save_dir="../checkpoints",
+    checkpoint_tag=None,
     **kwargs,
 ):
     os.makedirs(save_dir, exist_ok=True)
     moe_path = "_moe" if lm_config.use_moe else ""
-    ckp_path = f"{save_dir}/{weight}_{lm_config.hidden_size}{moe_path}.pth"
-    resume_path = f"{save_dir}/{weight}_{lm_config.hidden_size}{moe_path}_resume.pth"
+    checkpoint_stem = f"{weight}_{lm_config.hidden_size}{moe_path}"
+    latest_ckp_path = f"{save_dir}/{checkpoint_stem}.pth"
+    latest_resume_path = f"{save_dir}/{checkpoint_stem}_resume.pth"
+    versioned_stem = f"{checkpoint_stem}_{checkpoint_tag}" if checkpoint_tag else checkpoint_stem
+    ckp_path = f"{save_dir}/{versioned_stem}.pth"
+    resume_path = f"{save_dir}/{versioned_stem}_resume.pth"
 
     if model is not None:
         raw_model = model.module if isinstance(model, DistributedDataParallel) else model
@@ -192,6 +214,8 @@ def lm_checkpoint(
         ckp_tmp = ckp_path + ".tmp"
         torch.save(state_dict, ckp_tmp)
         os.replace(ckp_tmp, ckp_path)
+        if ckp_path != latest_ckp_path:
+            _replace_with_hardlink_or_copy(ckp_path, latest_ckp_path)
 
         resume_data = {
             "model": state_dict,
@@ -212,11 +236,14 @@ def lm_checkpoint(
         resume_tmp = resume_path + ".tmp"
         torch.save(resume_data, resume_tmp)
         os.replace(resume_tmp, resume_path)
+        if resume_path != latest_resume_path:
+            _replace_with_hardlink_or_copy(resume_path, latest_resume_path)
         del state_dict, resume_data
         torch.cuda.empty_cache()
+        return ckp_path, resume_path
     else:  # 加载模式
-        if os.path.exists(resume_path):
-            ckp_data = torch.load(resume_path, map_location="cpu")
+        if os.path.exists(latest_resume_path):
+            ckp_data = torch.load(latest_resume_path, map_location="cpu")
             saved_ws = ckp_data.get("world_size", 1)
             current_ws = dist.get_world_size() if dist.is_initialized() else 1
             if saved_ws != current_ws:

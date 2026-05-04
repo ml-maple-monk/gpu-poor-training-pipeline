@@ -122,6 +122,7 @@ def test_mlflow_start_logs_recipe_and_runtime_config(
     fake_train_args.max_seq_len = 2048
     fake_train_args.validation_split_ratio = 0.0
     fake_train_args.validation_interval_steps = 0
+    fake_train_args.accumulation_steps = 4
 
     mlflow_config = {
         "tracking_uri": "https://mlflow.example",
@@ -151,6 +152,8 @@ def test_mlflow_start_logs_recipe_and_runtime_config(
     assert merged_params["num_attention_heads"] == "8"
     assert merged_params["num_key_value_heads"] == "4"
     assert merged_params["intermediate_size"] == "2432"
+    assert merged_params["gradient_accumulation_steps"] == "4"
+    assert merged_params["effective_batch_size_per_process"] == "64"
     assert merged_params["mlflow.experiment_name"] == "minimind-pretrain"
     assert "config/training_args.json" in logged_paths
     assert "config/recipe_config.json" in logged_paths
