@@ -45,6 +45,7 @@ DEFAULT_TRAINING_EPOCHS = _DEFAULTS["training"]["epochs"]
 DEFAULT_TRAINING_MAX_STEPS = _DEFAULTS["training"]["max_steps"]
 DEFAULT_TRAINING_BATCH_SIZE = _DEFAULTS["training"]["batch_size"]
 DEFAULT_TRAINING_LEARNING_RATE = _DEFAULTS["training"]["learning_rate"]
+DEFAULT_TRAINING_WEIGHT_DECAY = _DEFAULTS["training"].get("weight_decay", 0.0)
 DEFAULT_TRAINING_OPTIMIZER = _DEFAULTS["training"]["optimizer"]
 DEFAULT_TRAINING_ACCUMULATION_STEPS = _DEFAULTS["training"]["accumulation_steps"]
 DEFAULT_TRAINING_NUM_WORKERS = _DEFAULTS["training"]["num_workers"]
@@ -212,6 +213,7 @@ class TrainingConfig:
     max_steps: int = DEFAULT_TRAINING_MAX_STEPS
     batch_size: int = DEFAULT_TRAINING_BATCH_SIZE
     learning_rate: float = DEFAULT_TRAINING_LEARNING_RATE
+    weight_decay: float = DEFAULT_TRAINING_WEIGHT_DECAY
     optimizer: str = DEFAULT_TRAINING_OPTIMIZER
     accumulation_steps: int = DEFAULT_TRAINING_ACCUMULATION_STEPS
     num_workers: int = DEFAULT_TRAINING_NUM_WORKERS
@@ -623,6 +625,7 @@ _KNOWN_TRAINING = {
     "max_steps",
     "batch_size",
     "learning_rate",
+    "weight_decay",
     "optimizer",
     "accumulation_steps",
     "num_workers",
@@ -891,6 +894,7 @@ def load_run_config(path: str | Path) -> RunConfig:
         max_steps=_require_int(training_data, "max_steps", default=DEFAULT_TRAINING_MAX_STEPS),
         batch_size=_require_int(training_data, "batch_size", default=DEFAULT_TRAINING_BATCH_SIZE),
         learning_rate=_require_float(training_data, "learning_rate", default=DEFAULT_TRAINING_LEARNING_RATE),
+        weight_decay=_require_float(training_data, "weight_decay", default=DEFAULT_TRAINING_WEIGHT_DECAY),
         optimizer=_require_str(training_data, "optimizer", default=DEFAULT_TRAINING_OPTIMIZER),
         accumulation_steps=_require_int(
             training_data,
@@ -985,6 +989,8 @@ def load_run_config(path: str | Path) -> RunConfig:
         raise ConfigError("training.batch_size must be > 0")
     if training.learning_rate <= 0:
         raise ConfigError("training.learning_rate must be > 0")
+    if training.weight_decay < 0.0:
+        raise ConfigError("training.weight_decay must be >= 0.0")
     if training.optimizer not in {"adamw", "muon8bit", "sgd"}:
         raise ConfigError("training.optimizer must be one of: adamw, muon8bit, sgd")
     if training.accumulation_steps <= 0:

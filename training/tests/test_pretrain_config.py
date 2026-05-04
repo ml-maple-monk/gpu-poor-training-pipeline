@@ -13,11 +13,12 @@ def test_default_model_config_function_matches_native_superbpe_recipe(import_min
     config = pretrain_config.build_default_minimind_config(Config)
 
     assert config.hidden_size == 2560
-    assert config.num_hidden_layers == 16
+    assert config.num_hidden_layers == 24
     assert config.vocab_size == 50_014
     assert config.flash_attn is True
     assert config.num_attention_heads == 32
     assert config.num_key_value_heads == 8
+    assert config.hidden_act == "silu"
     assert config.intermediate_size == 8128
 
 
@@ -36,6 +37,7 @@ def test_runtime_args_include_documented_dataset_and_tokenizer_paths(import_mini
             "max_steps": 123,
             "batch_size": 1,
             "learning_rate": 5e-4,
+            "weight_decay": 0.4,
             "optimizer": "muon8bit",
             "dtype": "bfloat16",
             "num_workers": 0,
@@ -57,10 +59,12 @@ def test_runtime_args_include_documented_dataset_and_tokenizer_paths(import_mini
     assert args.data_path == pretrain_config.DEFAULT_DATASET_PATH
     assert args.tokenizer_path == pretrain_config.DEFAULT_TOKENIZER_PATH
     assert args.hidden_size == 2560
-    assert args.num_hidden_layers == 16
+    assert args.num_hidden_layers == 24
     assert args.vocab_size == 50_014
     assert args.max_steps == 123
     assert args.optimizer == "muon8bit"
+    assert args.weight_decay == 0.4
+    assert args.hidden_act == "silu"
     assert args.precision == "bf16_training"
     assert args.fp8_recipe == "tensorwise"
     assert args.compile_fullgraph == 0
@@ -84,6 +88,7 @@ epochs = 1
 max_steps = 7
 batch_size = 1
 learning_rate = 0.0005
+weight_decay = 0.4
 optimizer = "sgd"
 dtype = "bfloat16"
 num_workers = 0
@@ -112,6 +117,7 @@ tokenizer_path = "tokenizer"
     assert args.from_weight == str(tmp_path / "weights/model.pt")
     assert args.max_steps == 7
     assert args.optimizer == "sgd"
+    assert args.weight_decay == 0.4
 
 
 def test_runtime_args_enable_fp8_fullgraph_recipe(import_minimind_module) -> None:
@@ -129,6 +135,7 @@ def test_runtime_args_enable_fp8_fullgraph_recipe(import_minimind_module) -> Non
             "max_steps": 10,
             "batch_size": 1,
             "learning_rate": 5e-4,
+            "weight_decay": 0.4,
             "optimizer": "muon8bit",
             "dtype": "bfloat16",
             "precision": "fp8_training",
@@ -161,7 +168,7 @@ def test_fp8_recipe_rejects_adamw_fallback(import_minimind_module) -> None:
     pretrain_config = import_minimind_module("minimind.trainer.pretrain_config")
     options = {
         "hidden_size": 2560,
-        "num_hidden_layers": 16,
+        "num_hidden_layers": 24,
         "vocab_size": 50_014,
         "num_attention_heads": 32,
         "num_key_value_heads": 8,
@@ -177,6 +184,7 @@ def test_fp8_recipe_rejects_adamw_fallback(import_minimind_module) -> None:
         "lr_warmup_steps": 0,
         "max_steps": 1,
         "lr_min_ratio": 0.1,
+        "weight_decay": 0.4,
         "optimizer": "adamw",
         "precision": "fp8_training",
         "fp8_recipe": "tensorwise",

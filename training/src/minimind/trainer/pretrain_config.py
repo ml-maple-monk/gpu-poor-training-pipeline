@@ -35,7 +35,7 @@ SUPPORTED_PRECISION_AXES = {"bf16_training", "fp8_training"}
 SUPPORTED_FP8_RECIPES = {"tensorwise"}
 DEFAULT_MODEL_CONFIG = {
     "hidden_size": 2560,
-    "num_hidden_layers": 16,
+    "num_hidden_layers": 24,
     "dropout": 0.0,
     "gradient_checkpointing": True,
     "vocab_size": 50_014,
@@ -115,6 +115,7 @@ def runtime_args_from_config(
         "max_steps": training.get("max_steps", 0),
         "batch_size": training["batch_size"],
         "learning_rate": training["learning_rate"],
+        "weight_decay": training.get("weight_decay", 0.0),
         "optimizer": training.get("optimizer", "muon8bit"),
         "device": training.get("device", "cuda:0" if cuda_available else "cpu"),
         "dtype": training["dtype"],
@@ -211,6 +212,8 @@ def coerce_args(options: dict[str, Any]) -> SimpleNamespace:
         raise ValueError("max_steps must be >= 0")
     if not 0.0 <= runtime_args.lr_min_ratio <= 1.0:
         raise ValueError("lr_min_ratio must be >= 0.0 and <= 1.0")
+    if runtime_args.weight_decay < 0.0:
+        raise ValueError("weight_decay must be >= 0.0")
     if runtime_args.optimizer not in {"adamw", "muon8bit", "sgd"}:
         raise ValueError("optimizer must be one of: adamw, muon8bit, sgd")
     if runtime_args.precision not in SUPPORTED_PRECISION_AXES:

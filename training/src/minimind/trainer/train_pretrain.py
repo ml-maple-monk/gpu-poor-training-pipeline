@@ -351,7 +351,7 @@ def _build_muon8bit_optimizer(module: torch.nn.Module):
             "params": muon_params,
             "use_muon": True,
             "lr": args.learning_rate,
-            "weight_decay": 0.0,
+            "weight_decay": args.weight_decay,
             "momentum": 0.95,
             "nesterov": True,
             "ns_steps": 5,
@@ -366,7 +366,7 @@ def _build_muon8bit_optimizer(module: torch.nn.Module):
                 "params": aux_params,
                 "use_muon": False,
                 "lr": args.learning_rate,
-                "weight_decay": 0.0,
+                "weight_decay": args.weight_decay,
             }
         )
     return Muon8BitWithSgdAux(param_groups)
@@ -377,9 +377,9 @@ def _build_optimizer(module: torch.nn.Module):
     if args.optimizer == "muon8bit":
         return _build_muon8bit_optimizer(module)
     if args.optimizer == "adamw":
-        return optim.AdamW(model_parameters, lr=args.learning_rate)
+        return optim.AdamW(model_parameters, lr=args.learning_rate, weight_decay=args.weight_decay)
     if args.optimizer == "sgd":
-        return optim.SGD(model_parameters, lr=args.learning_rate)
+        return optim.SGD(model_parameters, lr=args.learning_rate, weight_decay=args.weight_decay)
     raise ValueError(f"Unsupported optimizer: {args.optimizer}")
 
 
@@ -758,11 +758,13 @@ def run_training(runtime_args):
                 f"Muon8Bit tensors={optimizer_split['muon_param_tensors']} "
                 f"params={optimizer_split['muon_param_count']}; "
                 f"SGD auxiliary tensors={optimizer_split['sgd_aux_param_tensors']} "
-                f"params={optimizer_split['sgd_aux_param_count']}; AdamW fallback=false"
+                f"params={optimizer_split['sgd_aux_param_count']}; "
+                f"weight_decay={args.weight_decay}; AdamW fallback=false"
             )
             mlflow_logger.log_params(
                 {
                     "optimizer.name": args.optimizer,
+                    "optimizer.weight_decay": args.weight_decay,
                     "optimizer.muon_param_count": optimizer_split["muon_param_count"],
                     "optimizer.muon_param_tensors": optimizer_split["muon_param_tensors"],
                     "optimizer.sgd_aux_param_count": optimizer_split["sgd_aux_param_count"],
