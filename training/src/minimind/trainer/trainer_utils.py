@@ -17,9 +17,9 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import Sampler
 from tqdm.auto import tqdm
-from transformers import AutoTokenizer
 
 from model.model_minimind import MiniMindForCausalLM
+from trainer.pretrain_tokenizer import load_pretrain_tokenizer
 
 
 def get_model_params(model, config):
@@ -227,7 +227,7 @@ def lm_checkpoint(
 
 
 def init_model(lm_config, from_weight="pretrain", tokenizer_path="../model", save_dir="../out", device="cuda"):
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+    tokenizer = load_pretrain_tokenizer(tokenizer_path)
     model = MiniMindForCausalLM(lm_config)
 
     if from_weight != "none":

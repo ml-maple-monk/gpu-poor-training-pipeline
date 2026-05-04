@@ -5,29 +5,32 @@
 
 [recipe]
 kind = "minimind_pretrain"
-prepare_data = true
-dataset_path = "data/datasets/pretrain_t2t_mini"
+prepare_data = false
+dataset_path = "data/datasets/native_superbpe_1m_rows_max4w/20260503T002359Z"
 output_dir = "data/minimind-out"
 time_cap_seconds = 600
-max_seq_len = 340
+max_seq_len = 4096
 validation_split_ratio = 0.0
 validation_interval_steps = 0
 
 [training]
 epochs = 1
-batch_size = 16
+max_steps = 0
+batch_size = 1
 learning_rate = 0.0005
+optimizer = "adamw"
 accumulation_steps = 8
 num_workers = 4
 grad_clip = 1.0
-hidden_size = 768
-num_hidden_layers = 8
+hidden_size = 2048
+num_hidden_layers = 16
 dropout = 0.0
-vocab_size = 6400
+vocab_size = 50014
 flash_attn = true
-num_attention_heads = 8
-num_key_value_heads = 4
+num_attention_heads = 16
+num_key_value_heads = 8
 hidden_act = "silu"
+intermediate_size = 6496
 intermediate_size_numerator = 314159
 intermediate_size_denominator = 6400000
 intermediate_size_alignment = 64
@@ -103,7 +106,7 @@ dstack_server_start_timeout_seconds = 30
 run_start_timeout_seconds = 7200
 remote_image_tag = "latest"
 remote_output_dir = "/workspace/out"
-remote_dataset_path = "/workspace/data/datasets/pretrain_t2t_mini"
+remote_dataset_path = "/workspace/data/datasets/native_superbpe_1m_rows_max4w/20260503T002359Z"
 hf_dataset_repo = "jingyaogong/minimind_dataset"
 hf_pretokenized_dataset_filename = "pretokenized/pretrain_t2t_mini.tar.gz"
 
@@ -114,7 +117,7 @@ max_submit_retries = 3
 
 [container]
 data_root = "/data"
-runtime_dataset_path = "/data/datasets/pretrain_t2t_mini"
+runtime_dataset_path = "/data/datasets/native_superbpe_1m_rows_max4w/20260503T002359Z"
 runtime_output_dir = "/data/minimind-out"
 
 [dstack]
@@ -267,8 +270,8 @@ healthcheck_start_period = "2s"
 dstack_wait_timeout_seconds = 30
 
 [pretokenize]
-tokenizer_path = "../model"
-max_length = 340
+tokenizer_path = "/home/geeyang/workspace/training-signal-processing/tokenizers/native_superbpe_1m_rows_max4w"
+max_length = 4096
 overwrite = false
 progress_interval = 50000
 

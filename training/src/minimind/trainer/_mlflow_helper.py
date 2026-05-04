@@ -15,6 +15,7 @@ import torch
 _active = False
 _start_time = None
 _mlflow_module = None
+_run_id = None
 _metric_queue = None
 _metric_worker = None
 _metric_stop_event = None
@@ -51,6 +52,8 @@ def _log_runtime_config(mlflow, args, model_config, mlflow_config: dict) -> None
     mlflow.log_params({k: str(v) for k, v in training_cfg.items()})
     mlflow.log_params({f"recipe.{k}": str(v) for k, v in recipe_cfg.items() if v is not None})
     mlflow.log_params({f"mlflow.{k}": str(v) for k, v in mlflow_config.items() if v is not None})
+    if not _artifact_logging_enabled(mlflow_config):
+        return
     try:
         cfg = {k: v for k, v in vars(model_config).items() if not k.startswith("_")}
         mlflow.log_dict(cfg, "config/model_config.json")
@@ -66,6 +69,7 @@ def _reset_runtime_state() -> None:
         _active, \
         _start_time, \
         _mlflow_module, \
+        _run_id, \
         _metric_queue, \
         _metric_worker, \
         _metric_stop_event, \
@@ -75,6 +79,7 @@ def _reset_runtime_state() -> None:
     _active = False
     _start_time = None
     _mlflow_module = None
+    _run_id = None
     _metric_queue = None
     _metric_worker = None
     _metric_stop_event = None
@@ -92,7 +97,12 @@ def _metric_worker_loop() -> None:
             continue
         try:
             if _mlflow_module is not None:
-                _mlflow_module.log_metrics(payload["metrics"], step=payload["step"])
+                _log_metrics_to_run(
+                    _mlflow_module,
+                    payload["metrics"],
+                    step=payload["step"],
+                    run_id=payload.get("run_id"),
+                )
         except Exception as exc:
             print(f"[mlflow] async metric flush failed: {exc}", flush=True)
         finally:
@@ -114,7 +124,7 @@ def _enqueue_metrics(metrics, step) -> None:
     if not _active or _metric_queue is None:
         return
     try:
-        _metric_queue.put_nowait({"metrics": metrics, "step": int(step)})
+        _metric_queue.put_nowait({"metrics": metrics, "step": int(step), "run_id": _run_id})
     except queue.Full:
         _dropped_metric_events += 1
 
@@ -135,6 +145,37 @@ def _load_mlflow_module():
     import mlflow
 
     return mlflow
+
+
+def _artifact_logging_enabled(mlflow_config: dict) -> bool:
+    return bool(mlflow_config.get("artifact_upload", False))
+
+
+def _active_run_id(mlflow, started_run) -> str | None:
+    run_info = getattr(started_run, "info", None)
+    run_id = getattr(run_info, "run_id", None)
+    if run_id:
+        return run_id
+
+    active_run_fn = getattr(mlflow, "active_run", None)
+    if not callable(active_run_fn):
+        return None
+    try:
+        active_run = active_run_fn()
+    except Exception:
+        return None
+    active_info = getattr(active_run, "info", None)
+    return getattr(active_info, "run_id", None)
+
+
+def _log_metrics_to_run(mlflow, metrics, *, step: int, run_id: str | None) -> None:
+    if run_id:
+        try:
+            mlflow.log_metrics(metrics, step=step, run_id=run_id)
+            return
+        except TypeError:
+            pass
+    mlflow.log_metrics(metrics, step=step)
 
 
 def _best_effort_end_active_run(mlflow, *, status: str, reason: str) -> None:
@@ -201,7 +242,7 @@ def _drain_metrics() -> None:
 
 # doc-anchor: mlflow-helper-start
 def start(runtime_args, model_config, mlflow_config: dict) -> None:
-    global _active, _start_time, _mlflow_module, _mlflow_config
+    global _active, _start_time, _mlflow_module, _mlflow_config, _run_id
     global _metric_queue_maxsize, _metric_queue_poll_seconds, _metric_flush_timeout_seconds
 
     # Stash config for helpers that run after start().
@@ -271,7 +312,8 @@ def start(runtime_args, model_config, mlflow_config: dict) -> None:
                 "verda.emulation": os.environ.get("VERDA_EMULATION", "true"),
                 "verda.run_name": os.environ.get("DSTACK_RUN_NAME", ""),
             }
-            mlflow.start_run(run_name=run_name, log_system_metrics=log_sys, tags=tags)
+            started_run = mlflow.start_run(run_name=run_name, log_system_metrics=log_sys, tags=tags)
+            _run_id = _active_run_id(mlflow, started_run)
             _log_runtime_config(mlflow, runtime_args, model_config, mlflow_config)
             env_info = {
                 "torch_version": torch.__version__,
@@ -280,7 +322,8 @@ def start(runtime_args, model_config, mlflow_config: dict) -> None:
                 "cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
                 "cuda_version": getattr(torch.version, "cuda", None),
             }
-            mlflow.log_dict(env_info, "config/env.json")
+            if _artifact_logging_enabled(mlflow_config):
+                mlflow.log_dict(env_info, "config/env.json")
             _mlflow_module = mlflow
             _active = True
             _start_time = time.time()
@@ -319,6 +362,7 @@ def log_step(step, epoch, loss, logits_loss, aux_loss, lr, tokens_seen=None, upd
         "train/logits_loss": float(logits_loss),
         "train/aux_loss": float(aux_loss),
         "train/lr": float(lr),
+        "train/learning_rate": float(lr),
         "train/epoch": int(epoch),
     }
     if _start_time is not None:

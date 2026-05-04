@@ -56,9 +56,11 @@ def test_mlflow_finish_flushes_async_metrics(
 ):
     logged_metrics = []
     run_status = []
+    started_run = SimpleNamespace(info=SimpleNamespace(run_id="run-123"))
 
     mlflow_module = build_mlflow_module(
-        log_metrics=lambda metrics, step: logged_metrics.append((step, metrics)),
+        start_run=lambda **kwargs: started_run,
+        log_metrics=lambda metrics, step, run_id=None: logged_metrics.append((step, run_id, metrics)),
         end_run=lambda status="FINISHED": run_status.append(status),
     )
 
@@ -84,10 +86,13 @@ def test_mlflow_finish_flushes_async_metrics(
     mlflow_helper.log_metrics(step=12, metrics={"val/loss": 1.2})
     mlflow_helper.finish()
 
-    metric_names = {name for _, payload in logged_metrics for name in payload}
+    metric_names = {name for _, _, payload in logged_metrics for name in payload}
     assert "train/loss" in metric_names
     assert "train/consumed_tokens" in metric_names
+    assert "train/lr" in metric_names
+    assert "train/learning_rate" in metric_names
     assert "val/loss" in metric_names
+    assert {run_id for _, run_id, _ in logged_metrics} == {"run-123"}
     assert run_status == ["FINISHED"]
 
 
@@ -125,6 +130,7 @@ def test_mlflow_start_logs_recipe_and_runtime_config(
         "recipe_prepare_data": False,
         "time_cap_seconds": 120,
         "enable_system_metrics_logging": True,
+        "artifact_upload": True,
     }
     mlflow_helper.start(fake_train_args, fake_model_config, mlflow_config)
     mlflow_helper.finish()
@@ -197,6 +203,7 @@ def test_mlflow_start_cleans_up_leaked_active_run_before_retry(
         "experiment_name": "minimind-pretrain-remote",
         "start_timeout_seconds": 30,
         "start_retry_seconds": 0,
+        "artifact_upload": True,
     }
     mlflow_helper.start(fake_train_args, fake_model_config, mlflow_config)
 
@@ -206,6 +213,38 @@ def test_mlflow_start_cleans_up_leaked_active_run_before_retry(
     mlflow_helper.finish()
 
     assert run_statuses[-1] == "FINISHED"
+
+
+def test_mlflow_start_skips_config_artifacts_when_artifact_upload_disabled(
+    mlflow_helper,
+    build_mlflow_module,
+    fake_torch_module,
+    fake_train_args,
+    fake_model_config,
+    monkeypatch,
+):
+    logged_params = []
+    logged_dicts = []
+
+    mlflow_module = build_mlflow_module(
+        log_params=lambda params: logged_params.append(params),
+        log_dict=lambda payload, path: logged_dicts.append((path, payload)),
+    )
+
+    monkeypatch.setitem(sys.modules, "mlflow", mlflow_module)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch_module())
+
+    mlflow_config = {
+        "tracking_uri": "https://mlflow.example",
+        "experiment_name": "minimind-pretrain",
+        "artifact_upload": False,
+        "start_retry_seconds": 0,
+    }
+    mlflow_helper.start(fake_train_args, fake_model_config, mlflow_config)
+    mlflow_helper.finish()
+
+    assert logged_params
+    assert logged_dicts == []
 
 
 def test_mlflow_finish_tolerates_metric_drain_failures(mlflow_helper, monkeypatch, capsys):

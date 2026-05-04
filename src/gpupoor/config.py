@@ -41,8 +41,10 @@ DEFAULT_RECIPE_VALIDATION_INTERVAL_STEPS = _DEFAULTS["recipe"]["validation_inter
 
 # Training defaults (from defaults.toml)
 DEFAULT_TRAINING_EPOCHS = _DEFAULTS["training"]["epochs"]
+DEFAULT_TRAINING_MAX_STEPS = _DEFAULTS["training"]["max_steps"]
 DEFAULT_TRAINING_BATCH_SIZE = _DEFAULTS["training"]["batch_size"]
 DEFAULT_TRAINING_LEARNING_RATE = _DEFAULTS["training"]["learning_rate"]
+DEFAULT_TRAINING_OPTIMIZER = _DEFAULTS["training"]["optimizer"]
 DEFAULT_TRAINING_ACCUMULATION_STEPS = _DEFAULTS["training"]["accumulation_steps"]
 DEFAULT_TRAINING_NUM_WORKERS = _DEFAULTS["training"]["num_workers"]
 DEFAULT_TRAINING_GRAD_CLIP = _DEFAULTS["training"]["grad_clip"]
@@ -199,8 +201,10 @@ class RecipeConfig:
 @dataclass(slots=True)
 class TrainingConfig:
     epochs: int = DEFAULT_TRAINING_EPOCHS
+    max_steps: int = DEFAULT_TRAINING_MAX_STEPS
     batch_size: int = DEFAULT_TRAINING_BATCH_SIZE
     learning_rate: float = DEFAULT_TRAINING_LEARNING_RATE
+    optimizer: str = DEFAULT_TRAINING_OPTIMIZER
     accumulation_steps: int = DEFAULT_TRAINING_ACCUMULATION_STEPS
     num_workers: int = DEFAULT_TRAINING_NUM_WORKERS
     grad_clip: float = DEFAULT_TRAINING_GRAD_CLIP
@@ -603,8 +607,10 @@ _KNOWN_RECIPE = {
 }
 _KNOWN_TRAINING = {
     "epochs",
+    "max_steps",
     "batch_size",
     "learning_rate",
+    "optimizer",
     "accumulation_steps",
     "num_workers",
     "grad_clip",
@@ -860,8 +866,10 @@ def load_run_config(path: str | Path) -> RunConfig:
 
     training = TrainingConfig(
         epochs=_require_int(training_data, "epochs", default=DEFAULT_TRAINING_EPOCHS),
+        max_steps=_require_int(training_data, "max_steps", default=DEFAULT_TRAINING_MAX_STEPS),
         batch_size=_require_int(training_data, "batch_size", default=DEFAULT_TRAINING_BATCH_SIZE),
         learning_rate=_require_float(training_data, "learning_rate", default=DEFAULT_TRAINING_LEARNING_RATE),
+        optimizer=_require_str(training_data, "optimizer", default=DEFAULT_TRAINING_OPTIMIZER),
         accumulation_steps=_require_int(
             training_data,
             "accumulation_steps",
@@ -937,10 +945,14 @@ def load_run_config(path: str | Path) -> RunConfig:
     )
     if training.epochs <= 0:
         raise ConfigError("training.epochs must be > 0")
+    if training.max_steps < 0:
+        raise ConfigError("training.max_steps must be >= 0")
     if training.batch_size <= 0:
         raise ConfigError("training.batch_size must be > 0")
     if training.learning_rate <= 0:
         raise ConfigError("training.learning_rate must be > 0")
+    if training.optimizer not in {"adamw", "adafactor", "sgd"}:
+        raise ConfigError("training.optimizer must be one of: adamw, adafactor, sgd")
     if training.accumulation_steps <= 0:
         raise ConfigError("training.accumulation_steps must be > 0")
     if training.num_workers < 0:
@@ -959,10 +971,10 @@ def load_run_config(path: str | Path) -> RunConfig:
         raise ConfigError("training.num_attention_heads must be > 0")
     if training.num_key_value_heads <= 0:
         raise ConfigError("training.num_key_value_heads must be > 0")
-    if training.hidden_size % training.num_attention_heads != 0:
-        raise ConfigError("training.hidden_size must be divisible by training.num_attention_heads")
     if training.num_attention_heads % training.num_key_value_heads != 0:
         raise ConfigError("training.num_attention_heads must be divisible by training.num_key_value_heads")
+    if training.hidden_size % training.num_attention_heads != 0:
+        raise ConfigError("training.hidden_size must be divisible by training.num_attention_heads")
     if training.hidden_act not in {"silu", "gelu", "relu", "swish"}:
         raise ConfigError("training.hidden_act must be one of: silu, gelu, relu, swish")
     if training.intermediate_size <= 0:

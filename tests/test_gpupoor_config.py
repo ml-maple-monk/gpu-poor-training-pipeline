@@ -23,7 +23,9 @@ def test_tiny_local_example_loads() -> None:
     assert config.recipe.time_cap_seconds > 0
     assert config.recipe.max_seq_len > 0
     assert config.training.batch_size > 0
+    assert config.training.max_steps >= 0
     assert config.training.learning_rate == 5e-4
+    assert config.training.optimizer in {"adamw", "adafactor", "sgd"}
     assert config.training.num_attention_heads == 8
     assert config.training.num_key_value_heads == 4
     assert config.training.intermediate_size > config.training.hidden_size
