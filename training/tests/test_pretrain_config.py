@@ -34,7 +34,7 @@ def test_runtime_args_include_documented_dataset_and_tokenizer_paths(import_mini
             "max_steps": 123,
             "batch_size": 1,
             "learning_rate": 5e-4,
-            "optimizer": "adafactor",
+            "optimizer": "muon8bit",
             "dtype": "bfloat16",
             "num_workers": 0,
             "accumulation_steps": 1,
@@ -58,7 +58,7 @@ def test_runtime_args_include_documented_dataset_and_tokenizer_paths(import_mini
     assert args.num_hidden_layers == 16
     assert args.vocab_size == 50_014
     assert args.max_steps == 123
-    assert args.optimizer == "adafactor"
+    assert args.optimizer == "muon8bit"
 
 
 def test_runtime_args_from_toml_resolves_relative_runtime_paths(import_minimind_module, tmp_path) -> None:

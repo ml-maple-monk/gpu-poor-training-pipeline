@@ -951,8 +951,8 @@ def load_run_config(path: str | Path) -> RunConfig:
         raise ConfigError("training.batch_size must be > 0")
     if training.learning_rate <= 0:
         raise ConfigError("training.learning_rate must be > 0")
-    if training.optimizer not in {"adamw", "adafactor", "sgd"}:
-        raise ConfigError("training.optimizer must be one of: adamw, adafactor, sgd")
+    if training.optimizer not in {"adamw", "muon8bit", "sgd"}:
+        raise ConfigError("training.optimizer must be one of: adamw, muon8bit, sgd")
     if training.accumulation_steps <= 0:
         raise ConfigError("training.accumulation_steps must be > 0")
     if training.num_workers < 0:

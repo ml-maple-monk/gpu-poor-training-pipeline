@@ -3,9 +3,210 @@ import math
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 from transformers import GenerationMixin, PretrainedConfig, PreTrainedModel
 from transformers.activations import ACT2FN
 from transformers.modeling_outputs import MoeCausalLMOutputWithPast
+
+try:
+    import triton
+    import triton.language as tl
+except ModuleNotFoundError:
+    triton = None
+    tl = None
+
+
+if triton is not None:
+
+    @triton.jit
+    def _linear_cross_entropy_kernel(
+        X_ptr,
+        X_row_stride,
+        W_ptr,
+        W_row_stride,
+        W_col_stride,
+        Y_ptr,
+        DX_ptr,
+        DX_row_stride,
+        DW_ptr,
+        DW_row_stride,
+        DW_col_stride,
+        LOSS_ptr,
+        D: tl.constexpr,
+        V: tl.constexpr,
+        D_BLOCK: tl.constexpr,
+        V_BLOCK: tl.constexpr,
+        LOSS_SCALE: tl.constexpr,
+        IGNORE_INDEX: tl.constexpr,
+    ):
+        row_id = tl.program_id(axis=0).to(tl.int64)
+        d_tile_offsets = tl.arange(0, D_BLOCK)
+        v_tile_offsets = tl.arange(0, V_BLOCK)
+        m = -float("inf")
+        denom = 0.0
+
+        X_ptr += row_id * X_row_stride
+        DX_ptr += row_id * DX_row_stride
+        Y_ptr += row_id
+        LOSS_ptr += row_id
+        target = tl.load(Y_ptr)
+
+        if target == IGNORE_INDEX:
+            tl.store(LOSS_ptr, 0.0)
+            return
+
+        target_logit = 0.0
+        for d_idx in tl.range(0, D, D_BLOCK):
+            d_offsets = d_idx + d_tile_offsets
+            d_mask = d_offsets < D
+            x_tile = tl.load(X_ptr + d_offsets, mask=d_mask, other=0.0)
+            w_target = tl.load(
+                W_ptr + d_offsets * W_row_stride + target * W_col_stride,
+                mask=d_mask,
+                other=0.0,
+            )
+            target_logit += tl.sum(x_tile.to(tl.float32) * w_target.to(tl.float32))
+
+        for v_idx in tl.range(0, V, V_BLOCK):
+            w_block_ptr = tl.make_block_ptr(
+                base=W_ptr,
+                shape=(D, V),
+                strides=(W_row_stride, W_col_stride),
+                offsets=(0, v_idx),
+                block_shape=(D_BLOCK, V_BLOCK),
+                order=(0, 1),
+            )
+            logits = tl.zeros((1, V_BLOCK), dtype=tl.float32)
+            for d_idx in tl.range(0, D, D_BLOCK):
+                d_offsets = d_idx + d_tile_offsets
+                d_mask = d_offsets < D
+                x_tile = tl.load(X_ptr + d_offsets, mask=d_mask, other=0.0)
+                w_block = tl.load(w_block_ptr, boundary_check=(0, 1), padding_option="zero")
+                logits += tl.sum(x_tile[:, None].to(tl.float32) * w_block.to(tl.float32), axis=0)[None, :]
+                w_block_ptr = w_block_ptr.advance((D_BLOCK, 0))
+
+            v_mask = (v_idx + v_tile_offsets) < V
+            logits = tl.where(v_mask[None, :], logits, -float("inf"))
+            tile_m = tl.max(logits)
+            new_m = tl.maximum(m, tile_m)
+            denom = denom * tl.exp(m - new_m) + tl.sum(tl.exp(logits - new_m))
+            m = new_m
+
+        logsumexp = m + tl.log(denom)
+        tl.store(LOSS_ptr, logsumexp - target_logit)
+
+        for v_idx in tl.range(0, V, V_BLOCK):
+            w_block_ptr = tl.make_block_ptr(
+                base=W_ptr,
+                shape=(D, V),
+                strides=(W_row_stride, W_col_stride),
+                offsets=(0, v_idx),
+                block_shape=(D_BLOCK, V_BLOCK),
+                order=(0, 1),
+            )
+            probs = tl.zeros((1, V_BLOCK), dtype=tl.float32)
+            for d_idx in tl.range(0, D, D_BLOCK):
+                d_offsets = d_idx + d_tile_offsets
+                d_mask = d_offsets < D
+                x_tile = tl.load(X_ptr + d_offsets, mask=d_mask, other=0.0)
+                w_block = tl.load(w_block_ptr, boundary_check=(0, 1), padding_option="zero")
+                probs += tl.sum(x_tile[:, None].to(tl.float32) * w_block.to(tl.float32), axis=0)[None, :]
+                w_block_ptr = w_block_ptr.advance((D_BLOCK, 0))
+
+            v_offsets = v_idx + v_tile_offsets
+            v_mask = v_offsets < V
+            probs = tl.exp(probs - logsumexp)
+            probs -= tl.where(v_offsets[None, :] == target, 1.0, 0.0)
+            probs = tl.where(v_mask[None, :], probs * LOSS_SCALE, 0.0)
+
+            w_t_block_ptr = tl.make_block_ptr(
+                base=W_ptr,
+                shape=(V, D),
+                strides=(W_col_stride, W_row_stride),
+                offsets=(v_idx, 0),
+                block_shape=(V_BLOCK, D_BLOCK),
+                order=(1, 0),
+            )
+            for d_idx in tl.range(0, D, D_BLOCK):
+                d_offsets = d_idx + d_tile_offsets
+                d_mask = d_offsets < D
+                w_t_block = tl.load(w_t_block_ptr, boundary_check=(0, 1), padding_option="zero")
+                dx_partial = tl.sum(tl.trans(probs).to(tl.float32) * w_t_block.to(tl.float32), axis=0)
+                tl.atomic_add(DX_ptr + d_offsets, dx_partial, mask=d_mask)
+                w_t_block_ptr = w_t_block_ptr.advance((0, D_BLOCK))
+
+                x_tile = tl.load(X_ptr + d_offsets, mask=d_mask, other=0.0)[:, None]
+                dw_partial = x_tile.to(tl.float32) * probs
+                dw_ptrs = DW_ptr + d_offsets[:, None] * DW_row_stride + v_offsets[None, :] * DW_col_stride
+                dw_mask = d_mask[:, None] & v_mask[None, :]
+                tl.atomic_add(dw_ptrs, dw_partial, mask=dw_mask)
+
+
+class _TritonLinearCrossEntropy(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x, weight_t, labels, d_block: int, v_block: int, ignore_index: int):
+        original_shape = x.shape
+        if x.dim() == 3:
+            x = x.reshape(-1, x.shape[-1])
+        if labels.dim() != 1:
+            labels = labels.reshape(-1)
+        if x.dim() != 2:
+            raise ValueError(f"Expected 2D or 3D hidden states, got shape {tuple(original_shape)}")
+        if x.size(1) != weight_t.size(0):
+            raise ValueError(f"Hidden size {x.size(1)} does not match transposed weight rows {weight_t.size(0)}")
+
+        valid_count = int(labels.ne(ignore_index).sum().item())
+        if valid_count == 0:
+            ctx.save_for_backward(None, None)
+            ctx.original_shape = original_shape
+            ctx.has_grad = False
+            return x.sum() * 0.0
+
+        n_rows, hidden_dim = x.shape
+        _, vocab_size = weight_t.shape
+        dx = torch.zeros_like(x, dtype=torch.float32)
+        dw = torch.empty_strided(
+            size=weight_t.shape,
+            stride=weight_t.stride(),
+            dtype=torch.float32,
+            device=weight_t.device,
+        )
+        dw.zero_()
+        losses = torch.empty((n_rows,), dtype=torch.float32, device=x.device)
+        _linear_cross_entropy_kernel[(n_rows,)](
+            x,
+            x.stride(0),
+            weight_t,
+            weight_t.stride(0),
+            weight_t.stride(1),
+            labels,
+            dx,
+            dx.stride(0),
+            dw,
+            dw.stride(0),
+            dw.stride(1),
+            losses,
+            D=hidden_dim,
+            V=vocab_size,
+            D_BLOCK=d_block,
+            V_BLOCK=v_block,
+            LOSS_SCALE=1.0 / valid_count,
+            IGNORE_INDEX=ignore_index,
+        )
+        ctx.save_for_backward(dx, dw)
+        ctx.original_shape = original_shape
+        ctx.has_grad = True
+        return losses.sum() / valid_count
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        dx, dw = ctx.saved_tensors
+        if not ctx.has_grad:
+            return None, None, None, None, None, None
+        dx = dx.to(dtype=grad_output.dtype) * grad_output
+        if len(ctx.original_shape) == 3:
+            dx = dx.view(ctx.original_shape)
+        return dx, dw * grad_output, None, None, None, None
 
 
 # 🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏🌎🌍🌏
@@ -34,6 +235,7 @@ class MiniMindConfig(PretrainedConfig):
         norm_topk_prob,
         router_aux_loss_coef,
         use_moe=False,
+        gradient_checkpointing=False,
         head_dim=None,
         moe_intermediate_size=None,
         # Internal constants (will come from [model.internals] TOML section)
@@ -55,6 +257,7 @@ class MiniMindConfig(PretrainedConfig):
         self.hidden_size = hidden_size
         self.num_hidden_layers = num_hidden_layers
         self.use_moe = use_moe
+        self.gradient_checkpointing = gradient_checkpointing
         self.dropout = dropout
         self.vocab_size = vocab_size
         self.flash_attn = flash_attn
@@ -169,6 +372,66 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
         x[:, :, :, None, :]
         .expand(bs, slen, num_key_value_heads, n_rep, head_dim)
         .reshape(bs, slen, num_key_value_heads * n_rep, head_dim)
+    )
+
+
+def chunked_causal_lm_loss(
+    hidden_states: torch.Tensor,
+    labels: torch.Tensor,
+    lm_head: nn.Linear,
+    *,
+    chunk_size: int = 512,
+    ignore_index: int = -100,
+) -> torch.Tensor:
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be > 0, got {chunk_size}")
+    if hidden_states.size(1) <= 1:
+        return hidden_states.sum() * 0.0
+
+    hidden_dim = hidden_states.size(-1)
+    shift_hidden = hidden_states[:, :-1, :].contiguous().view(-1, hidden_dim)
+    shift_labels = labels[:, 1:].contiguous().view(-1)
+    if triton is not None and shift_hidden.is_cuda and lm_head.weight.is_cuda:
+        return _TritonLinearCrossEntropy.apply(
+            shift_hidden,
+            lm_head.weight.t(),
+            shift_labels,
+            64,
+            128,
+            ignore_index,
+        )
+
+    loss_sum = torch.zeros((), device=hidden_states.device, dtype=torch.float32)
+    valid_count = shift_labels.ne(ignore_index).sum()
+
+    for start in range(0, shift_hidden.size(0), chunk_size):
+        end = min(start + chunk_size, shift_hidden.size(0))
+        chunk_labels = shift_labels[start:end]
+
+        def chunk_loss(chunk_hidden: torch.Tensor, labels_chunk: torch.Tensor) -> torch.Tensor:
+            return F.cross_entropy(
+                lm_head(chunk_hidden),
+                labels_chunk,
+                ignore_index=ignore_index,
+                reduction="sum",
+            )
+
+        chunk_hidden = shift_hidden[start:end]
+        if chunk_hidden.requires_grad:
+            loss_sum = loss_sum + checkpoint(
+                chunk_loss,
+                chunk_hidden,
+                chunk_labels,
+                use_reentrant=False,
+                preserve_rng_state=False,
+            )
+        else:
+            loss_sum = loss_sum + chunk_loss(chunk_hidden, chunk_labels)
+
+    return torch.where(
+        valid_count > 0,
+        loss_sum / valid_count.clamp_min(1).to(loss_sum.dtype),
+        hidden_states.sum() * 0.0,
     )
 
 
@@ -344,13 +607,39 @@ class MiniMindModel(nn.Module):
         )
         presents = []
         for layer, past_key_value in zip(self.layers, past_key_values, strict=True):
-            hidden_states, present = layer(
-                hidden_states,
-                position_embeddings,
-                past_key_value=past_key_value,
-                use_cache=use_cache,
-                attention_mask=attention_mask,
-            )
+            if self.training and self.config.gradient_checkpointing and not use_cache:
+
+                def layer_forward(
+                    states: torch.Tensor,
+                    *,
+                    checkpointed_layer=layer,
+                    checkpointed_position_embeddings=position_embeddings,
+                    checkpointed_attention_mask=attention_mask,
+                ) -> torch.Tensor:
+                    layer_output, _ = checkpointed_layer(
+                        states,
+                        checkpointed_position_embeddings,
+                        past_key_value=None,
+                        use_cache=False,
+                        attention_mask=checkpointed_attention_mask,
+                    )
+                    return layer_output
+
+                hidden_states = checkpoint(
+                    layer_forward,
+                    hidden_states,
+                    use_reentrant=False,
+                    preserve_rng_state=False,
+                )
+                present = None
+            else:
+                hidden_states, present = layer(
+                    hidden_states,
+                    position_embeddings,
+                    past_key_value=past_key_value,
+                    use_cache=use_cache,
+                    attention_mask=attention_mask,
+                )
             presents.append(present)
         hidden_states = self.norm(hidden_states)
         aux_loss = sum(
@@ -379,6 +668,8 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
         use_cache=False,
         logits_to_keep=0,
         labels=None,
+        return_full_logits=True,
+        loss_chunk_size=512,
         **kwargs,
     ):
         hidden_states, past_key_values, aux_loss = self.model(
@@ -389,12 +680,22 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
             use_cache=use_cache,
             **kwargs,
         )
-        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
-        logits = self.lm_head(hidden_states[:, slice_indices, :])
         loss = None
         if labels is not None:
-            x, y = logits[..., :-1, :].contiguous(), labels[..., 1:].contiguous()
-            loss = F.cross_entropy(x.view(-1, x.size(-1)), y.view(-1), ignore_index=-100)
+            loss = chunked_causal_lm_loss(
+                hidden_states,
+                labels,
+                self.lm_head,
+                chunk_size=loss_chunk_size,
+                ignore_index=-100,
+            )
+
+        if return_full_logits:
+            slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+        else:
+            keep = logits_to_keep if isinstance(logits_to_keep, int) and logits_to_keep > 0 else 1
+            slice_indices = slice(-keep, None)
+        logits = self.lm_head(hidden_states[:, slice_indices, :])
         return MoeCausalLMOutputWithPast(
             loss=loss, aux_loss=aux_loss, logits=logits, past_key_values=past_key_values, hidden_states=hidden_states
         )

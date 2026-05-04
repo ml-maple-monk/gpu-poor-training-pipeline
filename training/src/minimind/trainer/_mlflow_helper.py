@@ -363,6 +363,15 @@ def log_metrics(*, step, metrics) -> None:
         print(f"[mlflow] log_metrics failed: {exc}", flush=True)
 
 
+def log_params(params) -> None:
+    if not _active or _mlflow_module is None:
+        return
+    try:
+        _mlflow_module.log_params({str(k): str(v) for k, v in dict(params).items()})
+    except Exception as exc:
+        print(f"[mlflow] log_params failed: {exc}", flush=True)
+
+
 def log_step(step, epoch, loss, logits_loss, aux_loss, lr, tokens_seen=None, update_step=None, extra_metrics=None):
     metrics = {
         "train/loss": float(loss),

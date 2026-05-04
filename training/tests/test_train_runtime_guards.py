@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
+import torch
 
 transformers = pytest.importorskip("transformers", reason="transformers is required for trainer_utils import")
 
@@ -127,3 +128,25 @@ def test_train_window_logs_learning_progress_metrics(train_pretrain_module, monk
     assert logged_steps[0]["lr"] == pytest.approx(5e-4)
     assert logged_steps[0]["extra_metrics"]["train/grad_norm"] == pytest.approx(3.0)
     assert logged_steps[0]["extra_metrics"]["train/grad_norm_max"] == pytest.approx(4.0)
+
+
+def test_muon8bit_split_excludes_tied_vocab_and_uses_no_adamw(train_pretrain_module) -> None:
+    class TinyCausalLm(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.model = torch.nn.Module()
+            self.model.embed_tokens = torch.nn.Embedding(16, 8)
+            self.block = torch.nn.Linear(8, 8, bias=False)
+            self.norm = torch.nn.LayerNorm(8)
+            self.lm_head = torch.nn.Linear(8, 16, bias=False)
+            self.lm_head.weight = self.model.embed_tokens.weight
+
+    module = TinyCausalLm()
+
+    muon_params, aux_params, split = train_pretrain_module._split_muon8bit_parameters(module)
+
+    assert [parameter.shape for parameter in muon_params] == [module.block.weight.shape]
+    assert any(parameter is module.lm_head.weight for parameter in aux_params)
+    assert any(parameter is module.norm.weight for parameter in aux_params)
+    assert split["adamw_fallback"] is False
+    assert split["sgd_aux_param_count"] > 0

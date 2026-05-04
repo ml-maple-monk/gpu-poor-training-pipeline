@@ -34,6 +34,7 @@ DEFAULT_MODEL_CONFIG = {
     "hidden_size": 2048,
     "num_hidden_layers": 16,
     "dropout": 0.0,
+    "gradient_checkpointing": True,
     "vocab_size": 50_014,
     "flash_attn": True,
     "num_attention_heads": 16,
@@ -111,7 +112,7 @@ def runtime_args_from_config(
         "max_steps": training.get("max_steps", 0),
         "batch_size": training["batch_size"],
         "learning_rate": training["learning_rate"],
-        "optimizer": training.get("optimizer", "adamw"),
+        "optimizer": training.get("optimizer", "muon8bit"),
         "device": training.get("device", "cuda:0" if cuda_available else "cpu"),
         "dtype": training["dtype"],
         "num_workers": training["num_workers"],
@@ -125,6 +126,9 @@ def runtime_args_from_config(
         "hidden_size": hidden_size,
         "num_hidden_layers": training.get("num_hidden_layers", DEFAULT_MODEL_CONFIG["num_hidden_layers"]),
         "dropout": training.get("dropout", DEFAULT_MODEL_CONFIG["dropout"]),
+        "gradient_checkpointing": (
+            1 if training.get("gradient_checkpointing", DEFAULT_MODEL_CONFIG["gradient_checkpointing"]) else 0
+        ),
         "vocab_size": training.get("vocab_size", DEFAULT_MODEL_CONFIG["vocab_size"]),
         "flash_attn": 1 if training.get("flash_attn", DEFAULT_MODEL_CONFIG["flash_attn"]) else 0,
         "num_attention_heads": training.get("num_attention_heads", DEFAULT_MODEL_CONFIG["num_attention_heads"]),
@@ -197,8 +201,8 @@ def coerce_args(options: dict[str, Any]) -> SimpleNamespace:
         raise ValueError("max_steps must be >= 0")
     if not 0.0 <= runtime_args.lr_min_ratio <= 1.0:
         raise ValueError("lr_min_ratio must be >= 0.0 and <= 1.0")
-    if runtime_args.optimizer not in {"adamw", "adafactor", "sgd"}:
-        raise ValueError("optimizer must be one of: adamw, adafactor, sgd")
+    if runtime_args.optimizer not in {"adamw", "muon8bit", "sgd"}:
+        raise ValueError("optimizer must be one of: adamw, muon8bit, sgd")
     runtime_args.peak_tflops_per_gpu = (
         runtime_args.peak_tflops_per_gpu if runtime_args.peak_tflops_per_gpu > 0 else None
     )
@@ -219,6 +223,7 @@ def build_default_minimind_config(config_cls: type, **overrides: Any) -> Any:
         hidden_size=model_values["hidden_size"],
         num_hidden_layers=model_values["num_hidden_layers"],
         use_moe=bool(model_values["use_moe"]),
+        gradient_checkpointing=bool(model_values["gradient_checkpointing"]),
         dropout=model_values["dropout"],
         vocab_size=model_values["vocab_size"],
         flash_attn=bool(model_values["flash_attn"]),
@@ -262,6 +267,7 @@ def build_minimind_config(runtime_args: SimpleNamespace, config_cls: type) -> An
         num_hidden_layers=runtime_args.num_hidden_layers,
         use_moe=bool(runtime_args.use_moe),
         dropout=runtime_args.dropout,
+        gradient_checkpointing=bool(runtime_args.gradient_checkpointing),
         vocab_size=runtime_args.vocab_size,
         flash_attn=bool(runtime_args.flash_attn),
         num_attention_heads=runtime_args.num_attention_heads,

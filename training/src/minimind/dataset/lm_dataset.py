@@ -207,6 +207,7 @@ class PretrainDataCollator:
         labels[input_ids == self.pad_token_id] = -100
         attention_masks = []
         position_ids = []
+        requires_packed_mask = False
         token_indices = torch.arange(input_ids.size(1), device=input_ids.device)
         for row_index, row in enumerate(input_ids):
             row_attention_mask, row_position_ids = get_attention_mask_for_packed_sequence(
@@ -216,13 +217,14 @@ class PretrainDataCollator:
             )
             segment_starts = (row_position_ids == 0) & row.ne(self.pad_token_id) & token_indices.gt(0)
             labels[row_index, segment_starts] = -100
+            requires_packed_mask = requires_packed_mask or bool(segment_starts.any().item())
             attention_masks.append(row_attention_mask)
             position_ids.append(row_position_ids)
         return {
             "input_ids": input_ids,
             "labels": labels,
             "position_ids": torch.stack(position_ids),
-            "attention_mask": torch.stack(attention_masks),
+            "attention_mask": torch.stack(attention_masks) if requires_packed_mask else None,
         }
 
 

@@ -1,9 +1,12 @@
 import glob
+import importlib
+import importlib.util
 import math
 import os
 import signal
 import sys
 import time
+from pathlib import Path
 
 __package__ = "trainer"
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -12,7 +15,6 @@ import torch
 import torch.distributed as dist
 from torch import optim
 from torch.nn.parallel import DistributedDataParallel
-from transformers.optimization import Adafactor
 
 from model.model_minimind import MiniMindConfig
 from trainer._benchmark_metrics import (
@@ -59,6 +61,7 @@ from trainer.trainer_utils import (
 )
 
 mlflow_logger = MlflowLogger()
+_MUON_STEP_PARAM = None
 
 
 def _sigterm_handler(signum, frame):
@@ -148,17 +151,170 @@ def _target_reached() -> bool:
     return args.max_steps > 0 and int(metric_state["optimizer_step"]) >= int(args.max_steps)
 
 
-def _build_optimizer(model_parameters):
+def _load_muon_step_param():
+    global _MUON_STEP_PARAM
+
+    if _MUON_STEP_PARAM is not None:
+        return _MUON_STEP_PARAM
+    try:
+        muon_module = importlib.import_module("architecture_optimisation_zoo.components.8bit_muon")
+    except (ModuleNotFoundError, ImportError):
+        module_path = Path(
+            "/home/geeyang/workspace/architecture-optimisation-zoo/src/"
+            "architecture_optimisation_zoo/components/8bit_muon.py"
+        )
+        if not module_path.is_file():
+            raise ModuleNotFoundError(
+                "optimizer='muon8bit' requires the local architecture-optimisation-zoo package. "
+                "Install it with: python3 -m pip install --user --ignore-requires-python --no-deps "
+                "-e /home/geeyang/workspace/architecture-optimisation-zoo"
+            )
+        spec = importlib.util.spec_from_file_location("gpupoor_aozoo_8bit_muon", module_path)
+        if spec is None or spec.loader is None:
+            raise ModuleNotFoundError(f"Unable to load Muon8Bit implementation from {module_path}")
+        muon_module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = muon_module
+        spec.loader.exec_module(muon_module)
+    _MUON_STEP_PARAM = getattr(muon_module, "_muon_step_param")
+    return _MUON_STEP_PARAM
+
+
+def _is_muon_excluded_parameter(name: str) -> bool:
+    return name.startswith(("model.embed_tokens.", "lm_head."))
+
+
+def _split_muon8bit_parameters(module: torch.nn.Module) -> tuple[list[torch.nn.Parameter], list[torch.nn.Parameter], dict]:
+    muon_params: list[torch.nn.Parameter] = []
+    aux_params: list[torch.nn.Parameter] = []
+    muon_names: list[str] = []
+    aux_names: list[str] = []
+    seen: set[int] = set()
+    for name, parameter in module.named_parameters():
+        parameter_id = id(parameter)
+        if parameter_id in seen or not parameter.requires_grad:
+            continue
+        seen.add(parameter_id)
+        clean_name = name.removeprefix("_orig_mod.")
+        if parameter.ndim == 2 and not _is_muon_excluded_parameter(clean_name):
+            muon_params.append(parameter)
+            muon_names.append(clean_name)
+        else:
+            aux_params.append(parameter)
+            aux_names.append(clean_name)
+
+    split = {
+        "muon_param_count": int(sum(parameter.numel() for parameter in muon_params)),
+        "muon_param_tensors": len(muon_params),
+        "muon_param_names": muon_names,
+        "sgd_aux_param_count": int(sum(parameter.numel() for parameter in aux_params)),
+        "sgd_aux_param_tensors": len(aux_params),
+        "sgd_aux_param_names": aux_names,
+        "adamw_fallback": False,
+        "excluded_reason": "Muon8Bit is matrix-only; tied vocab, norms, biases, and non-2D tensors use plain SGD.",
+    }
+    return muon_params, aux_params, split
+
+
+class Muon8BitWithSgdAux(optim.Optimizer):
+    """Single optimizer using 8-bit Muon for matrices and SGD for unsupported tensors."""
+
+    def __init__(self, param_groups):
+        _load_muon_step_param()
+        normalized = []
+        for group in param_groups:
+            if "use_muon" not in group:
+                raise ValueError("Each muon8bit param group must include a boolean 'use_muon' flag.")
+            group = dict(group)
+            if group["use_muon"]:
+                group.setdefault("lr", 1e-3)
+                group.setdefault("momentum", 0.95)
+                group.setdefault("weight_decay", 0.0)
+                group.setdefault("nesterov", True)
+                group.setdefault("ns_steps", 5)
+                group.setdefault("block_size", 256)
+                group.setdefault("quantize_state", True)
+                group.setdefault("scale_dtype", torch.float16)
+            else:
+                group.setdefault("lr", 1e-3)
+                group.setdefault("weight_decay", 0.0)
+            normalized.append(group)
+        super().__init__(normalized, {})
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = None
+        if closure is not None:
+            with torch.enable_grad():
+                loss = closure()
+
+        muon_step_param = _load_muon_step_param()
+        for group in self.param_groups:
+            if group["use_muon"]:
+                for parameter in group["params"]:
+                    muon_step_param(
+                        parameter,
+                        self.state[parameter],
+                        lr=group["lr"],
+                        weight_decay=group["weight_decay"],
+                        momentum=group["momentum"],
+                        nesterov=group["nesterov"],
+                        ns_steps=group["ns_steps"],
+                        quantize_state=group["quantize_state"],
+                        block_size=group["block_size"],
+                        scale_dtype=group["scale_dtype"],
+                    )
+                continue
+
+            lr = group["lr"]
+            weight_decay = group["weight_decay"]
+            for parameter in group["params"]:
+                grad = parameter.grad
+                if grad is None:
+                    continue
+                if weight_decay:
+                    parameter.mul_(1.0 - lr * weight_decay)
+                parameter.add_(grad.to(dtype=parameter.dtype), alpha=-lr)
+
+        return loss
+
+
+def _build_muon8bit_optimizer(module: torch.nn.Module):
+    muon_params, aux_params, split = _split_muon8bit_parameters(module)
+    if not muon_params:
+        raise ValueError("optimizer='muon8bit' found no eligible 2D non-vocab parameters")
+    setattr(module, "gpupoor_optimizer_split", split)
+    param_groups = [
+        {
+            "params": muon_params,
+            "use_muon": True,
+            "lr": args.learning_rate,
+            "weight_decay": 0.0,
+            "momentum": 0.95,
+            "nesterov": True,
+            "ns_steps": 5,
+            "block_size": 256,
+            "quantize_state": True,
+            "scale_dtype": torch.float16,
+        },
+    ]
+    if aux_params:
+        param_groups.append(
+            {
+                "params": aux_params,
+                "use_muon": False,
+                "lr": args.learning_rate,
+                "weight_decay": 0.0,
+            }
+        )
+    return Muon8BitWithSgdAux(param_groups)
+
+
+def _build_optimizer(module: torch.nn.Module):
+    model_parameters = module.parameters()
+    if args.optimizer == "muon8bit":
+        return _build_muon8bit_optimizer(module)
     if args.optimizer == "adamw":
         return optim.AdamW(model_parameters, lr=args.learning_rate)
-    if args.optimizer == "adafactor":
-        return Adafactor(
-            model_parameters,
-            lr=args.learning_rate,
-            relative_step=False,
-            scale_parameter=False,
-            warmup_init=False,
-        )
     if args.optimizer == "sgd":
         return optim.SGD(model_parameters, lr=args.learning_rate)
     raise ValueError(f"Unsupported optimizer: {args.optimizer}")
@@ -271,9 +427,16 @@ def _run_validation(epoch: int, step: int, iters: int, val_loader) -> None:
             input_ids = batch["input_ids"].to(args.device, non_blocking=True)
             labels = batch["labels"].to(args.device, non_blocking=True)
             position_ids = batch["position_ids"].to(args.device, non_blocking=True)
-            attention_mask = batch["attention_mask"].to(args.device, non_blocking=True)
+            attention_mask = batch.get("attention_mask")
+            attention_mask = attention_mask.to(args.device, non_blocking=True) if attention_mask is not None else None
             with autocast_ctx:
-                res = model(input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=labels)
+                res = model(
+                    input_ids,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    labels=labels,
+                    return_full_logits=False,
+                )
             valid_tokens = count_valid_tokens(labels)
             if valid_tokens > 0:
                 val_loss_sum_local += float(res.loss.detach().float().item()) * valid_tokens
@@ -346,11 +509,18 @@ def train_epoch(epoch, loader, iters, start_step=0, val_loader=None):
         input_ids = batch["input_ids"].to(args.device, non_blocking=True)
         labels = batch["labels"].to(args.device, non_blocking=True)
         position_ids = batch["position_ids"].to(args.device, non_blocking=True)
-        attention_mask = batch["attention_mask"].to(args.device, non_blocking=True)
+        attention_mask = batch.get("attention_mask")
+        attention_mask = attention_mask.to(args.device, non_blocking=True) if attention_mask is not None else None
         last_step = step
 
         with autocast_ctx:
-            res = model(input_ids, attention_mask=attention_mask, position_ids=position_ids, labels=labels)
+            res = model(
+                input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                labels=labels,
+                return_full_logits=False,
+            )
             aux_loss = res.aux_loss if res.aux_loss is not None else res.loss.new_zeros(())
             loss = (res.loss + aux_loss) / args.accumulation_steps
 
@@ -487,9 +657,29 @@ def run_training(runtime_args):
     data_pipeline = build_pretrain_data_pipeline(args, tokenizer)
     val_loader = data_pipeline.val_loader
     scaler = _build_grad_scaler(device_type, args.dtype)
-    optimizer = _build_optimizer(model.parameters())
+    optimizer = _build_optimizer(model)
     if is_main_process():
         Logger(f"Using optimizer: {args.optimizer}")
+        optimizer_split = getattr(model, "gpupoor_optimizer_split", None)
+        if optimizer_split:
+            Logger(
+                "Optimizer split: "
+                f"Muon8Bit tensors={optimizer_split['muon_param_tensors']} "
+                f"params={optimizer_split['muon_param_count']}; "
+                f"SGD auxiliary tensors={optimizer_split['sgd_aux_param_tensors']} "
+                f"params={optimizer_split['sgd_aux_param_count']}; AdamW fallback=false"
+            )
+            mlflow_logger.log_params(
+                {
+                    "optimizer.name": args.optimizer,
+                    "optimizer.muon_param_count": optimizer_split["muon_param_count"],
+                    "optimizer.muon_param_tensors": optimizer_split["muon_param_tensors"],
+                    "optimizer.sgd_aux_param_count": optimizer_split["sgd_aux_param_count"],
+                    "optimizer.sgd_aux_param_tensors": optimizer_split["sgd_aux_param_tensors"],
+                    "optimizer.adamw_fallback": False,
+                    "optimizer.excluded_reason": optimizer_split["excluded_reason"],
+                }
+            )
 
     # ========== 6. 从ckp恢复状态 ==========
     start_epoch, start_step = 0, 0

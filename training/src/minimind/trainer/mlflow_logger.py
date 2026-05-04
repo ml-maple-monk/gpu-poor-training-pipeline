@@ -19,6 +19,9 @@ class MlflowLogger:
     def log_metrics(self, *, step: int, metrics: dict[str, float]) -> None:
         self._backend.log_metrics(step=step, metrics=metrics)
 
+    def log_params(self, params: dict[str, Any]) -> None:
+        self._backend.log_params(params)
+
     def log_step(
         self,
         *,
