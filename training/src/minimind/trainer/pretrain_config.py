@@ -30,17 +30,20 @@ DEFAULT_DATASET_PATH = "data/datasets/native_superbpe_1m_rows_max4w/20260503T002
 DEFAULT_TOKENIZER_PATH = (
     "/home/geeyang/workspace/training-signal-processing/tokenizers/native_superbpe_1m_rows_max4w"
 )
+DEFAULT_ARCHITECTURE_VARIANT = "minimind_e2e_fa2_dense_muon8bit_compile_fullgraph_fp8_tied50014"
+SUPPORTED_PRECISION_AXES = {"bf16_training", "fp8_training"}
+SUPPORTED_FP8_RECIPES = {"tensorwise"}
 DEFAULT_MODEL_CONFIG = {
-    "hidden_size": 2048,
+    "hidden_size": 2560,
     "num_hidden_layers": 16,
     "dropout": 0.0,
     "gradient_checkpointing": True,
     "vocab_size": 50_014,
     "flash_attn": True,
-    "num_attention_heads": 16,
+    "num_attention_heads": 32,
     "num_key_value_heads": 8,
     "hidden_act": "silu",
-    "intermediate_size": 6496,
+    "intermediate_size": 8128,
     "max_position_embeddings": 32768,
     "rms_norm_eps": 1e-6,
     "rope_theta": 1e6,
@@ -48,7 +51,7 @@ DEFAULT_MODEL_CONFIG = {
     "use_moe": False,
     "num_experts": 4,
     "num_experts_per_tok": 1,
-    "moe_intermediate_size": 6496,
+    "moe_intermediate_size": 8128,
     "norm_topk_prob": True,
     "router_aux_loss_coef": 0.0005,
 }
@@ -115,6 +118,12 @@ def runtime_args_from_config(
         "optimizer": training.get("optimizer", "muon8bit"),
         "device": training.get("device", "cuda:0" if cuda_available else "cpu"),
         "dtype": training["dtype"],
+        "precision": training.get("precision", "bf16_training"),
+        "fp8_recipe": training.get("fp8_recipe", "tensorwise"),
+        "architecture_variant": training.get(
+            "architecture_variant",
+            recipe.get("architecture_variant", DEFAULT_ARCHITECTURE_VARIANT),
+        ),
         "num_workers": training["num_workers"],
         "accumulation_steps": training["accumulation_steps"],
         "grad_clip": training["grad_clip"],
@@ -160,6 +169,7 @@ def runtime_args_from_config(
         "from_weight": _resolve_runtime_path(training["from_weight"], base_dir),
         "from_resume": 1 if training["from_resume"] else 0,
         "use_compile": 1 if training["use_compile"] else 0,
+        "compile_fullgraph": 1 if training.get("compile_fullgraph", False) else 0,
         "validation_split_ratio": recipe["validation_split_ratio"],
         "validation_interval_steps": recipe["validation_interval_steps"],
         "peak_tflops_per_gpu": mlflow_cfg.get("peak_tflops_per_gpu", 0.0),
@@ -203,6 +213,14 @@ def coerce_args(options: dict[str, Any]) -> SimpleNamespace:
         raise ValueError("lr_min_ratio must be >= 0.0 and <= 1.0")
     if runtime_args.optimizer not in {"adamw", "muon8bit", "sgd"}:
         raise ValueError("optimizer must be one of: adamw, muon8bit, sgd")
+    if runtime_args.precision not in SUPPORTED_PRECISION_AXES:
+        raise ValueError(f"precision must be one of: {', '.join(sorted(SUPPORTED_PRECISION_AXES))}")
+    if runtime_args.fp8_recipe not in SUPPORTED_FP8_RECIPES:
+        raise ValueError(f"fp8_recipe must be one of: {', '.join(sorted(SUPPORTED_FP8_RECIPES))}")
+    if runtime_args.precision == "fp8_training" and runtime_args.optimizer != "muon8bit":
+        raise ValueError("precision='fp8_training' requires optimizer='muon8bit' for the dense Muon8Bit recipe")
+    if runtime_args.compile_fullgraph and not runtime_args.use_compile:
+        raise ValueError("compile_fullgraph requires use_compile=true")
     runtime_args.peak_tflops_per_gpu = (
         runtime_args.peak_tflops_per_gpu if runtime_args.peak_tflops_per_gpu > 0 else None
     )

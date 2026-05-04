@@ -179,6 +179,69 @@ def _load_muon_step_param():
     return _MUON_STEP_PARAM
 
 
+def _resolve_model_parameter_dtype(dtype_name: str):
+    if dtype_name == "bfloat16":
+        return torch.bfloat16
+    if dtype_name == "float16":
+        return torch.float16
+    if dtype_name == "float32":
+        return torch.float32
+    raise ValueError(f"Unsupported model parameter dtype: {dtype_name}")
+
+
+def _is_fp8_eligible_linear(name: str, child: torch.nn.Module) -> bool:
+    if not isinstance(child, torch.nn.Linear):
+        return False
+    if "embed_tokens" in name or "lm_head" in name:
+        return False
+    if getattr(child, "bias", None) is not None:
+        return False
+    return child.in_features % 16 == 0 and child.out_features % 16 == 0
+
+
+def _maybe_apply_fp8_training(module: torch.nn.Module) -> None:
+    if getattr(args, "precision", "bf16_training") != "fp8_training":
+        setattr(module, "gpupoor_precision_split", {"precision": getattr(args, "precision", "bf16_training")})
+        return
+    if device_type != "cuda":
+        raise RuntimeError("precision='fp8_training' requires CUDA")
+
+    try:
+        from torchao.float8 import Float8LinearConfig, convert_to_float8_training
+    except ImportError as exc:
+        raise ModuleNotFoundError(
+            "precision='fp8_training' requires torchao.float8. Install torchao before launching this recipe."
+        ) from exc
+
+    selected: list[str] = []
+    skipped: list[str] = []
+
+    def module_filter_fn(child, name: str) -> bool:
+        if _is_fp8_eligible_linear(name, child):
+            selected.append(name)
+            return True
+        if isinstance(child, torch.nn.Linear):
+            skipped.append(name)
+        return False
+
+    model_dtype = _resolve_model_parameter_dtype(args.dtype)
+    module.to(dtype=model_dtype)
+    config = Float8LinearConfig.from_recipe_name(args.fp8_recipe)
+    convert_to_float8_training(module, config=config, module_filter_fn=module_filter_fn)
+
+    split = {
+        "precision": "fp8_training",
+        "fp8_recipe": args.fp8_recipe,
+        "model_parameter_dtype": str(model_dtype).removeprefix("torch."),
+        "fp8_linears": len(selected),
+        "skipped_linears": len(skipped),
+        "selected_linears": tuple(sorted(selected)),
+        "skipped_linear_names": tuple(sorted(skipped)),
+        "backend": "torchao_float8_tensorwise_dynamic",
+    }
+    setattr(module, "gpupoor_precision_split", split)
+
+
 def _is_muon_excluded_parameter(name: str) -> bool:
     return name.startswith(("model.embed_tokens.", "lm_head."))
 
@@ -654,6 +717,34 @@ def run_training(runtime_args):
         tokenizer_path=args.tokenizer_path,
         device=args.device,
     )
+    _maybe_apply_fp8_training(model)
+    if is_main_process():
+        precision_split = getattr(model, "gpupoor_precision_split", {})
+        Logger(
+            "Precision path: "
+            f"{precision_split.get('precision', getattr(args, 'precision', 'bf16_training'))}"
+            f" (architecture_variant={getattr(args, 'architecture_variant', '')})"
+        )
+        if precision_split.get("precision") == "fp8_training":
+            Logger(
+                "FP8 conversion: "
+                f"backend={precision_split['backend']}; "
+                f"recipe={precision_split['fp8_recipe']}; "
+                f"linears={precision_split['fp8_linears']}; "
+                f"skipped_linears={precision_split['skipped_linears']}"
+            )
+            mlflow_logger.log_params(
+                {
+                    "precision.name": precision_split["precision"],
+                    "precision.backend": precision_split["backend"],
+                    "precision.fp8_recipe": precision_split["fp8_recipe"],
+                    "precision.model_parameter_dtype": precision_split["model_parameter_dtype"],
+                    "precision.fp8_linears": precision_split["fp8_linears"],
+                    "precision.skipped_linears": precision_split["skipped_linears"],
+                    "precision.skipped_linear_names": precision_split["skipped_linear_names"],
+                    "architecture.variant": getattr(args, "architecture_variant", ""),
+                }
+            )
     data_pipeline = build_pretrain_data_pipeline(args, tokenizer)
     val_loader = data_pipeline.val_loader
     scaler = _build_grad_scaler(device_type, args.dtype)
@@ -700,8 +791,9 @@ def run_training(runtime_args):
 
     # ========== 7. 编译和分布式包装 ==========
     if args.use_compile == 1:
-        model = torch.compile(model)
-        Logger("torch.compile enabled")
+        compile_kwargs = {"fullgraph": True} if getattr(args, "compile_fullgraph", 0) else {}
+        model = torch.compile(model, **compile_kwargs)
+        Logger(f"torch.compile enabled (fullgraph={bool(getattr(args, 'compile_fullgraph', 0))})")
     if dist.is_initialized():
         model._ddp_params_and_buffers_to_ignore = {"freqs_cos", "freqs_sin"}
         model = DistributedDataParallel(model, device_ids=[local_rank])

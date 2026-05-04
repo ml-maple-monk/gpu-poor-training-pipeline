@@ -32,6 +32,7 @@ _DEFAULTS = _load_defaults()
 # Recipe defaults (from defaults.toml)
 DEFAULT_RECIPE_KIND = _DEFAULTS["recipe"]["kind"]
 DEFAULT_RECIPE_PREPARE_DATA = _DEFAULTS["recipe"]["prepare_data"]
+DEFAULT_RECIPE_ARCHITECTURE_VARIANT = _DEFAULTS["recipe"].get("architecture_variant", "")
 DEFAULT_RECIPE_DATASET_PATH = _DEFAULTS["recipe"]["dataset_path"]
 DEFAULT_RECIPE_OUTPUT_DIR = _DEFAULTS["recipe"]["output_dir"]
 DEFAULT_RECIPE_TIME_CAP_SECONDS = _DEFAULTS["recipe"]["time_cap_seconds"]
@@ -61,9 +62,15 @@ DEFAULT_TRAINING_RMS_NORM_EPS = _DEFAULTS["training"]["rms_norm_eps"]
 DEFAULT_TRAINING_ROPE_THETA = _DEFAULTS["training"]["rope_theta"]
 DEFAULT_TRAINING_INFERENCE_ROPE_SCALING = _DEFAULTS["training"]["inference_rope_scaling"]
 DEFAULT_TRAINING_DTYPE = _DEFAULTS["training"]["dtype"]
+DEFAULT_TRAINING_PRECISION = _DEFAULTS["training"].get("precision", "bf16_training")
+DEFAULT_TRAINING_FP8_RECIPE = _DEFAULTS["training"].get("fp8_recipe", "tensorwise")
+DEFAULT_TRAINING_ARCHITECTURE_VARIANT = _DEFAULTS["training"].get(
+    "architecture_variant", DEFAULT_RECIPE_ARCHITECTURE_VARIANT
+)
 DEFAULT_TRAINING_LOG_INTERVAL = _DEFAULTS["training"]["log_interval"]
 DEFAULT_TRAINING_SAVE_INTERVAL = _DEFAULTS["training"]["save_interval"]
 DEFAULT_TRAINING_USE_COMPILE = _DEFAULTS["training"]["use_compile"]
+DEFAULT_TRAINING_COMPILE_FULLGRAPH = _DEFAULTS["training"].get("compile_fullgraph", False)
 DEFAULT_TRAINING_USE_MOE = _DEFAULTS["training"]["use_moe"]
 DEFAULT_TRAINING_NUM_EXPERTS = _DEFAULTS["training"]["num_experts"]
 DEFAULT_TRAINING_NUM_EXPERTS_PER_TOK = _DEFAULTS["training"]["num_experts_per_tok"]
@@ -190,6 +197,7 @@ def training_intermediate_size_default(hidden_size: int) -> int:
 class RecipeConfig:
     kind: str = DEFAULT_RECIPE_KIND
     prepare_data: bool = DEFAULT_RECIPE_PREPARE_DATA
+    architecture_variant: str = DEFAULT_RECIPE_ARCHITECTURE_VARIANT
     dataset_path: str = DEFAULT_RECIPE_DATASET_PATH
     output_dir: str = DEFAULT_RECIPE_OUTPUT_DIR
     time_cap_seconds: int = DEFAULT_RECIPE_TIME_CAP_SECONDS
@@ -222,9 +230,13 @@ class TrainingConfig:
     rope_theta: float = DEFAULT_TRAINING_ROPE_THETA
     inference_rope_scaling: bool = DEFAULT_TRAINING_INFERENCE_ROPE_SCALING
     dtype: str = DEFAULT_TRAINING_DTYPE
+    precision: str = DEFAULT_TRAINING_PRECISION
+    fp8_recipe: str = DEFAULT_TRAINING_FP8_RECIPE
+    architecture_variant: str = DEFAULT_TRAINING_ARCHITECTURE_VARIANT
     log_interval: int = DEFAULT_TRAINING_LOG_INTERVAL
     save_interval: int = DEFAULT_TRAINING_SAVE_INTERVAL
     use_compile: bool = DEFAULT_TRAINING_USE_COMPILE
+    compile_fullgraph: bool = DEFAULT_TRAINING_COMPILE_FULLGRAPH
     use_moe: bool = DEFAULT_TRAINING_USE_MOE
     num_experts: int = DEFAULT_TRAINING_NUM_EXPERTS
     num_experts_per_tok: int = DEFAULT_TRAINING_NUM_EXPERTS_PER_TOK
@@ -598,6 +610,7 @@ _KNOWN_TOP_LEVEL = {
 _KNOWN_RECIPE = {
     "kind",
     "prepare_data",
+    "architecture_variant",
     "dataset_path",
     "output_dir",
     "time_cap_seconds",
@@ -628,9 +641,13 @@ _KNOWN_TRAINING = {
     "rope_theta",
     "inference_rope_scaling",
     "dtype",
+    "precision",
+    "fp8_recipe",
+    "architecture_variant",
     "log_interval",
     "save_interval",
     "use_compile",
+    "compile_fullgraph",
     "use_moe",
     "num_experts",
     "num_experts_per_tok",
@@ -838,6 +855,11 @@ def load_run_config(path: str | Path) -> RunConfig:
     recipe = RecipeConfig(
         kind=_require_str(recipe_data, "kind", default=DEFAULT_RECIPE_KIND),
         prepare_data=_require_bool(recipe_data, "prepare_data", default=DEFAULT_RECIPE_PREPARE_DATA),
+        architecture_variant=_require_str(
+            recipe_data,
+            "architecture_variant",
+            default=DEFAULT_RECIPE_ARCHITECTURE_VARIANT,
+        ),
         dataset_path=_require_str(recipe_data, "dataset_path", default=DEFAULT_RECIPE_DATASET_PATH),
         output_dir=_require_str(recipe_data, "output_dir", default=DEFAULT_RECIPE_OUTPUT_DIR),
         time_cap_seconds=_require_int(recipe_data, "time_cap_seconds", default=DEFAULT_RECIPE_TIME_CAP_SECONDS),
@@ -911,9 +933,21 @@ def load_run_config(path: str | Path) -> RunConfig:
             default=DEFAULT_TRAINING_INFERENCE_ROPE_SCALING,
         ),
         dtype=_require_str(training_data, "dtype", default=DEFAULT_TRAINING_DTYPE),
+        precision=_require_str(training_data, "precision", default=DEFAULT_TRAINING_PRECISION),
+        fp8_recipe=_require_str(training_data, "fp8_recipe", default=DEFAULT_TRAINING_FP8_RECIPE),
+        architecture_variant=_require_str(
+            training_data,
+            "architecture_variant",
+            default=DEFAULT_TRAINING_ARCHITECTURE_VARIANT,
+        ),
         log_interval=_require_int(training_data, "log_interval", default=DEFAULT_TRAINING_LOG_INTERVAL),
         save_interval=_require_int(training_data, "save_interval", default=DEFAULT_TRAINING_SAVE_INTERVAL),
         use_compile=_require_bool(training_data, "use_compile", default=DEFAULT_TRAINING_USE_COMPILE),
+        compile_fullgraph=_require_bool(
+            training_data,
+            "compile_fullgraph",
+            default=DEFAULT_TRAINING_COMPILE_FULLGRAPH,
+        ),
         use_moe=_require_bool(training_data, "use_moe", default=DEFAULT_TRAINING_USE_MOE),
         num_experts=_require_int(training_data, "num_experts", default=DEFAULT_TRAINING_NUM_EXPERTS),
         num_experts_per_tok=_require_int(
@@ -987,6 +1021,14 @@ def load_run_config(path: str | Path) -> RunConfig:
         raise ConfigError("training.rope_theta must be > 0")
     if training.dtype not in {"float16", "bfloat16", "float32"}:
         raise ConfigError("training.dtype must be one of: float16, bfloat16, float32")
+    if training.precision not in {"bf16_training", "fp8_training"}:
+        raise ConfigError("training.precision must be one of: bf16_training, fp8_training")
+    if training.fp8_recipe not in {"tensorwise"}:
+        raise ConfigError("training.fp8_recipe must be one of: tensorwise")
+    if training.precision == "fp8_training" and training.optimizer != "muon8bit":
+        raise ConfigError("training.precision=fp8_training requires training.optimizer=muon8bit")
+    if training.compile_fullgraph and not training.use_compile:
+        raise ConfigError("training.compile_fullgraph requires training.use_compile=true")
     if training.log_interval <= 0:
         raise ConfigError("training.log_interval must be > 0")
     if training.save_interval <= 0:

@@ -32,11 +32,11 @@ if triton is not None:
         DW_row_stride,
         DW_col_stride,
         LOSS_ptr,
+        VALID_COUNT_ptr,
         D: tl.constexpr,
         V: tl.constexpr,
         D_BLOCK: tl.constexpr,
         V_BLOCK: tl.constexpr,
-        LOSS_SCALE: tl.constexpr,
         IGNORE_INDEX: tl.constexpr,
     ):
         row_id = tl.program_id(axis=0).to(tl.int64)
@@ -94,6 +94,7 @@ if triton is not None:
 
         logsumexp = m + tl.log(denom)
         tl.store(LOSS_ptr, logsumexp - target_logit)
+        loss_scale = 1.0 / tl.load(VALID_COUNT_ptr).to(tl.float32)
 
         for v_idx in tl.range(0, V, V_BLOCK):
             w_block_ptr = tl.make_block_ptr(
@@ -117,7 +118,7 @@ if triton is not None:
             v_mask = v_offsets < V
             probs = tl.exp(probs - logsumexp)
             probs -= tl.where(v_offsets[None, :] == target, 1.0, 0.0)
-            probs = tl.where(v_mask[None, :], probs * LOSS_SCALE, 0.0)
+            probs = tl.where(v_mask[None, :], probs * loss_scale, 0.0)
 
             w_t_block_ptr = tl.make_block_ptr(
                 base=W_ptr,
@@ -155,12 +156,7 @@ class _TritonLinearCrossEntropy(torch.autograd.Function):
         if x.size(1) != weight_t.size(0):
             raise ValueError(f"Hidden size {x.size(1)} does not match transposed weight rows {weight_t.size(0)}")
 
-        valid_count = int(labels.ne(ignore_index).sum().item())
-        if valid_count == 0:
-            ctx.save_for_backward(None, None)
-            ctx.original_shape = original_shape
-            ctx.has_grad = False
-            return x.sum() * 0.0
+        valid_count = labels.ne(ignore_index).sum().clamp_min(1)
 
         n_rows, hidden_dim = x.shape
         _, vocab_size = weight_t.shape
@@ -186,23 +182,20 @@ class _TritonLinearCrossEntropy(torch.autograd.Function):
             dw.stride(0),
             dw.stride(1),
             losses,
+            valid_count,
             D=hidden_dim,
             V=vocab_size,
             D_BLOCK=d_block,
             V_BLOCK=v_block,
-            LOSS_SCALE=1.0 / valid_count,
             IGNORE_INDEX=ignore_index,
         )
         ctx.save_for_backward(dx, dw)
         ctx.original_shape = original_shape
-        ctx.has_grad = True
-        return losses.sum() / valid_count
+        return losses.sum() / valid_count.to(losses.dtype)
 
     @staticmethod
     def backward(ctx, grad_output):
         dx, dw = ctx.saved_tensors
-        if not ctx.has_grad:
-            return None, None, None, None, None, None
         dx = dx.to(dtype=grad_output.dtype) * grad_output
         if len(ctx.original_shape) == 3:
             dx = dx.view(ctx.original_shape)
