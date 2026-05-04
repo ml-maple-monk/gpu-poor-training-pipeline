@@ -47,7 +47,7 @@ def test_pretrain_data_collator_stacks_inputs_and_builds_position_ids(lm_dataset
     assert attention_mask.shape == (2, 6, 6)
     assert torch.equal(input_ids[0], torch.tensor([1, 2, 3, 4, 3, 0]))
     assert torch.equal(input_ids[1], torch.tensor([5, 6, 3, 0, 0, 0]))
-    assert torch.equal(labels[0], torch.tensor([1, 2, 3, 4, 3, -100]))
+    assert torch.equal(labels[0], torch.tensor([1, 2, 3, -100, 3, -100]))
     assert torch.equal(labels[1], torch.tensor([5, 6, 3, -100, -100, -100]))
     assert torch.equal(position_ids[0], torch.tensor([0, 1, 2, 0, 1, 0]))
     assert torch.equal(position_ids[1], torch.tensor([0, 1, 2, 0, 0, 0]))
@@ -94,6 +94,31 @@ def test_minimind_accepts_packed_attention_mask(
     assert output.loss is not None
 
 
+def test_minimind_flash_attention_keeps_causal_mask_without_packed_mask(
+    model_minimind_module,
+    monkeypatch,
+) -> None:
+    calls = []
+
+    def fake_sdpa(q, k, v, *, attn_mask=None, dropout_p=0.0, is_causal=False):
+        del k, v, dropout_p
+        calls.append({"attn_mask": attn_mask, "is_causal": is_causal})
+        return torch.zeros_like(q)
+
+    monkeypatch.setattr(model_minimind_module.F, "scaled_dot_product_attention", fake_sdpa)
+    config = _tiny_model_config(model_minimind_module)
+    config.flash_attn = True
+    model = model_minimind_module.MiniMindForCausalLM(config)
+    input_ids = torch.tensor([[1, 2, 3]])
+    position_ids = torch.arange(input_ids.size(1)).unsqueeze(0)
+
+    output = model(input_ids, position_ids=position_ids)
+
+    assert output.logits.shape[:2] == input_ids.shape
+    assert calls
+    assert calls[0] == {"attn_mask": None, "is_causal": True}
+
+
 def test_pretrain_data_collator_truncates_oversized_samples_and_logs(lm_dataset_module, capsys) -> None:
     collator = lm_dataset_module.PretrainDataCollator(eos_token_id=99, max_seq_len=4)
 
@@ -104,3 +129,15 @@ def test_pretrain_data_collator_truncates_oversized_samples_and_logs(lm_dataset_
     assert torch.equal(batch["input_ids"][0], torch.tensor([1, 2, 3, 99]))
     assert torch.equal(batch["labels"][0], torch.tensor([1, 2, 3, 99]))
     assert torch.equal(batch["position_ids"][0], torch.tensor([0, 1, 2, 3]))
+
+
+def test_pretrain_data_collator_ignores_cross_document_next_token_targets(lm_dataset_module) -> None:
+    collator = lm_dataset_module.PretrainDataCollator(eos_token_id=9, pad_token_id=0, max_seq_len=8)
+
+    batch = collator([torch.tensor([1, 2]), torch.tensor([3, 4])])
+
+    assert torch.equal(batch["input_ids"][0], torch.tensor([1, 2, 9, 3, 4, 9, 0, 0]))
+    assert torch.equal(batch["position_ids"][0], torch.tensor([0, 1, 2, 0, 1, 2, 0, 0]))
+    assert batch["labels"][0, 3].item() == -100
+    assert batch["attention_mask"][0, 3, 2].item() is False
+    assert batch["attention_mask"][0, 4, 3].item() is True

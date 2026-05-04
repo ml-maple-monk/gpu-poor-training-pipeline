@@ -165,7 +165,7 @@ def test_mlflow_start_cleans_up_leaked_active_run_before_retry(
     fake_model_config,
     monkeypatch,
 ):
-    log_dict_calls = {"count": 0}
+    log_params_calls = {"count": 0}
     active_state = {"run": None}
     run_statuses = []
 
@@ -182,17 +182,17 @@ def test_mlflow_start_cleans_up_leaked_active_run_before_retry(
         run_statuses.append(status)
         active_state["run"] = None
 
-    def log_dict(payload, path) -> None:
-        del payload, path
-        log_dict_calls["count"] += 1
-        if log_dict_calls["count"] == 2:
-            raise RuntimeError("temporary mlflow artifact write failure")
+    def log_params(params) -> None:
+        del params
+        log_params_calls["count"] += 1
+        if log_params_calls["count"] == 2:
+            raise RuntimeError("temporary mlflow param write failure")
 
     mlflow_module = build_mlflow_module(
         active_run=active_run,
         start_run=start_run,
         end_run=end_run,
-        log_dict=log_dict,
+        log_params=log_params,
     )
 
     monkeypatch.setitem(sys.modules, "mlflow", mlflow_module)
@@ -245,6 +245,24 @@ def test_mlflow_start_skips_config_artifacts_when_artifact_upload_disabled(
 
     assert logged_params
     assert logged_dicts == []
+
+
+def test_mlflow_checkpoint_artifacts_respect_upload_flag(mlflow_helper, tmp_path) -> None:
+    artifact_calls = []
+    checkpoint = tmp_path / "checkpoint.pth"
+    checkpoint.write_text("fake checkpoint")
+    mlflow_helper._active = True
+    mlflow_helper._mlflow_module = SimpleNamespace(
+        log_artifact=lambda path, artifact_path=None: artifact_calls.append((path, artifact_path)),
+    )
+
+    mlflow_helper._mlflow_config = {"artifact_upload": False}
+    mlflow_helper.log_checkpoint(str(checkpoint), step=10)
+    assert artifact_calls == []
+
+    mlflow_helper._mlflow_config = {"artifact_upload": True}
+    mlflow_helper.log_checkpoint(str(checkpoint), step=10)
+    assert artifact_calls == [(str(checkpoint), "checkpoints/step-10")]
 
 
 def test_mlflow_finish_tolerates_metric_drain_failures(mlflow_helper, monkeypatch, capsys):

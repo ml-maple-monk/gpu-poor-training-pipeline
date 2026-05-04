@@ -227,6 +227,7 @@ class Attention(nn.Module):
                 xv,
                 attn_mask=sdpa_mask,
                 dropout_p=self.dropout if self.training else 0.0,
+                is_causal=sdpa_mask is None and self.is_causal,
             )
         else:
             scores = (xq @ xk.transpose(-2, -1)) / math.sqrt(self.head_dim)

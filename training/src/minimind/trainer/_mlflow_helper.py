@@ -45,6 +45,13 @@ def _recipe_config_from_runtime(args, mlflow_config: dict) -> dict[str, object]:
     }
 
 
+def _safe_log_dict(mlflow, payload: dict, path: str) -> None:
+    try:
+        mlflow.log_dict(payload, path)
+    except Exception as exc:
+        print(f"[mlflow] log_dict {path} failed: {exc}", flush=True)
+
+
 def _log_runtime_config(mlflow, args, model_config, mlflow_config: dict) -> None:
     recipe_cfg = _recipe_config_from_runtime(args, mlflow_config)
     training_cfg = {k: v for k, v in vars(args).items() if v is not None}
@@ -56,12 +63,12 @@ def _log_runtime_config(mlflow, args, model_config, mlflow_config: dict) -> None
         return
     try:
         cfg = {k: v for k, v in vars(model_config).items() if not k.startswith("_")}
-        mlflow.log_dict(cfg, "config/model_config.json")
+        _safe_log_dict(mlflow, cfg, "config/model_config.json")
     except Exception:
         pass
-    mlflow.log_dict(training_cfg, "config/training_args.json")
-    mlflow.log_dict(recipe_cfg, "config/recipe_config.json")
-    mlflow.log_dict(dict(mlflow_config), "config/mlflow_config.json")
+    _safe_log_dict(mlflow, training_cfg, "config/training_args.json")
+    _safe_log_dict(mlflow, recipe_cfg, "config/recipe_config.json")
+    _safe_log_dict(mlflow, dict(mlflow_config), "config/mlflow_config.json")
 
 
 def _reset_runtime_state() -> None:
@@ -323,7 +330,7 @@ def start(runtime_args, model_config, mlflow_config: dict) -> None:
                 "cuda_version": getattr(torch.version, "cuda", None),
             }
             if _artifact_logging_enabled(mlflow_config):
-                mlflow.log_dict(env_info, "config/env.json")
+                _safe_log_dict(mlflow, env_info, "config/env.json")
             _mlflow_module = mlflow
             _active = True
             _start_time = time.time()

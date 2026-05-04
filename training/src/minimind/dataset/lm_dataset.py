@@ -157,6 +157,18 @@ class PretrainDataCollator:
             return feature[0]
         raise TypeError(f"Unsupported pretrain feature type: {type(feature)!r}")
 
+    def _prepare_input_ids(self, input_ids):
+        sample_length = int(input_ids.numel())
+        if sample_length == 0:
+            return input_ids, None
+        if sample_length > self.max_seq_len:
+            return torch.cat([input_ids[: self.max_seq_len - 1], input_ids.new_tensor([self.eos_token_id])]), sample_length
+        if int(input_ids[-1].item()) == self.eos_token_id:
+            return input_ids, None
+        if sample_length == self.max_seq_len:
+            return torch.cat([input_ids[: self.max_seq_len - 1], input_ids.new_tensor([self.eos_token_id])]), None
+        return torch.cat([input_ids, input_ids.new_tensor([self.eos_token_id])]), None
+
     def _finalize_row(self, samples):
         row = torch.full((self.max_seq_len,), self.pad_token_id, dtype=samples[0].dtype)
         offset = 0
@@ -172,22 +184,13 @@ class PretrainDataCollator:
         current_length = 0
 
         for feature in features:
-            input_ids = self._extract_input_ids(feature)
+            input_ids, original_truncated_length = self._prepare_input_ids(self._extract_input_ids(feature))
             sample_length = int(input_ids.numel())
-            if sample_length > self.max_seq_len:
+            if original_truncated_length is not None:
                 print(
-                    f"[pretrain-collator] truncating sample from length {sample_length} to {self.max_seq_len}",
+                    f"[pretrain-collator] truncating sample from length {original_truncated_length} to {self.max_seq_len}",
                     flush=True,
                 )
-                # Force a terminal EOS token so packed rows do not merge a truncated
-                # sample with the next document boundary.
-                input_ids = torch.cat(
-                    [
-                        input_ids[: self.max_seq_len - 1],
-                        input_ids.new_tensor([self.eos_token_id]),
-                    ]
-                )
-                sample_length = self.max_seq_len
             if current_row and current_length + sample_length > self.max_seq_len:
                 packed_rows.append(self._finalize_row(current_row))
                 current_row = []
@@ -204,12 +207,15 @@ class PretrainDataCollator:
         labels[input_ids == self.pad_token_id] = -100
         attention_masks = []
         position_ids = []
-        for row in input_ids:
+        token_indices = torch.arange(input_ids.size(1), device=input_ids.device)
+        for row_index, row in enumerate(input_ids):
             row_attention_mask, row_position_ids = get_attention_mask_for_packed_sequence(
                 row,
                 eos_token_id=self.eos_token_id,
                 pad_token_id=self.pad_token_id,
             )
+            segment_starts = (row_position_ids == 0) & row.ne(self.pad_token_id) & token_indices.gt(0)
+            labels[row_index, segment_starts] = -100
             attention_masks.append(row_attention_mask)
             position_ids.append(row_position_ids)
         return {
