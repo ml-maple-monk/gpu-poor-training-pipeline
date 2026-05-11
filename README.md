@@ -8,7 +8,7 @@
 ![deps](https://img.shields.io/badge/runtime_deps-0-brightgreen)
 ![target](https://img.shields.io/badge/audience-GPU--poor_researchers-orange)
 
-The **GPU-poor researcher's toolbox.** One typed TOML file drives one reproducible run of the **MiniMind** reference recipe — on your laptop CPU, a single local GPU, or an **auto-allocated preemptible GPU** on Verda/dstack. Live MLflow tracking and cheap-to-fail preflights catch misconfiguration before you spend a cent.
+The **GPU-poor researcher's toolbox.** One typed TOML file drives one reproducible run of the **MiniMind** reference recipe — on your laptop CPU, a single local GPU, or a rented remote GPU through the dstack launch contract. Portable MLflow bundles and cheap-to-fail preflights catch misconfiguration before you spend a cent.
 
 ---
 
@@ -16,11 +16,11 @@ The **GPU-poor researcher's toolbox.** One typed TOML file drives one reproducib
 
 Research and engineering explorations shouldn't require a lab budget. `gpupoor` targets the gap between "train in Colab" and "run on a real cluster":
 
-- **Preemptible auto-allocation.** Declare `spot_policy = "spot"` + `max_price` + `gpu_names` in TOML. The CLI asks dstack for the cheapest **live spot offer** that matches your GPU class (A100, B300, H100 …) and schedules your run. You pay spot rate for the minutes you use — nothing else.
+- **Preemptible auto-allocation.** Declare `spot_policy = "spot"` + `max_price` + `gpu_names` in TOML. The CLI asks dstack for the cheapest **live spot offer** that matches your GPU class (A100, B300, H100, RTX 5090, and similar) and schedules your run. You pay spot rate for the minutes you use — nothing else.
 - **MiniMind as the first-class recipe.** A small-but-complete transformer training loop — not a toy, not a framework. Designed to actually train to completion in minutes on a rented GPU, so you can iterate on architecture/data ideas at research speed.
 - **Identical local ↔ remote contract.** Same TOML, same recipe, same artifacts. Smoke on CPU first, then swap one field (`backend.kind = "dstack"`) and rent a GPU.
 - **Zero runtime dependencies.** The core package adds nothing to your Python environment. Dev extras are opt-in.
-- **Cheap failure first.** `gpupoor doctor` + `gpupoor smoke` verify secrets, clocks, disk, docker, and MLflow reachability before `dstack apply` is ever called. Money-spending calls are the last step, never the first.
+- **Cheap failure first.** `gpupoor doctor` + `gpupoor smoke` verify secrets, clocks, disk, docker, registry policy, R2 access, and the remote image contract before `dstack apply` is ever called. Money-spending calls are the last step, never the first.
 
 ### Who this is for
 
@@ -60,22 +60,23 @@ gpupoor train examples/tiny_local.toml   # tiny MiniMind local run
 
 This is your fast feedback loop. Iterate here until the recipe is happy, then rent a GPU.
 
-### 2. Preemptible GPU on Verda/dstack
+### 2. Preemptible GPU through dstack
 
 ```bash
-gpupoor infra mlflow up                              # local MLflow + Cloudflare tunnel
-gpupoor launch dstack examples/verda_a100_10m.toml   # auto-allocates cheapest preemptible A100
+gpupoor launch dstack examples/verda_a100_10m.toml   # auto-allocates cheapest matching preemptible GPU
 ```
 
 What `launch dstack` actually does:
 
-1. Loads the TOML and runs preflight locally (doctor, mlflow reachable, secrets resolved).
-2. Builds and pushes your training image (skip with `--skip-build` to reuse an existing tag).
-3. Opens a **Cloudflare tunnel** so the remote trainer can stream metrics to *your* local MLflow.
+1. Loads the TOML and runs preflight locally (doctor, secrets, registry, fleet, cached image metadata).
+2. Builds and pushes your training image without provenance attestations, unless `--skip-build` reuses an existing tag.
+3. Passes the portable MLflow bundle contract and bounded R2 tokenized dataset settings into the remote task.
 4. Asks dstack for the cheapest **live preemptible offer** matching `gpu_names`, `gpu_count`, and `max_price`.
-5. Applies the run, tails logs, and keeps the tunnel alive until `gpupoor dstack teardown`.
+5. Applies the run and tails logs while the worker runs MiniMind, writes local MLflow SQLite/artifacts, and uploads the bundle to R2/S3 at finalize.
 
 The TOML in the example sets `max_price = 3.0` USD/hr and `time_cap_seconds = 600` — **bounded at $0.50 per run in the absolute worst case**, and in practice the winning spot bid is usually a small fraction of the ceiling. `time_cap_seconds` is a hard wall-clock ceiling enforced inside the trainer, so the run self-terminates before the price ever surprises you.
+
+For the validated RTX 5090 RunPod operating lane, including the direct RunPod recovery path used when dstack capacity acquisition bounces despite advertised offers, see [docs/runpod-rtx5090-minimind.md](./docs/runpod-rtx5090-minimind.md).
 
 ### 3. Dry-run the remote plan (free)
 
@@ -94,24 +95,24 @@ Prints the resolved `dstack apply` shape (image, env, GPU filter, time cap) with
 ## Architecture
 
 <p align="center">
-  <img src="docs/diagrams/architecture.png" alt="gpupoor architecture — CLI and wrapper entrypoints feed typed config, seeker, deployer, and connector control-plane modules, then branch into local or dstack execution with MLflow, Cloudflare, R2, and training runtime dependencies" width="820">
+  <img src="docs/diagrams/architecture.png" alt="gpupoor architecture — CLI and wrapper entrypoints feed typed config, deployer, connector, portable MLflow, local execution, dstack execution, R2, and MiniMind training runtime dependencies" width="820">
 </p>
 
 <sub><a href="./docs/diagrams/architecture.mmd">source (Mermaid)</a></sub>
 
-**Core contract:** the CLI loads one TOML into a `RunConfig` dataclass, resolves the `backend.kind`, and hands off through the current control-plane seams: `seeker` for queued remote placement, `deployer` for launch gating, `connector` for MLflow/tunnel/R2 readiness, and then the local or dstack execution backends. Everything else — MLflow, emulator flows, and repo checks — stays reachable from the same CLI surface.
+**Core contract:** the CLI loads one TOML into a `RunConfig` dataclass, resolves the `backend.kind`, and hands off through the current control-plane seams: `deployer` for launch gating, `connector` for R2/artifact readiness, `services/portable_mlflow.py` for the worker-local tracking bundle, and then the local or dstack execution backends. Everything else — emulator flows, legacy infra helpers, and repo checks — stays reachable from the same CLI surface.
 
 ---
 
 ## Remote launch flow
 
 <p align="center">
-  <img src="docs/diagrams/launch-sequence.png" alt="Remote launch sequence — preflight, build, tunnel, dstack apply, wait, success or cleanup" width="820">
+  <img src="docs/diagrams/launch-sequence.png" alt="Remote launch sequence — preflight, image build, portable MLflow env, R2 dataset settings, dstack apply, wait, success or cleanup" width="820">
 </p>
 
 <sub><a href="./docs/diagrams/launch-sequence.mmd">source (Mermaid)</a></sub>
 
-Source of truth: [`src/gpupoor/backends/dstack.py`](./src/gpupoor/backends/dstack.py) (`launch_remote`, `ensure_dstack_server`, `track_run`, `kill_tunnel`).
+Source of truth: [`src/gpupoor/backends/dstack.py`](./src/gpupoor/backends/dstack.py) (`launch_remote`, `ensure_dstack_server`, `track_run`) plus [`src/gpupoor/services/portable_mlflow.py`](./src/gpupoor/services/portable_mlflow.py).
 
 ---
 
@@ -123,7 +124,7 @@ gpupoor <command> [flags]
 
 | Command                                                     | Purpose                                                             | Notable flags                                |
 | ----------------------------------------------------------- | ------------------------------------------------------------------- | -------------------------------------------- |
-| `gpupoor doctor [config.toml]`                              | Local preflight: clocks, disk, docker, HF token, MLflow reachability | `--skip-preflight`, `--max-clock-skew N`     |
+| `gpupoor doctor [config.toml]`                              | Local preflight: clocks, disk, docker, HF token, registry, R2/artifact readiness | `--skip-preflight`, `--max-clock-skew N`     |
 | `gpupoor smoke [config.toml]`                               | End-to-end smoke against the local emulator                         | `--cpu`, `--prune-volumes`, `--skip-preflight` |
 | `gpupoor fix-clock [config.toml]`                           | Resync WSL/container clock against host                             | —                                            |
 | `gpupoor parse-secrets [secrets]`                           | Resolve `secrets` file into `.env.*` format                         | —                                            |
@@ -133,7 +134,7 @@ gpupoor <command> [flags]
 | `gpupoor launch dstack <config.toml>`                       | Launch the remote backend                                           | `--skip-build`, `--dry-run`                  |
 | `gpupoor deploy local-emulator <config.toml>`               | Canonical local pre-remote validation via the remote wrapper contract | —                                          |
 | `gpupoor dstack <setup\|registry-login\|fleet-apply\|teardown>` | dstack lifecycle helpers                                            | `--dry-run` (`registry-login`)               |
-| `gpupoor infra mlflow <up\|down\|logs\|tunnel>`             | MLflow + Cloudflare tunnel                                          | —                                            |
+| `gpupoor infra mlflow <up\|down\|logs\|tunnel>`             | Legacy host MLflow + Cloudflare tunnel helper                      | —                                            |
 | `gpupoor infra emulator <up\|cpu\|nvcr\|down\|logs\|shell\|health>` | Pseudo-Verda smoke harness (non-canonical for training validation) | —                                            |
 
 `doctor`, `smoke`, and `launch dstack` resolve operational defaults from the typed TOML config first; CLI flags are one-off overrides.
@@ -152,7 +153,7 @@ Every run is one TOML file. Unknown keys are rejected at load time.
 | `[mlflow]`   | `MlflowConfig`    | `experiment_name`, `tracking_uri`, `artifact_upload`, `enable_system_metrics_logging`, `http_request_timeout_seconds`, `peak_tflops_per_gpu` (optional override), `time_to_target_metric`, `time_to_target_value` |
 | `[doctor]`   | `DoctorConfig`    | `skip_preflight`, `max_clock_skew_seconds`                                                                        |
 | `[smoke]`    | `SmokeConfig`     | `cpu`, `health_port`, `strict_port`, `degraded_port`, `sigterm_timeout_seconds`, `prune_volumes`                   |
-| `[remote]`   | `RemoteConfig`    | `env_file`, `vcr_image_base`, `dstack_server_health_url`, `mlflow_health_url`, `run_start_timeout_seconds`, `gpu_names`, `gpu_count`, `spot_policy`, `max_price` |
+| `[remote]`   | `RemoteConfig`    | `env_file`, `vcr_image_base`, `dstack_server_health_url`, `run_start_timeout_seconds`, `gpu_names`, `gpu_count`, `spot_policy`, `max_price`, `r2_tokenized_dataset_uri`, `r2_tokenized_dataset_max_files`, `r2_tokenized_dataset_dir` |
 
 Full schema + validators live in [`src/gpupoor/config.py`](./src/gpupoor/config.py).
 
@@ -209,7 +210,7 @@ Three env templates ship at the repo root:
 | Template                | Purpose                                       |
 | ----------------------- | --------------------------------------------- |
 | `.env.example.mgmt`     | Management plane (dstack tokens, registry)    |
-| `.env.example.remote`   | Remote training container (HF, MLflow, tunnel)|
+| `.env.example.remote`   | Remote training container (HF, R2, portable MLflow bundle)|
 | `.env.example.inference`| Inference container (HF, model paths)         |
 
 Copy to the matching `.env.*` name, fill in secrets, and `gpupoor parse-secrets` will resolve them into a form the CLI consumes.
@@ -238,7 +239,7 @@ remote-access/
 ├── training/                    # MiniMind reference code (vendored)
 ├── dstack/                      # Verda/dstack runtime contract
 ├── infrastructure/
-│   ├── mlflow/                  # MLflow container + Cloudflare tunnel
+│   ├── mlflow/                  # legacy host MLflow container + Cloudflare tunnel
 │   └── local-emulator/          # CPU-only smoke harness
 ├── tests/                       # fast-lane regression tests
 ├── data/                        # datasets + caches (gitignored where large)
@@ -263,6 +264,8 @@ Per-component starters (`./training/start.sh`, `./dstack/start.sh`, `./infrastru
 ## Safety posture
 
 - **Strict TOML** — unknown keys rejected; dstack run-names regex-gated.
+- **Image policy** — Docker Hub images use unprefixed names, private registries require auth, and remote builds are checked for no provenance attestations.
+- **Portable artifacts** — remote workers finalize MLflow SQLite/artifact bundles even when training fails.
 - **PID verification** — tunnel teardown verifies `/proc/<pid>/comm` matches `cloudflared` on Linux before `os.kill`.
 - **Concurrent-safe state** — `.run-ids` append is protected by `fcntl.flock`; two concurrent launches cannot corrupt it.
 
@@ -274,8 +277,10 @@ Per-component starters (`./training/start.sh`, `./dstack/start.sh`, `./infrastru
 - [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) — operator recovery playbook
 - [CONTRIBUTING.md](./CONTRIBUTING.md) — contributor guardrails
 - [training/docs/README.md](./training/docs/README.md) — MiniMind recipe internals
+- [docs/runpod-rtx5090-minimind.md](./docs/runpod-rtx5090-minimind.md) — validated RunPod RTX 5090 + R2 + portable MLflow operations
+- [docs/remote-training-smoke.md](./docs/remote-training-smoke.md) — Docker/R2/portable MLflow remote contract smoke
 - [dstack/docs/README.md](./dstack/docs/README.md) — Verda/dstack runtime contract
-- [infrastructure/mlflow/docs/README.md](./infrastructure/mlflow/docs/README.md) — MLflow + tunnel
+- [infrastructure/mlflow/docs/README.md](./infrastructure/mlflow/docs/README.md) — legacy host MLflow + tunnel
 - [infrastructure/local-emulator/docs/README.md](./infrastructure/local-emulator/docs/README.md) — emulator smoke harness
 
 ---

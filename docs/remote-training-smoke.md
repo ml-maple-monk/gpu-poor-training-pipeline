@@ -88,4 +88,6 @@ The successful smoke prints:
 On hosts without an NVIDIA driver, this smoke intentionally uses CPU. It proves
 the image, R2 dataset pull, TOML transport, portable MLflow, and vendored trainer
 adapter. A live GPU run still requires a dstack worker with NVIDIA runtime
-available.
+available, or the documented direct RunPod fallback when dstack cannot acquire
+advertised RTX 5090 capacity. See `docs/runpod-rtx5090-minimind.md` for the live
+RunPod operating notes.
