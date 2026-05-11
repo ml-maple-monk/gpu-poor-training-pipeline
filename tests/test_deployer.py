@@ -232,7 +232,6 @@ def test_ensure_remote_runtime_raises_when_public_hostnames_blocked(monkeypatch)
 
     monkeypatch.setattr(deployer.mlflow_service, "ensure_runtime", lambda *args, **kwargs: None)
     monkeypatch.setattr(deployer.mlflow_service, "tunnel", lambda: None)
-    monkeypatch.setattr(deployer.dashboard_service, "up", lambda: None)
     monkeypatch.setattr(
         deployer.connector_service,
         "status_payload",
@@ -298,7 +297,6 @@ def test_ensure_remote_runtime_accepts_quick_tunnel_bootstrap(monkeypatch) -> No
 
     monkeypatch.setattr(deployer.mlflow_service, "ensure_runtime", lambda *args, **kwargs: None)
     monkeypatch.setattr(deployer.mlflow_service, "tunnel", lambda: None)
-    monkeypatch.setattr(deployer.dashboard_service, "up", lambda: None)
     monkeypatch.setattr(deployer.log, "warning", lambda message, *args: warnings.append(message % args))
     monkeypatch.setattr(deployer.connector_service, "artifact_transport_mode", lambda: "direct")
     monkeypatch.setattr(
@@ -351,7 +349,6 @@ def test_ensure_remote_runtime_reuses_existing_healthy_quick_tunnel(monkeypatch)
         ),
     )
     monkeypatch.setattr(deployer.mlflow_service, "tunnel", lambda: tunnel_calls.append(None))
-    monkeypatch.setattr(deployer.dashboard_service, "up", lambda: None)
     monkeypatch.setattr(deployer.connector_service, "artifact_transport_mode", lambda: "direct")
     monkeypatch.setattr(
         deployer.connector_service,
@@ -625,7 +622,6 @@ def test_deploy_local_emulator_blocks_on_remote_runtime_blockers(monkeypatch, pa
     monkeypatch.setattr(deployer, "load_run_config", lambda _path: config)
     monkeypatch.setattr(deployer.mlflow_service, "ensure_runtime", lambda *args, **kwargs: None)
     monkeypatch.setattr(deployer.mlflow_service, "tunnel", lambda: None)
-    monkeypatch.setattr(deployer.dashboard_service, "up", lambda: None)
     monkeypatch.setattr(deployer.connector_service, "status_payload", lambda: payload)
     monkeypatch.setattr(
         deployer,

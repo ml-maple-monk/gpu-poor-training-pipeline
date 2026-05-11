@@ -16,11 +16,9 @@ zone_id = ""
 [connector.hostnames]
 mlflow_api = "mlflow-api.mlmonk96.net"
 mlflow_ui = "mlflow-ui.mlmonk96.net"
-dashboard = "dashboard.mlmonk96.net"
 
 [connector.ports]
 mlflow = 5000
-dashboard = 7860
 
 [connector.health]
 mlflow_local_url = "http://127.0.0.1:5000/health"

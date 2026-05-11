@@ -22,7 +22,6 @@ flowchart LR
         DEPLOYER["deployer.py<br/>remote/local deployment gates"]
         CONNECTOR["connector.py<br/>MLflow + tunnel + R2 readiness"]
         MLFSVC["services/mlflow.py<br/>compose + tunnel control"]
-        DASHSVC["services/dashboard.py<br/>dashboard control"]
         EMUSVC["services/emulator.py<br/>local emulator control"]
     end
 
@@ -50,7 +49,6 @@ flowchart LR
         DSTACKSYS["dstack CLI + local server"]
         CF["Cloudflare Tunnel + DNS"]
         MLFLOW["MLflow service"]
-        DASH["Dashboard service"]
         R2["Cloudflare R2 / S3"]
         HF["Hugging Face"]
         GPUFLEET["Remote GPU providers"]
@@ -66,7 +64,6 @@ flowchart LR
     CLI --> DEPLOYER
     CLI --> CONNECTOR
     CLI --> MLFSVC
-    CLI --> DASHSVC
     CLI --> EMUSVC
 
     CFG --> SEEKER
@@ -90,17 +87,12 @@ flowchart LR
     CONNECTOR --> CONNSTATE
     CONNECTOR --> TUNSTATE
     CONNECTOR --> MLFSVC
-    CONNECTOR --> DASHSVC
     CONNECTOR --> CF
     CONNECTOR --> R2
 
     MLFSVC --> DOCKER
     MLFSVC --> MLFLOW
     MLFSVC -- "run-tunnel.sh" --> CF
-
-    DASHSVC --> DOCKER
-    DASHSVC --> DASH
-    DASH -- "read-only polling" --> MLFLOW
 
     EMUSVC --> DOCKER
 
@@ -121,11 +113,10 @@ flowchart LR
     MINIMIND --> MLFLOW
     MINIMIND -- "artifacts / checkpoints" --> R2
     CF --> MLFLOW
-    CF --> DASH
 
     class DEV,WRAPPERS,CLI surface;
     class CFG,REQ contract;
-    class OPS,SEEKER,DEPLOYER,CONNECTOR,MLFSVC,DASHSVC,EMUSVC control;
+    class OPS,SEEKER,DEPLOYER,CONNECTOR,MLFSVC,EMUSVC control;
     class LOCAL,DSTACK,TRAIN,MINIMIND,IMAGES,REMOTERUN exec;
     class SEEKERSTATE,CONNSTATE,TUNSTATE,BUILDSTATE state;
-    class DOCKER,DSTACKSYS,CF,MLFLOW,DASH,R2,HF,GPUFLEET external;
+    class DOCKER,DSTACKSYS,CF,MLFLOW,R2,HF,GPUFLEET external;

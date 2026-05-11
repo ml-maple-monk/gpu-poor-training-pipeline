@@ -152,7 +152,6 @@ def check_doc_anchors(*, root: str | Path | None = None) -> None:
             base / "README.md",
             base / "TROUBLESHOOTING.md",
             base / "training" / "docs" / "README.md",
-            base / "infrastructure" / "dashboard" / "docs" / "README.md",
             base / "infrastructure" / "local-emulator" / "docs" / "README.md",
             base / "infrastructure" / "mlflow" / "docs" / "README.md",
             base / "dstack" / "docs" / "README.md",

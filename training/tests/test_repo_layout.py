@@ -10,7 +10,6 @@ import pytest
     [
         ("training", "start.sh"),
         ("dstack", "start.sh"),
-        ("infrastructure", "dashboard", "start.sh"),
         ("infrastructure", "mlflow", "start.sh"),
         ("infrastructure", "local-emulator", "start.sh"),
     ],
@@ -21,13 +20,12 @@ def test_each_subsystem_has_one_top_level_start_script(repo_path, parts):
 
 def test_infrastructure_shape_is_explicit(repo_path):
     infra_dirs = {path.name for path in repo_path("infrastructure").iterdir() if path.is_dir()}
-    assert infra_dirs == {"capacity-seeker", "dashboard", "local-emulator", "mlflow"}
+    assert infra_dirs == {"capacity-seeker", "local-emulator", "mlflow"}
 
 
 @pytest.mark.parametrize(
     "parts",
     [
-        ("dashboard",),
         ("emulator",),
     ],
 )
@@ -102,20 +100,9 @@ def test_top_level_artifacts_match_current_guardrail_contract(repo_path, parts, 
     assert repo_path(*parts).exists() is should_exist
 
 
-def test_dashboard_no_longer_owns_mlflow_assets(repo_path, repo_text):
-    dashboard_root = ("infrastructure", "dashboard")
-    start_script = repo_text(*dashboard_root, "start.sh")
-
-    assert not repo_path(*dashboard_root, "compose", "docker-compose.mlflow.yml").exists()
-    assert "tunnel)" not in start_script
-    assert "mlflow)" not in start_script
-    assert "mlflow-up" not in repo_text(*dashboard_root, "docs", "README.md")
-
-
 @pytest.mark.parametrize(
     ("parts", "expected_prefix"),
     [
-        (("infrastructure", "dashboard", "compose", "docker-compose.yml"), "name: verda-dashboard\n"),
         (("infrastructure", "local-emulator", "compose", "docker-compose.yml"), "name: verda-local-emulator\n"),
         (("training", "compose", "docker-compose.train.yml"), "name: minimind-training\n"),
         (

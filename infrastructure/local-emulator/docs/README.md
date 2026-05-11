@@ -28,7 +28,6 @@ This subsystem owns only:
 
 It does not own:
 - MLflow services
-- dashboard UI code
 - dstack remote deployment semantics
 - the canonical `deploy local-emulator` wrapper-validation path
 

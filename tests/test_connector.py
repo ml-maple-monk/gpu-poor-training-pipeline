@@ -16,7 +16,6 @@ def test_status_payload_marks_quick_tunnel_active(monkeypatch) -> None:
         "read_connector_env",
         lambda: {
             "CF_DOMAIN": "mlmonk96.net",
-            "CF_DASHBOARD_HOST": "dashboard.mlmonk96.net",
             "CF_MLFLOW_API_HOST": "mlflow-api.mlmonk96.net",
             "CF_ALLOW_QUICK_TUNNEL": "1",
         },
@@ -61,8 +60,6 @@ def test_status_payload_marks_quick_tunnel_active(monkeypatch) -> None:
     assert payload["tracking_uri"] == "https://curious-mantis-example.trycloudflare.com"
     assert payload["mlflow_public_mode"] == "quick"
     assert payload["remote_mlflow_ready"] is True
-    assert payload["dashboard_uri"] == "unavailable"
-    assert payload["public_dashboard_ready"] is False
     assert payload["artifact_transport_mode"] == "proxy"
 
 
@@ -186,7 +183,6 @@ def test_setup_writes_connector_state_and_env(tmp_path: Path, monkeypatch, capsy
         lambda: {
             "domain": "mlmonk96.net",
             "tracking_uri": "https://mlflow-api.mlmonk96.net",
-            "dashboard_uri": "https://dashboard.mlmonk96.net",
             "artifact_store_kind": "local",
             "mlflow_local_healthy": False,
             "connector_bootstrapped": True,
@@ -207,7 +203,6 @@ def test_setup_writes_connector_state_and_env(tmp_path: Path, monkeypatch, capsy
     assert env_payload["CF_TUNNEL_TOKEN"] == "tunnel-token"
     assert env_payload["CF_MLFLOW_API_HOST"] == "mlflow-api.mlmonk96.net"
     assert state_payload["tunnel_id"] == "tunnel-1"
-    assert state_payload["dashboard_uri"] == "https://dashboard.mlmonk96.net"
     output = capsys.readouterr().out
     assert "MLflow API: https://mlflow-api.mlmonk96.net" in output
     assert "Public hostnames: blocked" in output
@@ -223,7 +218,6 @@ def test_status_payload_reports_zone_access_blocker(tmp_path: Path, monkeypatch)
         "read_connector_env",
         lambda: {
             "CF_DOMAIN": "mlmonk96.net",
-            "CF_DASHBOARD_HOST": "dashboard.mlmonk96.net",
             "CF_MLFLOW_API_HOST": "mlflow-api.mlmonk96.net",
         },
     )
@@ -254,8 +248,6 @@ def test_status_payload_reports_zone_access_blocker(tmp_path: Path, monkeypatch)
     assert "cannot access zone mlmonk96.net" in payload["public_hostname_blocker"]
     assert payload["remote_mlflow_ready"] is False
     assert "cannot access zone mlmonk96.net" in payload["remote_mlflow_blocker"]
-    assert payload["dashboard_uri"] == "unavailable"
-    assert payload["public_dashboard_ready"] is False
     assert payload["r2_status"] == "blocked"
 
 
@@ -393,9 +385,6 @@ def test_doctor_allows_quick_tunnel_bootstrap(tmp_path: Path, monkeypatch, capsy
             "mlflow_public_mode": "quick",
             "artifact_store_kind": "r2",
             "domain": "mlmonk96.net",
-            "dashboard_uri": "unavailable",
-            "public_dashboard_ready": False,
-            "public_dashboard_blocker": "Cloudflare token cannot access zone mlmonk96.net",
             "connector_bootstrapped": True,
             "r2_configured": True,
         },
@@ -406,7 +395,6 @@ def test_doctor_allows_quick_tunnel_bootstrap(tmp_path: Path, monkeypatch, capsy
     connector.doctor()
 
     output = capsys.readouterr().out
-    assert "Info: public dashboard remains blocked" in output
     assert "Tracking URI: https://curious-mantis-example.trycloudflare.com" in output
     assert "MLflow public mode: quick" in output
     assert "Quick tunnel active: yes" in output

@@ -52,6 +52,5 @@ uv pip install --python ~/.dstack-cli-venv/bin/python 'dstack[verda]==0.20.*'
 ## Related Docs
 
 - [training/docs/README.md](../../training/docs/README.md)
-- [infrastructure/dashboard/docs/README.md](../../infrastructure/dashboard/docs/README.md)
 - [infrastructure/mlflow/docs/README.md](../../infrastructure/mlflow/docs/README.md)
 - [TROUBLESHOOTING.md](../../TROUBLESHOOTING.md)

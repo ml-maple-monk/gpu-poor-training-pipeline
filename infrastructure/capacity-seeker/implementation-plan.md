@@ -109,7 +109,7 @@ This plan implements the PRD at `.omx/plans/prd-multi-backend-gpu-seeker.md` and
 | `.cf-tunnel.url` contract | dstack.py:479, dashboard compose:49 | Connector |
 | `lm_checkpoint()` | `training/src/minimind/trainer/trainer_utils.py:172-214` | Connector |
 | `MLFLOW_ARTIFACTS_DESTINATION` | MLflow compose | Connector |
-| `CollectorWorker` / `AppState` | dashboard/src/ | Seeker (dashboard) |
+| Seeker projection files | `src/gpupoor/services/seeker.py` | Seeker status |
 | Emulator compose | `infrastructure/local-emulator/compose/` | Connector |
 
 ## Infra You Must Provide
@@ -320,7 +320,7 @@ This plan implements the PRD at `.omx/plans/prd-multi-backend-gpu-seeker.md` and
   - Gradio Blocks on port 7861. Exposed via Connector's named tunnel at `seeker.<domain>`.
 - **Validation:** Renders on 7861; accessible via tunnel; read-only
 - **Must NOT:** Add control actions
-- **References:** [infrastructure/dashboard/src/app.py](infrastructure/dashboard/src/app.py), [collector_workers.py:29-67](infrastructure/dashboard/src/collector_workers.py#L29-L67)
+- **References:** `src/gpupoor/services/seeker.py` projection readers/writers
 - **Commit:** `feat(seeker): standalone capacity dashboard`
 - **Acceptance:**
   ```

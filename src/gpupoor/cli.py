@@ -16,7 +16,6 @@ from gpupoor.config import (
     SmokeConfig,
     load_run_config,
 )
-from gpupoor.services import dashboard as dashboard_service
 from gpupoor.services import emulator as emulator_service
 from gpupoor.services import mlflow as mlflow_service
 from gpupoor.services import seeker as seeker_service
@@ -100,7 +99,6 @@ def build_parser() -> argparse.ArgumentParser:
     infra_subparsers = infra_parser.add_subparsers(dest="infra_target", required=True)
     for service, help_text, actions in (
         ("mlflow", "Manage local MLflow/tunnel services", ("up", "down", "logs", "tunnel")),
-        ("dashboard", "Manage the local dashboard service", ("up", "down", "logs")),
         (
             "emulator",
             "Manage the non-canonical pseudo-Verda smoke harness",
@@ -274,16 +272,6 @@ def dispatch(args: argparse.Namespace) -> None:
                 return
             if args.action == "tunnel":
                 mlflow_service.tunnel(args.extra_args)
-                return
-        if args.infra_target == "dashboard":
-            if args.action == "up":
-                dashboard_service.up(args.extra_args)
-                return
-            if args.action == "down":
-                dashboard_service.down(args.extra_args)
-                return
-            if args.action == "logs":
-                dashboard_service.logs(args.extra_args)
                 return
         if args.infra_target == "emulator":
             if args.action == "up":

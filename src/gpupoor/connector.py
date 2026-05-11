@@ -17,7 +17,7 @@ observable:
 4. Connector health and observability through ``ConnectorDiagnostics``. That
    object assembles the operator-facing status payload by checking local MLflow
    health, public hostname visibility, quick-tunnel state, public MLflow
-   reachability, dashboard reachability, and R2 readiness.
+   reachability and R2 readiness.
 5. CLI-facing admin flows through ``ConnectorAdmin`` for ``setup``, ``doctor``,
    and ``status``.
 
@@ -72,9 +72,7 @@ class ConnectorDefaults:
     allow_quick_tunnel: bool
     mlflow_api_host: str
     mlflow_ui_host: str
-    dashboard_host: str
     mlflow_port: int
-    dashboard_port: int
     mlflow_health_url: str
     mlflow_health_timeout: int
     r2_endpoint_template: str
@@ -98,9 +96,7 @@ class ConnectorDefaults:
             allow_quick_tunnel=bool(connector["allow_quick_tunnel"]),
             mlflow_api_host=hostnames.get("mlflow_api", f"mlflow-api.{domain}"),
             mlflow_ui_host=hostnames.get("mlflow_ui", f"mlflow-ui.{domain}"),
-            dashboard_host=hostnames.get("dashboard", f"dashboard.{domain}"),
             mlflow_port=ports["mlflow"],
-            dashboard_port=ports["dashboard"],
             mlflow_health_url=health.get("mlflow_local_url", f"http://127.0.0.1:{ports['mlflow']}/health"),
             mlflow_health_timeout=health["mlflow_local_timeout"],
             r2_endpoint_template=r2["endpoint_template"],
@@ -116,7 +112,6 @@ class ConnectorDefaults:
             "CF_TUNNEL_NAME": self.tunnel_name,
             "CF_MLFLOW_API_HOST": f"mlflow-api.{domain}",
             "CF_MLFLOW_UI_HOST": f"mlflow-ui.{domain}",
-            "CF_DASHBOARD_HOST": f"dashboard.{domain}",
         }
 
     def public_hosts(self, domain: str) -> list[str]:
@@ -124,7 +119,6 @@ class ConnectorDefaults:
         return [
             hostnames["CF_MLFLOW_API_HOST"],
             hostnames["CF_MLFLOW_UI_HOST"],
-            hostnames["CF_DASHBOARD_HOST"],
         ]
 
 
@@ -135,9 +129,7 @@ default_tunnel_name = _SETTINGS.tunnel_name
 default_allow_quick_tunnel = _SETTINGS.allow_quick_tunnel
 default_mlflow_api_host = _SETTINGS.mlflow_api_host
 default_mlflow_ui_host = _SETTINGS.mlflow_ui_host
-default_dashboard_host = _SETTINGS.dashboard_host
 default_mlflow_port = _SETTINGS.mlflow_port
-default_dashboard_port = _SETTINGS.dashboard_port
 default_mlflow_health_url = _SETTINGS.mlflow_health_url
 default_mlflow_health_timeout = _SETTINGS.mlflow_health_timeout
 default_r2_endpoint_template = _SETTINGS.r2_endpoint_template
@@ -390,10 +382,6 @@ def publish_tunnel_config(account_id: str, api_token: str, tunnel_id: str, domai
                         "service": f"http://localhost:{default_mlflow_port}",
                     },
                     {"hostname": hostnames["CF_MLFLOW_UI_HOST"], "service": f"http://localhost:{default_mlflow_port}"},
-                    {
-                        "hostname": hostnames["CF_DASHBOARD_HOST"],
-                        "service": f"http://localhost:{default_dashboard_port}",
-                    },
                     {"service": "http_status:404"},
                 ]
             }
@@ -419,7 +407,6 @@ def write_connector_files(
             "domain": domain,
             "mlflow_tracking_uri": f"https://{hostnames['CF_MLFLOW_API_HOST']}",
             "mlflow_ui_uri": f"https://{hostnames['CF_MLFLOW_UI_HOST']}",
-            "dashboard_uri": f"https://{hostnames['CF_DASHBOARD_HOST']}",
         },
     )
     write_env_file(
@@ -639,14 +626,6 @@ class ConnectorDiagnostics:
         host = env.get("CF_MLFLOW_API_HOST") or default_mlflow_api_host
         return f"https://{host}"
 
-    def stable_dashboard_uri(self) -> str:
-        state = connector_state()
-        env = read_connector_env()
-        if state.get("dashboard_uri"):
-            return str(state["dashboard_uri"])
-        host = env.get("CF_DASHBOARD_HOST") or default_dashboard_host
-        return f"https://{host}"
-
     def public_hostname_status(self, domain: str) -> dict[str, Any]:
         hosts = connector_public_hosts(domain)
         diagnostics: dict[str, Any] = {
@@ -801,20 +780,6 @@ class ConnectorDiagnostics:
             return mode, False, f"Stable MLflow URL is not reachable at {tracking_uri}"
         return mode, True, ""
 
-    def public_dashboard_status(
-        self,
-        *,
-        public_hostname_status: str,
-        public_hostname_blocker: str,
-    ) -> tuple[bool, str, str]:
-        if public_hostname_status != "ready":
-            blocker = public_hostname_blocker or "stable public dashboard hostnames are not ready"
-            return False, "unavailable", blocker
-        local_dashboard_url = f"http://127.0.0.1:{default_dashboard_port}"
-        if not http_ok(local_dashboard_url, timeout_seconds=default_mlflow_health_timeout):
-            return False, "unavailable", f"dashboard is not healthy at {local_dashboard_url}"
-        return True, stable_dashboard_uri(), ""
-
     def remote_runtime_blockers(self, payload: dict[str, Any]) -> list[str]:
         blockers: list[str] = []
         if not payload.get("remote_mlflow_ready", False):
@@ -844,19 +809,12 @@ class ConnectorDiagnostics:
             public_hostname_status=str(hostname_diagnostics.get("public_hostname_status") or ""),
             public_hostname_blocker=str(hostname_diagnostics.get("public_hostname_blocker") or ""),
         )
-        public_dashboard_ready, dashboard_uri, public_dashboard_blocker = public_dashboard_status(
-            public_hostname_status=str(hostname_diagnostics.get("public_hostname_status") or ""),
-            public_hostname_blocker=str(hostname_diagnostics.get("public_hostname_blocker") or ""),
-        )
         return {
             "domain": domain,
             "tracking_uri": tracking_uri,
             "mlflow_public_mode": mlflow_mode,
             "remote_mlflow_ready": remote_mlflow_ready,
             "remote_mlflow_blocker": remote_mlflow_blocker,
-            "dashboard_uri": dashboard_uri,
-            "public_dashboard_ready": public_dashboard_ready,
-            "public_dashboard_blocker": public_dashboard_blocker,
             "artifact_store_kind": artifact_store_kind(),
             "artifact_transport_mode": artifact_transport_mode(),
             "mlflow_local_healthy": mlflow_local_healthy,
@@ -892,7 +850,6 @@ class ConnectorAdmin:
         payload = status_payload()
         print(f"Connector domain: {payload['domain']}")
         print(f"MLflow API: {payload['tracking_uri']}")
-        print(f"Dashboard: {payload['dashboard_uri']}")
         print(f"Public hostnames: {payload['public_hostname_status']}")
         if payload["public_hostname_blocker"]:
             print(f"Public hostname blocker: {payload['public_hostname_blocker']}")
@@ -918,8 +875,6 @@ class ConnectorAdmin:
             missing.append("R2 is not ready" + (f" ({payload['r2_blocker']})" if payload["r2_blocker"] else ""))
         if missing:
             raise RuntimeError("; ".join(missing))
-        if not payload.get("public_dashboard_ready", False) and payload.get("public_dashboard_blocker"):
-            print(f"Info: public dashboard remains blocked ({payload['public_dashboard_blocker']})")
         print_status_payload(payload)
 
     def print_status_payload(self, payload: dict[str, Any]) -> None:
@@ -929,10 +884,6 @@ class ConnectorAdmin:
         print(f"Remote MLflow ready: {'yes' if payload.get('remote_mlflow_ready', False) else 'no'}")
         if payload.get("remote_mlflow_blocker"):
             print(f"Remote MLflow blocker: {payload['remote_mlflow_blocker']}")
-        print(f"Dashboard URI: {payload.get('dashboard_uri', 'unavailable')}")
-        print(f"Public dashboard ready: {'yes' if payload.get('public_dashboard_ready', False) else 'no'}")
-        if payload.get("public_dashboard_blocker"):
-            print(f"Public dashboard blocker: {payload['public_dashboard_blocker']}")
         print(f"Artifact store: {payload['artifact_store_kind']}")
         print(f"MLflow local health: {'ok' if payload.get('mlflow_local_healthy', False) else 'down'}")
         print(f"Connector bootstrap: {'yes' if payload.get('connector_bootstrapped', False) else 'no'}")
@@ -956,10 +907,6 @@ _ADMIN = ConnectorAdmin()
 
 def stable_tracking_uri() -> str:
     return _DIAGNOSTICS.stable_tracking_uri()
-
-
-def stable_dashboard_uri() -> str:
-    return _DIAGNOSTICS.stable_dashboard_uri()
 
 
 def connector_public_hosts(domain: str) -> list[str]:
@@ -1000,17 +947,6 @@ def remote_mlflow_status(
         mlflow_local_healthy=mlflow_local_healthy,
         quick_tunnel_allowed=quick_tunnel_allowed,
         quick_tunnel_active=quick_tunnel_active,
-        public_hostname_status=public_hostname_status,
-        public_hostname_blocker=public_hostname_blocker,
-    )
-
-
-def public_dashboard_status(
-    *,
-    public_hostname_status: str,
-    public_hostname_blocker: str,
-) -> tuple[bool, str, str]:
-    return _DIAGNOSTICS.public_dashboard_status(
         public_hostname_status=public_hostname_status,
         public_hostname_blocker=public_hostname_blocker,
     )

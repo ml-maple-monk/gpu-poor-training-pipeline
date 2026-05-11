@@ -19,10 +19,11 @@ The main design goals are:
    The only runtime store is Postgres, using lease ownership plus
    `FOR UPDATE SKIP LOCKED` claims so multiple daemons can compete for work
    without intentionally double-claiming the same job.
-4. Preserve dashboard compatibility.
+4. Preserve file-based status compatibility.
    Even when Postgres is authoritative, the seeker still projects a simplified
    read-only view to `data/seeker/queue.json`, `latest_offers.json`, and
-   `attempts.jsonl` so the dashboard and status commands can keep using files.
+   `attempts.jsonl` so status commands and lightweight integrations can keep
+   using files.
 5. Keep scheduling policy deterministic.
    Target offer probes run concurrently for speed, but results are reordered
    back into declaration order before selection. The first configured target
@@ -409,7 +410,7 @@ def parse_attempt(item: dict[str, Any]) -> SeekerAttempt:
 
 
 def load_queue() -> SeekerQueue:
-    """Read the projected queue snapshot written for dashboard compatibility."""
+    """Read the projected queue snapshot written for status compatibility."""
     path = queue_path()
     if not path.is_file():
         return SeekerQueue()
@@ -465,7 +466,7 @@ def write_offer_snapshot(seeker: SeekerConfig, normalized_offers: list[SeekerOff
 
 
 def read_recent_attempts(limit: int = 5) -> list[dict[str, Any]]:
-    """Read projected attempt rows from the dashboard-compatible JSONL file."""
+    """Read projected attempt rows from the status JSONL file."""
     path = attempts_path()
     if not path.is_file():
         return []
@@ -528,7 +529,7 @@ def fetch_target_offers(dstack_bin: str, target: SeekerTarget) -> list[SeekerOff
 
 
 class QueueStore:
-    """Store contract for queue claims, attempts, and dashboard projections."""
+    """Store contract for queue claims, attempts, and file projections."""
 
     def ensure_schema(self) -> None:
         raise NotImplementedError
@@ -1118,7 +1119,7 @@ class PostgresQueueStore(QueueStore):
 
 
 class FileSnapshotProjector:
-    """Write dashboard-compatible queue and offer projections."""
+    """Write queue and offer projections for file-based status surfaces."""
 
     def project_queue(self, queue: SeekerQueue) -> None:
         payload = {
@@ -1163,7 +1164,7 @@ class SeekerOrchestrator:
         if not config.seeker.targets:
             raise RuntimeError("seeker enqueue requires at least one [[seeker.targets]] entry")
         job = self.store.enqueue_job(FrozenRunConfigSnapshot.from_config(config))
-        self.project_dashboard_state(max_offer_age_seconds=None, offers=None)
+        self.project_status_state(max_offer_age_seconds=None, offers=None)
         return job
 
     def claim_next_pending_job(self, now: datetime) -> SeekerJob | None:
@@ -1374,7 +1375,7 @@ class SeekerOrchestrator:
         )
         self.store.record_attempt(attempt)
 
-    def project_dashboard_state(
+    def project_status_state(
         self,
         *,
         max_offer_age_seconds: int | None,
@@ -1395,12 +1396,12 @@ class SeekerOrchestrator:
         job = self.store.claim_existing_submitted_job(self.worker_id, now, self.lease_seconds)
         if job is not None:
             self.refresh_claimed_job(job, dstack_bin, now)
-            self.project_dashboard_state(max_offer_age_seconds=None, offers=None)
+            self.project_status_state(max_offer_age_seconds=None, offers=None)
             return
 
         job = self.claim_next_pending_job(now)
         if job is None:
-            self.project_dashboard_state(max_offer_age_seconds=None, offers=None)
+            self.project_status_state(max_offer_age_seconds=None, offers=None)
             return
 
         probe_results, snapshot_offers = self.probe_targets(dstack_bin, job.targets)
@@ -1414,11 +1415,11 @@ class SeekerOrchestrator:
                 reason = f"{reason}; probe diagnostics: {probe_error}"
             self.store.move_to_retry_wait(job, status="no_match", reason=reason, now=now)
             self.record_attempt(job, status="no_match", reason=reason, probe_error=probe_error)
-            self.project_dashboard_state(max_offer_age_seconds=job.max_offer_age_seconds, offers=snapshot_offers)
+            self.project_status_state(max_offer_age_seconds=job.max_offer_age_seconds, offers=snapshot_offers)
             return
 
         self.submit_job(job, target, offer, now, probe_error=probe_error)
-        self.project_dashboard_state(max_offer_age_seconds=job.max_offer_age_seconds, offers=snapshot_offers)
+        self.project_status_state(max_offer_age_seconds=job.max_offer_age_seconds, offers=snapshot_offers)
 
     def recommended_sleep_seconds(self) -> int:
         return self.store.recommended_sleep_seconds(datetime.now(UTC))

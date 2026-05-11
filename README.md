@@ -8,7 +8,7 @@
 ![deps](https://img.shields.io/badge/runtime_deps-0-brightgreen)
 ![target](https://img.shields.io/badge/audience-GPU--poor_researchers-orange)
 
-The **GPU-poor researcher's toolbox.** One typed TOML file drives one reproducible run of the **MiniMind** reference recipe — on your laptop CPU, a single local GPU, or an **auto-allocated preemptible GPU** on Verda/dstack. Live MLflow tracking, a hardened live dashboard, and cheap-to-fail preflights catch misconfiguration before you spend a cent.
+The **GPU-poor researcher's toolbox.** One typed TOML file drives one reproducible run of the **MiniMind** reference recipe — on your laptop CPU, a single local GPU, or an **auto-allocated preemptible GPU** on Verda/dstack. Live MLflow tracking and cheap-to-fail preflights catch misconfiguration before you spend a cent.
 
 ---
 
@@ -21,7 +21,6 @@ Research and engineering explorations shouldn't require a lab budget. `gpupoor` 
 - **Identical local ↔ remote contract.** Same TOML, same recipe, same artifacts. Smoke on CPU first, then swap one field (`backend.kind = "dstack"`) and rent a GPU.
 - **Zero runtime dependencies.** The core package adds nothing to your Python environment. Dev extras are opt-in.
 - **Cheap failure first.** `gpupoor doctor` + `gpupoor smoke` verify secrets, clocks, disk, docker, and MLflow reachability before `dstack apply` is ever called. Money-spending calls are the last step, never the first.
-- **Live dashboard that can't exfiltrate.** Argv allowlists, endpoint allowlists, read-only docker.sock bind, argv regex validation, SIGTERM→SIGKILL escalation on shutdown — safe to run unattended.
 
 ### Who this is for
 
@@ -100,7 +99,7 @@ Prints the resolved `dstack apply` shape (image, env, GPU filter, time cap) with
 
 <sub><a href="./docs/diagrams/architecture.mmd">source (Mermaid)</a></sub>
 
-**Core contract:** the CLI loads one TOML into a `RunConfig` dataclass, resolves the `backend.kind`, and hands off through the current control-plane seams: `seeker` for queued remote placement, `deployer` for launch gating, `connector` for MLflow/tunnel/R2 readiness, and then the local or dstack execution backends. Everything else — MLflow, the dashboard, emulator flows, and repo checks — stays reachable from the same CLI surface.
+**Core contract:** the CLI loads one TOML into a `RunConfig` dataclass, resolves the `backend.kind`, and hands off through the current control-plane seams: `seeker` for queued remote placement, `deployer` for launch gating, `connector` for MLflow/tunnel/R2 readiness, and then the local or dstack execution backends. Everything else — MLflow, emulator flows, and repo checks — stays reachable from the same CLI surface.
 
 ---
 
@@ -113,40 +112,6 @@ Prints the resolved `dstack apply` shape (image, env, GPU filter, time cap) with
 <sub><a href="./docs/diagrams/launch-sequence.mmd">source (Mermaid)</a></sub>
 
 Source of truth: [`src/gpupoor/backends/dstack.py`](./src/gpupoor/backends/dstack.py) (`launch_remote`, `ensure_dstack_server`, `track_run`, `kill_tunnel`).
-
----
-
-## Dashboard
-
-The dashboard is a Gradio app that polls 7 sources on independent cadences and renders them into panels. Every external call is gated.
-
-<p align="center">
-  <img src="docs/diagrams/dashboard-poll.png" alt="Dashboard poll loop — every collector tick goes through argv or endpoint allowlists before touching any external source" width="720">
-</p>
-
-<sub><a href="./docs/diagrams/dashboard-poll.mmd">source (Mermaid)</a></sub>
-
-| Source               | Collector                                | Cadence | Gate                               |
-| -------------------- | ---------------------------------------- | ------: | ---------------------------------- |
-| Docker logs          | `collectors/docker_logs.py`              |      2s | argv allowlist (`logs/ps/inspect`) |
-| MLflow live metrics  | `collectors/mlflow_client.py`            |      2s | endpoint allowlist                 |
-| dstack REST runs     | `collectors/dstack_rest.py`              |      5s | endpoint allowlist                 |
-| System (/proc, nvml) | `collectors/system.py`                   |      5s | read-only                          |
-| MLflow recent runs   | `collectors/mlflow_client.py`            |     10s | endpoint allowlist                 |
-| Tunnel URL           | `collectors/tunnel.py`                   |     10s | file read                          |
-| Verda offers         | `collectors/verda_offers.py`             |     30s | endpoint allowlist                 |
-
-Log tailers run alongside collectors and use the same gates; `attach` is bound to `--logs` (interactive attach is rejected before subprocess spawn).
-
-### Shutdown (SIGTERM)
-
-<p align="center">
-  <img src="docs/diagrams/shutdown.png" alt="Shutdown sequence — SIGTERM sets the shutdown event, escalates log tailers to SIGKILL after grace, joins workers, exits with code 0 if all threads cleared or 1 if any survived" width="720">
-</p>
-
-<sub><a href="./docs/diagrams/shutdown.mmd">source (Mermaid)</a></sub>
-
-The 35-second grace budget is split across live workers. Details: [`infrastructure/dashboard/src/app.py`](./infrastructure/dashboard/src/app.py) (`_shutdown_sequence`).
 
 ---
 
@@ -169,7 +134,6 @@ gpupoor <command> [flags]
 | `gpupoor deploy local-emulator <config.toml>`               | Canonical local pre-remote validation via the remote wrapper contract | —                                          |
 | `gpupoor dstack <setup\|registry-login\|fleet-apply\|teardown>` | dstack lifecycle helpers                                            | `--dry-run` (`registry-login`)               |
 | `gpupoor infra mlflow <up\|down\|logs\|tunnel>`             | MLflow + Cloudflare tunnel                                          | —                                            |
-| `gpupoor infra dashboard <up\|down\|logs>`                  | Live dashboard service                                              | —                                            |
 | `gpupoor infra emulator <up\|cpu\|nvcr\|down\|logs\|shell\|health>` | Pseudo-Verda smoke harness (non-canonical for training validation) | —                                            |
 
 `doctor`, `smoke`, and `launch dstack` resolve operational defaults from the typed TOML config first; CLI flags are one-off overrides.
@@ -218,7 +182,7 @@ make format-check        # ruff format --check (CI required)
 make lint                # ruff check (CI required)
 make lint-fix            # ruff check --fix
 make test-fast           # required PR test lane
-make test-live           # live-dashboard / remote smoke
+make test-live           # docker / remote / slow smoke
 make ci-local            # format-check + lint + test-fast
 make train-local         # launch examples/tiny_local.toml
 ```
@@ -266,7 +230,7 @@ remote-access/
 │   ├── cli.py                   # argparse dispatch
 │   ├── config.py                # typed TOML loader
 │   ├── backends/                # local + dstack
-│   ├── services/                # mlflow, dashboard, emulator
+│   ├── services/                # mlflow, emulator
 │   ├── recipes/                 # minimind reference recipe
 │   ├── ops/                     # doctor, smoke, secrets, leak-scan
 │   └── utils/                   # http, compose, env_files, logging
@@ -275,7 +239,6 @@ remote-access/
 ├── dstack/                      # Verda/dstack runtime contract
 ├── infrastructure/
 │   ├── mlflow/                  # MLflow container + Cloudflare tunnel
-│   ├── dashboard/               # live-state Gradio UI (hardened)
 │   └── local-emulator/          # CPU-only smoke harness
 ├── tests/                       # fast-lane regression tests
 ├── data/                        # datasets + caches (gitignored where large)
@@ -292,7 +255,6 @@ The `run.sh` wrapper exists so existing operator muscle memory still works. It m
 | -------------------- | --------------------------- |
 | `./run.sh local`     | `gpupoor train …`           |
 | `./run.sh remote`    | `gpupoor launch dstack …`   |
-| `./run.sh dashboard` | `gpupoor infra dashboard up`|
 
 Per-component starters (`./training/start.sh`, `./dstack/start.sh`, `./infrastructure/*/start.sh`) remain for anyone driving a single service in isolation.
 
@@ -301,13 +263,8 @@ Per-component starters (`./training/start.sh`, `./dstack/start.sh`, `./infrastru
 ## Safety posture
 
 - **Strict TOML** — unknown keys rejected; dstack run-names regex-gated.
-- **Argv allowlists** — dashboard's dstack CLI bridge allows only `{logs, ps, attach --logs}` with per-verb flag + positional enforcement.
-- **Endpoint allowlists** — dstack REST bridge allows only `{runs/get_plan, runs/list, runs/get_logs}`.
-- **Container hardening** — dashboard runs `read_only: true`, `cap_drop: ALL`, `no-new-privileges`, with a **read-only** docker.sock bind.
-- **No secret leakage** — rejected argv is logged as "unsafe target rejected" (the rejected value itself is never logged).
 - **PID verification** — tunnel teardown verifies `/proc/<pid>/comm` matches `cloudflared` on Linux before `os.kill`.
 - **Concurrent-safe state** — `.run-ids` append is protected by `fcntl.flock`; two concurrent launches cannot corrupt it.
-- **Bounded shutdown** — `LogTailer` escalates SIGTERM→SIGKILL; dashboard joins workers under a 35s grace budget before exiting non-zero.
 
 ---
 
@@ -319,7 +276,6 @@ Per-component starters (`./training/start.sh`, `./dstack/start.sh`, `./infrastru
 - [training/docs/README.md](./training/docs/README.md) — MiniMind recipe internals
 - [dstack/docs/README.md](./dstack/docs/README.md) — Verda/dstack runtime contract
 - [infrastructure/mlflow/docs/README.md](./infrastructure/mlflow/docs/README.md) — MLflow + tunnel
-- [infrastructure/dashboard/docs/README.md](./infrastructure/dashboard/docs/README.md) — dashboard module reference
 - [infrastructure/local-emulator/docs/README.md](./infrastructure/local-emulator/docs/README.md) — emulator smoke harness
 
 ---
@@ -329,6 +285,6 @@ Per-component starters (`./training/start.sh`, `./dstack/start.sh`, `./infrastru
 - `gpupoor doctor` and `gpupoor smoke` are guarded against tracked-file mutation.
 - The remote launch path prints resolved runtime values before `dstack apply`.
 - Live parity surfaces are covered by tests plus non-dry-run validation.
-- Every bare `except Exception` in the core package and the dashboard has been narrowed or explicitly justified.
+- Every bare `except Exception` in the core package has been narrowed or explicitly justified.
 
 If you're about to open a PR, run `make ci-local` first — it's the exact pair of gates CI enforces.

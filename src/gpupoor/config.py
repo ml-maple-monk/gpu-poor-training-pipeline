@@ -607,7 +607,6 @@ _KNOWN_TOP_LEVEL = {
     "container",
     "dstack",
     "emulator",
-    "dashboard",
 }
 _KNOWN_RECIPE = {
     "kind",

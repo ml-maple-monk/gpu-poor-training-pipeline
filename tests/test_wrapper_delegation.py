@@ -24,7 +24,6 @@ def test_subsystem_wrappers_delegate_to_cli() -> None:
         REPO_ROOT / "training" / "start.sh": 'config="${1:-examples/tiny_local.toml}"',
         REPO_ROOT / "dstack" / "start.sh": "python3 -m gpupoor.cli dstack",
         REPO_ROOT / "infrastructure" / "mlflow" / "start.sh": "python3 -m gpupoor.cli infra mlflow",
-        REPO_ROOT / "infrastructure" / "dashboard" / "start.sh": "python3 -m gpupoor.cli infra dashboard",
         REPO_ROOT / "infrastructure" / "local-emulator" / "start.sh": "python3 -m gpupoor.cli infra emulator",
     }
 

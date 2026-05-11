@@ -19,7 +19,6 @@ from gpupoor.config import (
     normalize_backend_name,
     require_remote_settings,
 )
-from gpupoor.services import dashboard as dashboard_service
 from gpupoor.services import mlflow as mlflow_service
 from gpupoor.utils import repo_path
 from gpupoor.utils.http import http_ok
@@ -73,6 +72,16 @@ class ConnectionBundle:
     artifact_transport_mode: str = "proxy"
     artifact_runtime_env: dict[str, str] = field(default_factory=dict)
 
+    def apply_to_config(self, config: RunConfig) -> RunConfig:
+        return replace(
+            config,
+            mlflow=replace(
+                config.mlflow,
+                tracking_uri=self.mlflow_tracking_uri,
+                artifact_upload=self.artifact_upload_enabled,
+            ),
+        )
+
     def to_runtime_env(self) -> dict[str, str]:
         env = {
             "MLFLOW_TRACKING_URI": self.mlflow_tracking_uri,
@@ -97,7 +106,6 @@ class ConnectorRuntime:
         payload = connector_service.status_payload()
         if not payload.get("remote_mlflow_ready", False):
             mlflow_service.tunnel()
-        dashboard_service.up()
         payload = connector_service.status_payload()
         blockers = connector_service.remote_runtime_blockers(payload)
         if blockers:
@@ -168,6 +176,22 @@ class ConnectorRuntime:
         )
 
 
+_CONNECTOR_RUNTIME = ConnectorRuntime()
+
+
+def ensure_remote_runtime(config: RunConfig) -> ConnectionBundle:
+    return _CONNECTOR_RUNTIME.ensure_remote_runtime(config)
+
+
+def connection_bundle_for_request(
+    request: ConnectionProfileRequest,
+    config: RunConfig,
+    *,
+    ensure_ready: bool = False,
+) -> ConnectionBundle:
+    return _CONNECTOR_RUNTIME.connection_bundle_for_request(request, config, ensure_ready=ensure_ready)
+
+
 def _truthy_env(name: str) -> bool:
     raw = os.environ.get(name, "")
     return raw.strip().lower() in {"1", "true", "yes", "on"}
@@ -226,7 +250,18 @@ class LaunchOrchestrator:
     """Owns launch-config loading, operator warnings, and backend dispatch."""
 
     def __init__(self, connector_runtime: ConnectorRuntime | None = None) -> None:
-        self.connector_runtime = connector_runtime or ConnectorRuntime()
+        self.connector_runtime = connector_runtime
+
+    def _connection_bundle_for_request(
+        self,
+        request: ConnectionProfileRequest,
+        config: RunConfig,
+        *,
+        ensure_ready: bool = False,
+    ) -> ConnectionBundle:
+        if self.connector_runtime is not None:
+            return self.connector_runtime.connection_bundle_for_request(request, config, ensure_ready=ensure_ready)
+        return connection_bundle_for_request(request, config, ensure_ready=ensure_ready)
 
     def deploy_remote_request(
         self,
@@ -249,7 +284,7 @@ class LaunchOrchestrator:
             artifact_upload_requested=launch_config.mlflow.artifact_upload,
         )
         if dry_run:
-            bundle = self.connector_runtime.connection_bundle_for_request(
+            bundle = self._connection_bundle_for_request(
                 connector_request,
                 launch_config,
                 ensure_ready=False,
@@ -257,7 +292,7 @@ class LaunchOrchestrator:
             self._report_dry_run_connector_verdict(bundle)
             dstack_backend.launch_remote(launch_config, skip_build=skip_build, dry_run=True)
             return
-        bundle = self.connector_runtime.connection_bundle_for_request(
+        bundle = self._connection_bundle_for_request(
             connector_request,
             launch_config,
             ensure_ready=True,
@@ -301,7 +336,7 @@ class LaunchOrchestrator:
         config = load_run_config(config_path_text)
         if config.backend.kind not in {BACKEND_DSTACK, BACKEND_LOCAL}:
             raise RuntimeError("gpupoor deploy local-emulator requires backend.kind='dstack' or 'local'")
-        bundle = self.connector_runtime.connection_bundle_for_request(
+        bundle = self._connection_bundle_for_request(
             ConnectionProfileRequest(
                 lane=LANE_REMOTE,
                 config_path=str(config.source),

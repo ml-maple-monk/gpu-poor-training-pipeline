@@ -55,13 +55,12 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "training/tests", "infrastructure/dashboard/tests"]
+testpaths = ["tests", "training/tests"]
 addopts = "-ra --strict-config --strict-markers"
 xfail_strict = true
 markers = [
     "slow: slow-running tests (excluded from required PR lanes).",
     "docker: tests requiring local Docker runtime.",
-    "live_dashboard: tests requiring running dashboard/live services.",
     "remote: tests requiring remote provider capacity or external remote services.",
 ]
 filterwarnings = [
@@ -73,7 +72,6 @@ filterwarnings = [
 source = [
     "src/gpupoor",
     "training/src/minimind",
-    "infrastructure/dashboard/src",
 ]
 
 [tool.coverage.report]
@@ -88,8 +86,6 @@ src = [
     "tests",
     "training/src/minimind",
     "training/tests",
-    "infrastructure/dashboard/src",
-    "infrastructure/dashboard/tests",
 ]
 
 [tool.ruff.lint]
@@ -118,5 +114,5 @@ ignore = ["E501"]
 [tool.mutmut]
 paths_to_mutate = "src/gpupoor/config.py,src/gpupoor/backends/dstack.py"
 tests_dir = "tests/"
-runner = "python -m pytest -x -q -m 'not slow and not docker and not live_dashboard and not remote'"
+runner = "python -m pytest -x -q -m 'not slow and not docker and not remote'"
 simple_output = true

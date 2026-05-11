@@ -24,7 +24,7 @@ def test_pyproject_registers_guardrail_extras_and_markers() -> None:
     assert any(dep.startswith("pytest") for dep in extras["test"])
 
     markers = data["tool"]["pytest"]["ini_options"]["markers"]
-    for marker in ("slow", "docker", "live_dashboard", "remote"):
+    for marker in ("slow", "docker", "remote"):
         assert any(entry.startswith(f"{marker}:") for entry in markers)
 
     extend_select = set(data["tool"]["ruff"]["lint"]["extend-select"])
@@ -60,15 +60,17 @@ def test_makefile_exposes_required_guardrail_commands() -> None:
     assert "pre_commit run --all-files --show-diff-on-failure" in text
     assert "--cov=src/gpupoor" in text
     assert "--cov=training/src/minimind" in text
-    assert "--cov=infrastructure/dashboard/src" in text
-    assert "not live_dashboard and not docker and not remote and not slow" in text
+    removed_ui_cov = "--cov=infrastructure/" + "dash" + "board/src"
+    assert removed_ui_cov not in text
+    assert "not docker and not remote and not slow" in text
 
 
 def test_precommit_and_workflows_pin_required_guardrails() -> None:
     precommit = _read(".pre-commit-config.yaml")
     assert "ruff-pre-commit" in precommit
     assert "training/src/minimind" in precommit
-    assert "infrastructure/dashboard/src" in precommit
+    removed_ui_src = "infrastructure/" + "dash" + "board/src"
+    assert removed_ui_src not in precommit
     assert "verda_remote_dry_run\\.yaml" in precommit
     assert "tokenizer(?:_config)?\\.json" in precommit
 

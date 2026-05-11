@@ -11,7 +11,6 @@ Usage: ./run.sh <subcommand> [config.toml] [options]
 Subcommands:
   local               Run local training (default config: examples/tiny_local.toml)
   remote              Launch remote training (default config: examples/verda_remote.toml)
-  dashboard [action]  Manage the dashboard (default action: up)
 EOF
 }
 
@@ -36,13 +35,6 @@ case "$subcommand" in
       shift
     fi
     exec python3 -m gpupoor.cli launch dstack "$config" "$@"
-    ;;
-  dashboard)
-    shift
-    if [ "$#" -eq 0 ]; then
-      exec python3 -m gpupoor.cli infra dashboard up
-    fi
-    exec python3 -m gpupoor.cli infra dashboard "$@"
     ;;
   *)
     echo "run.sh: unknown subcommand '$subcommand'" >&2

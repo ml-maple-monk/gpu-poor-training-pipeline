@@ -27,14 +27,13 @@ make ci-local
 ## Test Lane Policy
 
 - Required PR lane excludes environment-dependent markers:
-  - `live_dashboard`
   - `docker`
   - `remote`
   - `slow`
 - Marker registration and strict marker checking are enforced in `pyproject.toml`.
 - The required CI-equivalent command is `make test-fast`.
 - `make test-live` is intentionally non-required and mirrors the optional
-  `live-checks` workflow.
+  `live-checks` workflow for docker, remote, and slow checks.
 
 ## CI Checks
 

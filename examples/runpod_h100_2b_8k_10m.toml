@@ -88,7 +88,3 @@ max_price = 5.00
 poll_seconds = 30
 max_offer_age_seconds = 300
 max_submit_retries = 300
-
-[dashboard]
-dstack_server_url = "http://dstack-server:3000"
-mlflow_url = "http://mlflow:5000"
