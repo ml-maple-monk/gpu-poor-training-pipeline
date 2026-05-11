@@ -1,0 +1,59 @@
+[project]
+name = "minimind-working-experiments"
+version = "0.1.0"
+description = "Self-contained MiniMind FP8/Muon8Bit/FA2 experiment stack."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "click>=8.0",
+    "datasets>=3.0",
+    "flash-attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3%2Bcu12torch2.9cxx11abiTRUE-cp312-cp312-linux_x86_64.whl",
+    "mlflow>=2.17.2",
+    "ninja>=1.11",
+    "numpy>=1.26",
+    "nvidia-ml-py>=12.560.30",
+    "packaging>=24.0",
+    "psutil>=5.9.8",
+    "pyarrow>=16.0",
+    "setuptools>=70.1",
+    "tokenizers>=0.20",
+    "torch>=2.9,<2.10",
+    "torchao>=0.17.0",
+    "transformers>=4.45",
+    "triton>=3.3.1",
+    "wheel>=0.43",
+]
+
+[project.scripts]
+minimind-train = "minimind_local.training.cli:main"
+minimind-eval-text = "minimind_local.training.text_eval:main"
+minimind-mfu-experiment = "minimind_local.experiment_cli:main"
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "ruff>=0.15.12",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["minimind_local"]
+force-include = { "minimind_mfu_experiment.py" = "minimind_mfu_experiment.py", "recipes" = "recipes" }

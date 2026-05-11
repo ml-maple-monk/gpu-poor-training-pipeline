@@ -38,8 +38,6 @@ LOCAL_BASE_IMAGE="${TRAINING_BASE_IMAGE:-verda-training-base:py312-cu128-slim}"
 BASE_BUILDER_IMAGE="${TRAINING_BASE_BUILDER_IMAGE:-nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04}"
 BASE_RUNTIME_IMAGE="${TRAINING_BASE_RUNTIME_IMAGE:-nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04}"
 REMOTE_IMAGE_METADATA="$REPO_ROOT/.tmp/remote-image-tag.json"
-PRETOKENIZED_DATASET_DIR="$REPO_ROOT/data/datasets/pretrain_t2t_mini"
-PRETOKENIZED_DATASET_REQUIRED_FILES=(metadata.json tokens.bin index.bin)
 
 echo "[build] VCR_IMAGE_BASE=$IMAGE_BASE  SHA=$SHA"
 echo "[build] TRAINING_BASE_IMAGE_BASE=$BASE_IMAGE_BASE"
@@ -58,35 +56,9 @@ else
     echo "[build] Using existing Docker auth for ${VCR_IMAGE_BASE}"
 fi
 
-ensure_pretokenized_dataset() {
-    local required_file
-    local missing=0
-
-    for required_file in "${PRETOKENIZED_DATASET_REQUIRED_FILES[@]}"; do
-        if [ ! -f "$PRETOKENIZED_DATASET_DIR/$required_file" ]; then
-            missing=1
-            break
-        fi
-    done
-
-    if [ "$missing" -eq 1 ]; then
-        echo "[build] Pretokenized dataset not ready at $PRETOKENIZED_DATASET_DIR — running prepare-data.sh ..."
-        bash "$REPO_ROOT/training/scripts/prepare-data.sh"
-    else
-        echo "[build] Reusing pretokenized dataset at $PRETOKENIZED_DATASET_DIR"
-    fi
-
-    for required_file in "${PRETOKENIZED_DATASET_REQUIRED_FILES[@]}"; do
-        if [ ! -f "$PRETOKENIZED_DATASET_DIR/$required_file" ]; then
-            echo "[build] ERROR: missing $PRETOKENIZED_DATASET_DIR/$required_file after dataset preparation" >&2
-            exit 1
-        fi
-    done
-}
-
 # ── Build base image ─────────────────────────────────────────────────────────
 echo "[build] Building slim base image (context: $REPO_ROOT) ..."
-DOCKER_BUILDKIT=1 docker build \
+DOCKER_BUILDKIT=1 docker buildx build --provenance=false --load \
     -f "$REPO_ROOT/training/docker/Dockerfile.base" \
     --build-arg BUILDER_IMAGE="$BASE_BUILDER_IMAGE" \
     --build-arg RUNTIME_IMAGE="$BASE_RUNTIME_IMAGE" \
@@ -99,9 +71,8 @@ echo "[build] Base build complete: $BASE_IMAGE_SHA"
 
 # ── Build remote image ───────────────────────────────────────────────────────
 echo "[STEP 2/2] Building and pushing slim remote training image..."
-ensure_pretokenized_dataset
 echo "[build] Building remote image (context: $REPO_ROOT) ..."
-DOCKER_BUILDKIT=1 docker build \
+DOCKER_BUILDKIT=1 docker buildx build --provenance=false --load \
     -f "$REPO_ROOT/training/docker/Dockerfile.remote" \
     --build-arg BASE_IMAGE="$BASE_IMAGE_SHA" \
     --tag "$IMAGE_SHA" \
@@ -180,8 +151,10 @@ if [ "${PUSH_GHCR:-0}" = "1" ]; then
     echo "[build] Logged out of ghcr.io"
 fi
 
-docker logout "$VCR_LOGIN_REGISTRY"
-echo "[build] Logged out of $VCR_LOGIN_REGISTRY"
+if echo "${VCR_IMAGE_BASE:-}" | grep -q "vccr.io"; then
+    docker logout "$VCR_LOGIN_REGISTRY"
+    echo "[build] Logged out of $VCR_LOGIN_REGISTRY"
+fi
 
 mkdir -p "$(dirname "$REMOTE_IMAGE_METADATA")"
 cat > "$REMOTE_IMAGE_METADATA" <<EOF
@@ -189,7 +162,9 @@ cat > "$REMOTE_IMAGE_METADATA" <<EOF
   "image_tag": "$SHA",
   "image_ref": "$IMAGE_SHA",
   "vcr_image_base": "$VCR_IMAGE_BASE",
-  "training_base_image_base": "$BASE_IMAGE_BASE"
+  "training_base_image_base": "$BASE_IMAGE_BASE",
+  "provenance_attestation": false,
+  "build_tool": "docker-buildx"
 }
 EOF
 echo "[build] Cached remote image metadata: $REMOTE_IMAGE_METADATA"

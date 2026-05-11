@@ -782,9 +782,6 @@ class ConnectorDiagnostics:
 
     def remote_runtime_blockers(self, payload: dict[str, Any]) -> list[str]:
         blockers: list[str] = []
-        if not payload.get("remote_mlflow_ready", False):
-            blocker = str(payload.get("remote_mlflow_blocker") or "remote MLflow is not ready")
-            blockers.append(blocker)
         if payload.get("r2_status") != "ready":
             blocker = str(payload.get("r2_blocker") or "R2 is not ready")
             blockers.append(blocker)
@@ -866,11 +863,6 @@ class ConnectorAdmin:
             missing.append("cloudflared is not on PATH")
         if not connector_env_path().is_file():
             missing.append(f"missing {connector_env_path()} (run `gpupoor connector setup`)")
-        if not payload.get("remote_mlflow_ready", False):
-            missing.append(
-                "remote MLflow is not ready"
-                + (f" ({payload.get('remote_mlflow_blocker', '')})" if payload.get("remote_mlflow_blocker") else "")
-            )
         if payload["r2_status"] != "ready":
             missing.append("R2 is not ready" + (f" ({payload['r2_blocker']})" if payload["r2_blocker"] else ""))
         if missing:

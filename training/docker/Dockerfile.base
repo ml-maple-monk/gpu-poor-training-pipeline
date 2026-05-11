@@ -18,14 +18,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     VLLM_WORKER_MULTIPROC_METHOD=spawn \
     DS_BUILD_OPS=0 \
     CUDA_HOME=/usr/local/cuda \
-    VENV_PATH=/opt/venv
+    VENV_PATH=/opt/venv \
+    UV_PROJECT_ENVIRONMENT=/opt/venv
 
 ARG TORCH_CUDA_INDEX_URL=https://download.pytorch.org/whl/cu128
-ARG TORCH_VERSION=2.8.0
-ARG TORCHVISION_VERSION=0.23.0
-ARG TORCHAUDIO_VERSION=2.8.0
-ARG TORCHDATA_VERSION=0.11.0
-ARG FLASH_ATTN_VERSION=2.8.3
 ARG MAX_JOBS=8
 
 ENV MAX_JOBS=${MAX_JOBS}
@@ -58,77 +54,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN python3 -m venv "${VENV_PATH}"
 
-ENV PATH="${VENV_PATH}/bin:${PATH}"
+ENV PATH="/root/.local/bin:${VENV_PATH}/bin:${PATH}"
 
 WORKDIR /workspace
 
-COPY training/config/requirements.train.base.txt /tmp/requirements.train.base.txt
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
-RUN python -m pip install --upgrade \
-        pip \
-        "setuptools>=77.0.3,<80" \
-        wheel \
-        packaging \
-        ninja \
-        cmake \
-    && python -m pip install --no-compile --extra-index-url "${TORCH_CUDA_INDEX_URL}" \
-        "torch==${TORCH_VERSION}" \
-        "torchvision==${TORCHVISION_VERSION}" \
-        "torchaudio==${TORCHAUDIO_VERSION}" \
-        "torchdata==${TORCHDATA_VERSION}" \
-    && python -m pip install --no-compile --extra-index-url "${TORCH_CUDA_INDEX_URL}" \
-        -r /tmp/requirements.train.base.txt \
-    && nvcc --version
+COPY training/vendor/minimind_mfu_working/ /opt/training/vendor/minimind_mfu_working/
 
-# Resolve FlashAttention 2 from the actual torch/CUDA tuple so we can use the
-# published wheel instead of rebuilding from source.
-RUN FLASH_ATTN_VERSION="${FLASH_ATTN_VERSION}" python - <<'PY' > /tmp/flash_attn_wheel_url.txt
-import os
-import platform
-import sys
+WORKDIR /opt/training/vendor/minimind_mfu_working
 
-import torch
-
-if platform.machine() != "x86_64":
-    raise SystemExit(f"Unsupported architecture for prebuilt flash-attn wheel: {platform.machine()}")
-
-python_tag = f"cp{sys.version_info.major}{sys.version_info.minor}"
-torch_version = ".".join(torch.__version__.split("+", 1)[0].split(".")[:2])
-cuda_version = torch.version.cuda or ""
-cuda_major = cuda_version.split(".", 1)[0]
-abi_suffix = "TRUE" if torch._C._GLIBCXX_USE_CXX11_ABI else "FALSE"
-flash_attn_version = os.environ["FLASH_ATTN_VERSION"]
-
-wheel_name = (
-    f"flash_attn-{flash_attn_version}+cu{cuda_major}"
-    f"torch{torch_version}cxx11abi{abi_suffix}-"
-    f"{python_tag}-{python_tag}-linux_x86_64.whl"
-)
-wheel_url = (
-    "https://github.com/Dao-AILab/flash-attention/releases/download/"
-    f"v{flash_attn_version}/{wheel_name}"
-)
-
-print(f"[flash-attn] python={sys.version.split()[0]}", file=sys.stderr)
-print(f"[flash-attn] torch={torch.__version__}", file=sys.stderr)
-print(f"[flash-attn] torch.cuda={cuda_version}", file=sys.stderr)
-print(f"[flash-attn] cxx11abi={abi_suffix}", file=sys.stderr)
-print(f"[flash-attn] wheel={wheel_name}", file=sys.stderr)
-print(wheel_url)
-PY
-
-RUN curl -fsIL "$(cat /tmp/flash_attn_wheel_url.txt)" >/dev/null \
-    && python -m pip install --no-compile "$(cat /tmp/flash_attn_wheel_url.txt)" \
-    && rm -f /tmp/flash_attn_wheel_url.txt \
+RUN uv sync --frozen --no-dev \
+    && python -m pip install --no-compile "boto3>=1.34,<2" \
+    && nvcc --version \
     && find "${VENV_PATH}" -type d -name '__pycache__' -prune -exec rm -rf '{}' + \
     && find "${VENV_PATH}" -type f \( -name '*.pyc' -o -name '*.pyo' -o -name '*.a' -o -name '*.o' \) -delete \
     && python - <<'PY'
 import flash_attn
+import minimind_local
 import torch
 
 print(
     {
         "flash_attn": getattr(flash_attn, "__version__", "unknown"),
+        "minimind_local": minimind_local.__name__,
         "torch": torch.__version__,
         "cuda": torch.version.cuda,
         "gpu": torch.cuda.is_available(),
@@ -156,6 +105,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DS_BUILD_OPS=0 \
     CUDA_HOME=/usr/local/cuda \
     VENV_PATH=/opt/venv \
+    PYTHONPATH=/opt/training/vendor/minimind_mfu_working \
     PATH=/opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -178,27 +128,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /opt/training/vendor/minimind_mfu_working/ /opt/training/vendor/minimind_mfu_working/
 
 WORKDIR /workspace
 
 RUN python - <<'PY'
 import flash_attn
+import minimind_local
 import torch
 import transformers
 import tqdm
-import vllm
 
 print(
     {
         "flash_attn": getattr(flash_attn, "__version__", "unknown"),
+        "minimind_local": minimind_local.__name__,
         "torch": torch.__version__,
         "cuda": torch.version.cuda,
         "gpu": torch.cuda.is_available(),
         "transformers": transformers.__version__,
         "tqdm": tqdm.__version__,
-        "vllm": vllm.__version__,
     }
 )
 PY
 
-CMD ["python", "-c", "import torch, transformers, tqdm, vllm; print({'torch': torch.__version__, 'cuda': torch.version.cuda, 'gpu': torch.cuda.is_available(), 'transformers': transformers.__version__, 'tqdm': tqdm.__version__, 'vllm': vllm.__version__})"]
+CMD ["python", "-c", "import minimind_local, torch, transformers, tqdm; print({'minimind_local': minimind_local.__name__, 'torch': torch.__version__, 'cuda': torch.version.cuda, 'gpu': torch.cuda.is_available(), 'transformers': transformers.__version__, 'tqdm': tqdm.__version__})"]

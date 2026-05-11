@@ -6,7 +6,6 @@ import json
 import os
 import platform
 import subprocess
-import threading
 import time
 from collections.abc import Mapping
 from pathlib import Path
@@ -20,8 +19,6 @@ except ImportError:  # pragma: no cover - non-POSIX fallback (Windows)
 from gpupoor import ops
 from gpupoor.config import (
     DEFAULT_DSTACK_APPLY_TIMEOUT_BUFFER,
-    DEFAULT_DSTACK_DRY_RUN_MLFLOW_URL,
-    DEFAULT_DSTACK_FINAL_TUNNEL_JOIN_TIMEOUT,
     DEFAULT_DSTACK_HEALTH_RECHECK_TIMEOUT,
     DEFAULT_DSTACK_MIN_RESTART_WAIT,
     DEFAULT_DSTACK_OFFER_QUERY_TIMEOUT,
@@ -31,7 +28,6 @@ from gpupoor.config import (
     DEFAULT_DSTACK_RUN_START_POLL_INTERVAL,
     DEFAULT_DSTACK_TARGETED_MAX_OFFERS,
     DEFAULT_DSTACK_TASK_DURATION_BUFFER_MINUTES,
-    DEFAULT_DSTACK_TUNNEL_JOIN_TIMEOUT,
     DEFAULT_HF_DATASET_REPO,
     DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME,
     DEFAULT_REMOTE_IMAGE_TAG,
@@ -40,10 +36,13 @@ from gpupoor.config import (
     BackendConfig,
     RunConfig,
     find_dstack_bin,
+    image_base_requires_registry_auth,
     load_remote_settings,
     merged_toml_b64,
     require_remote_settings,
+    validate_dstack_image_base,
 )
+from gpupoor.services import portable_mlflow
 from gpupoor.subprocess_utils import CommandError, bash_script, run_command
 from gpupoor.utils import repo_path
 from gpupoor.utils.http import http_ok
@@ -54,7 +53,6 @@ if TYPE_CHECKING:
 
 log = get_logger(__name__)
 
-_TUNNEL_JOIN_TIMEOUT = DEFAULT_DSTACK_TUNNEL_JOIN_TIMEOUT
 _MIN_RESTART_WAIT_SECONDS = DEFAULT_DSTACK_MIN_RESTART_WAIT
 _HEALTH_RECHECK_TIMEOUT_SECONDS = DEFAULT_DSTACK_HEALTH_RECHECK_TIMEOUT
 _DEFAULT_REMOTE_IMAGE_TAG = DEFAULT_REMOTE_IMAGE_TAG
@@ -64,12 +62,10 @@ _OFFER_QUERY_TIMEOUT_SECONDS = DEFAULT_DSTACK_OFFER_QUERY_TIMEOUT
 _DEFAULT_PROVIDER_MAX_OFFERS = DEFAULT_DSTACK_PROVIDER_MAX_OFFERS
 _DEFAULT_TARGETED_MAX_OFFERS = DEFAULT_DSTACK_TARGETED_MAX_OFFERS
 _RUN_START_POLL_INTERVAL_SECONDS = DEFAULT_DSTACK_RUN_START_POLL_INTERVAL
-_DRY_RUN_MLFLOW_URL = DEFAULT_DSTACK_DRY_RUN_MLFLOW_URL
 _DEFAULT_REMOTE_OUTPUT_DIR = DEFAULT_REMOTE_OUTPUT_DIR
 _DEFAULT_HF_DATASET_REPO = DEFAULT_HF_DATASET_REPO
 _DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME = DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME
 _DSTACK_APPLY_TIMEOUT_BUFFER_SECONDS = DEFAULT_DSTACK_APPLY_TIMEOUT_BUFFER
-_FINAL_TUNNEL_JOIN_TIMEOUT_SECONDS = DEFAULT_DSTACK_FINAL_TUNNEL_JOIN_TIMEOUT
 
 __all__ = [
     "ensure_dstack_server",
@@ -85,8 +81,25 @@ def cached_remote_image_metadata_path() -> Path:
     return repo_path(".tmp", "remote-image-tag.json")
 
 
+def fleet_config_path() -> Path:
+    return repo_path("dstack", "config", "fleet.dstack.yml")
+
+
 def expected_training_base_image_base(settings: dict[str, str]) -> str:
     return settings.get("TRAINING_BASE_IMAGE_BASE", f"{settings['VCR_IMAGE_BASE']}-base")
+
+
+def expected_fleet_name() -> str:
+    path = fleet_config_path()
+    if not path.is_file():
+        raise FileNotFoundError(f"Required dstack fleet config missing: {path}")
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if line.startswith("name:"):
+            name = line.split(":", 1)[1].strip().strip("'\"")
+            if name:
+                return name
+    raise RuntimeError(f"Could not find fleet name in {path}")
 
 
 def dstack_server_restart_marker() -> Path:
@@ -245,7 +258,7 @@ def git_has_tracked_changes() -> bool:
     return bool(result.stdout.strip())
 
 
-def read_cached_remote_image_tag(settings: dict[str, str]) -> str | None:
+def read_cached_remote_image_metadata(settings: dict[str, str]) -> dict[str, object] | None:
     metadata_path = cached_remote_image_metadata_path()
     if not metadata_path.is_file():
         return None
@@ -261,11 +274,44 @@ def read_cached_remote_image_tag(settings: dict[str, str]) -> str | None:
         return None
     if payload.get("training_base_image_base") != expected_training_base_image_base(settings):
         return None
+    return payload
+
+
+def _metadata_has_no_attestation(payload: Mapping[str, object]) -> bool:
+    return payload.get("provenance_attestation") is False and payload.get("build_tool") == "docker-buildx"
+
+
+def read_cached_remote_image_tag(settings: dict[str, str]) -> str | None:
+    payload = read_cached_remote_image_metadata(settings)
+    if payload is None or not _metadata_has_no_attestation(payload):
+        return None
 
     image_tag = payload.get("image_tag")
     if not isinstance(image_tag, str) or not image_tag:
         return None
     return image_tag
+
+
+def verify_no_attestation_image_metadata(settings: dict[str, str], image_tag: str) -> None:
+    payload = read_cached_remote_image_metadata(settings)
+    metadata_path = cached_remote_image_metadata_path()
+    if payload is None:
+        raise RuntimeError(
+            f"Remote image tag '{image_tag}' has no matching no-attestation metadata at {metadata_path}. "
+            "Rebuild with training/scripts/build-and-push.sh or set backend.remote_image_tag to a "
+            "locally cached no-attestation tag."
+        )
+    if payload.get("image_tag") != image_tag:
+        raise RuntimeError(
+            f"Remote image tag '{image_tag}' does not match cached metadata tag '{payload.get('image_tag')}'. "
+            "Rebuild with training/scripts/build-and-push.sh or choose the cached tag."
+        )
+    if not _metadata_has_no_attestation(payload):
+        raise RuntimeError(
+            f"Remote image tag '{image_tag}' was not proven to be built without provenance attestations. "
+            "dstack 0.20.x can fail on OCI attestation manifests; rebuild with "
+            "training/scripts/build-and-push.sh so metadata records provenance_attestation=false."
+        )
 
 
 def verify_mlflow(health_url: str, *, timeout_seconds: int) -> None:
@@ -323,6 +369,17 @@ def remote_worker_env(
             "HF_PRETOKENIZED_DATASET_FILENAME",
             _DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME,
         ),
+        "R2_TOKENIZED_DATASET_URI": settings.get(
+            "R2_TOKENIZED_DATASET_URI",
+            config.remote.r2_tokenized_dataset_uri,
+        ),
+        "R2_TOKENIZED_DATASET_MAX_FILES": settings.get(
+            "R2_TOKENIZED_DATASET_MAX_FILES",
+            str(config.remote.r2_tokenized_dataset_max_files),
+        ),
+        "R2_TOKENIZED_DATASET_DIR": settings.get("R2_TOKENIZED_DATASET_DIR", config.remote.r2_tokenized_dataset_dir),
+        "R2_TOKENIZER_URI": settings.get("R2_TOKENIZER_URI", config.remote.r2_tokenizer_uri),
+        "R2_TOKENIZER_DIR": settings.get("R2_TOKENIZER_DIR", config.remote.r2_tokenizer_dir),
     }
     env.update({key: value for key, value in injected.items() if value})
     if mlflow_tracking_uri:
@@ -521,6 +578,60 @@ def dstack_run_status_triplet(dstack_bin: str, run_name: str) -> tuple[str, str,
     return ("", "", "")
 
 
+def verify_fleet_ready(dstack_bin: str, *, fleet_name: str | None = None, timeout_seconds: int = 30) -> None:
+    expected_name = fleet_name or expected_fleet_name()
+    try:
+        completed = run_command(
+            [dstack_bin, "fleet", "get", "--json", expected_name],
+            capture_output=True,
+            quiet=True,
+            timeout=timeout_seconds,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"dstack fleet '{expected_name}' is not ready or dstack server is unreachable. "
+            f"Run `gpupoor dstack fleet-apply` using {fleet_config_path()} before launching tasks."
+        ) from exc
+
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"dstack fleet '{expected_name}' returned invalid JSON. "
+            f"Run `gpupoor dstack fleet-apply` using {fleet_config_path()} before launching tasks."
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"dstack fleet '{expected_name}' JSON must be an object")
+
+    actual_name = payload.get("name")
+    if actual_name is None and isinstance(payload.get("fleet"), dict):
+        actual_name = payload["fleet"].get("name")
+    if actual_name != expected_name:
+        raise RuntimeError(
+            f"dstack fleet readiness check expected '{expected_name}' but got '{actual_name}'. "
+            f"Run `gpupoor dstack fleet-apply` using {fleet_config_path()}."
+        )
+
+    status_values = []
+    for key in ("status", "state"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            status_values.append(value)
+    fleet_payload = payload.get("fleet")
+    if isinstance(fleet_payload, dict):
+        for key in ("status", "state"):
+            value = fleet_payload.get(key)
+            if isinstance(value, str):
+                status_values.append(value)
+    terminal = {"terminated", "deleting", "failed", "error"}
+    for value in status_values:
+        if value.strip().lower() in terminal:
+            raise RuntimeError(
+                f"dstack fleet '{expected_name}' is in terminal state '{value}'. "
+                f"Run `gpupoor dstack fleet-apply` using {fleet_config_path()} before launching tasks."
+            )
+
+
 def wait_for_run_start(
     dstack_bin: str,
     run_name: str,
@@ -648,7 +759,9 @@ def launch_remote(
         raise ValueError("launch_remote requires backend.kind='dstack'")
 
     settings = load_remote_settings(config.remote)
-    require_remote_settings(settings)
+    validate_dstack_image_base(settings["VCR_IMAGE_BASE"])
+    if image_base_requires_registry_auth(settings["VCR_IMAGE_BASE"]):
+        require_remote_settings(settings)
     dstack_bin = find_dstack_bin()
 
     ops.run_preflight(remote=True, doctor=config.doctor, remote_config=config.remote)
@@ -664,7 +777,6 @@ def launch_remote(
         start_timeout_seconds=config.remote.dstack_server_start_timeout_seconds,
         dry_run=dry_run,
     )
-    verify_mlflow(config.remote.mlflow_health_url, timeout_seconds=config.remote.health_timeout_seconds)
     ensure_dstack_server(
         dstack_bin,
         health_url=config.remote.dstack_server_health_url,
@@ -673,34 +785,9 @@ def launch_remote(
         dry_run=dry_run,
     )
 
-    tunnel_thread: threading.Thread | None = None
-    tunnel_exception: BaseException | None = None
-    started_tunnel = False
-
     rendered_task = None
     launched_remote_run = False
     try:
-        if dry_run:
-            print("[DRY-RUN] Would start the MLflow Cloudflare tunnel")
-        elif connection_bundle is None:
-            existing_tunnel_url = repo_path(".cf-tunnel.url")
-            existing_tunnel_pid = repo_path(".cf-tunnel.pid")
-            if existing_tunnel_url.exists() and existing_tunnel_pid.exists():
-                log.info("Reusing existing Cloudflare tunnel (found .cf-tunnel.url and .cf-tunnel.pid)")
-                started_tunnel = True
-            else:
-
-                def _run_tunnel() -> None:
-                    nonlocal tunnel_exception
-                    try:
-                        bash_script(repo_path("infrastructure", "mlflow", "scripts", "run-tunnel.sh"))
-                    except Exception as exc:
-                        tunnel_exception = exc
-
-                tunnel_thread = threading.Thread(target=_run_tunnel, daemon=True)
-                tunnel_thread.start()
-                started_tunnel = True
-
         use_skip_build = config.backend.skip_build if skip_build is None else skip_build
         cached_image_tag = None
 
@@ -729,14 +816,6 @@ def launch_remote(
         else:
             log.info("Skipping remote image build")
 
-        # Wait for the background tunnel thread to finish before reading the URL.
-        if tunnel_thread is not None:
-            tunnel_thread.join(timeout=_TUNNEL_JOIN_TIMEOUT)
-            if tunnel_thread.is_alive():
-                raise RuntimeError("Tunnel startup timed out")
-            if tunnel_exception is not None:
-                raise tunnel_exception
-
         image_sha = remote_image_tag(
             config.backend,
             skip_build=use_skip_build,
@@ -744,12 +823,12 @@ def launch_remote(
             settings=settings,
             cached_tag=cached_image_tag,
         )
-        if dry_run:
-            mlflow_url = _DRY_RUN_MLFLOW_URL
-        elif connection_bundle is not None:
-            mlflow_url = connection_bundle.mlflow_tracking_uri
-        else:
-            mlflow_url = repo_path(".cf-tunnel.url").read_text(encoding="utf-8").strip()
+        connector_env = (
+            connection_bundle.to_runtime_env()
+            if connection_bundle is not None
+            else portable_mlflow.runtime_from_artifact_env(run_name=config.name, artifact_env={}).to_env()
+        )
+        mlflow_url = connector_env.get("MLFLOW_TRACKING_URI", portable_mlflow.PORTABLE_TRACKING_URI)
 
         log.info("Config: %s", config.source)
         log.info("Backend: %s", config.backend.kind)
@@ -758,10 +837,14 @@ def launch_remote(
         log.info("VCR_IMAGE_BASE=%s", settings["VCR_IMAGE_BASE"])
 
         if dry_run:
+            print("[DRY-RUN] Would verify remote image metadata proves provenance_attestation=false")
+            print(f"[DRY-RUN] Would verify dstack fleet '{expected_fleet_name()}' is ready")
             print(f"[DRY-RUN] Would render task with IMAGE_SHA={image_sha}")
             print("[DRY-RUN] Would call dstack apply with HF_TOKEN and MLflow env")
             return
 
+        verify_no_attestation_image_metadata(settings, image_sha)
+        verify_fleet_ready(dstack_bin)
         rendered_task = render_task(settings, config, image_sha)
         apply_env = remote_worker_env(
             config,
@@ -770,7 +853,7 @@ def launch_remote(
             profile="remote",
             out_dir=settings.get("OUT_DIR", _DEFAULT_REMOTE_OUTPUT_DIR),
             hf_token=read_required_secret("hf_token"),
-            connector_env=connection_bundle.to_runtime_env() if connection_bundle is not None else None,
+            connector_env=connector_env,
             mlflow_tracking_uri=mlflow_url,
         )
         # `dstack apply` can hang indefinitely on registry auth or
@@ -820,10 +903,5 @@ def launch_remote(
     finally:
         if rendered_task and rendered_task.exists():
             rendered_task.unlink()
-        if tunnel_thread is not None and tunnel_thread.is_alive():
-            tunnel_thread.join(timeout=_FINAL_TUNNEL_JOIN_TIMEOUT_SECONDS)
-        if started_tunnel:
-            if launched_remote_run:
-                log.info("Keeping Cloudflare tunnel alive until teardown so remote MLflow stays reachable")
-            else:
-                kill_tunnel()
+        if launched_remote_run:
+            log.info("Remote worker owns portable MLflow bundle finalization")

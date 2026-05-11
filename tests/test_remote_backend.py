@@ -2,24 +2,14 @@
 
 from __future__ import annotations
 
-# ruff: noqa: E402
-import base64
-import json
 import subprocess
-import threading
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-pytest.skip(
-    "Outdated test: runtime_config API changed to merged_toml_b64 in TOML refactor",
-    allow_module_level=True,
-)
-
 from gpupoor.backends import dstack
-from gpupoor.config import load_run_config, parse_env_file
-from gpupoor.runtime_config import build_training_runtime_env, runtime_config_b64
+from gpupoor.config import load_run_config, merged_toml_b64, parse_env_file
 from gpupoor.subprocess_utils import CommandError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -52,7 +42,7 @@ def test_read_cached_remote_image_tag_requires_matching_base(tmp_path: Path, mon
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
     metadata_path.write_text(
         """
-{"image_tag":"abc123","image_ref":"vccr.io/example/verda-minimind:abc123","vcr_image_base":"vccr.io/example/verda-minimind","training_base_image_base":"vccr.io/example/verda-minimind-base"}
+{"image_tag":"abc123","image_ref":"vccr.io/example/verda-minimind:abc123","vcr_image_base":"vccr.io/example/verda-minimind","training_base_image_base":"vccr.io/example/verda-minimind-base","provenance_attestation":false,"build_tool":"docker-buildx"}
 """.strip(),
         encoding="utf-8",
     )
@@ -78,6 +68,80 @@ def test_read_cached_remote_image_tag_requires_matching_base(tmp_path: Path, mon
         )
         is None
     )
+
+
+def test_no_attestation_metadata_guard_rejects_missing_proof(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_repo_path(*parts: str) -> Path:
+        return tmp_path.joinpath(*parts)
+
+    metadata_path = fake_repo_path(".tmp", "remote-image-tag.json")
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        """
+{"image_tag":"abc123","image_ref":"vccr.io/example:abc123","vcr_image_base":"vccr.io/example","training_base_image_base":"vccr.io/example-base"}
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dstack, "repo_path", fake_repo_path)
+
+    with pytest.raises(RuntimeError, match="not proven to be built without provenance attestations"):
+        dstack.verify_no_attestation_image_metadata(
+            {
+                "VCR_IMAGE_BASE": "vccr.io/example",
+                "TRAINING_BASE_IMAGE_BASE": "vccr.io/example-base",
+            },
+            "abc123",
+        )
+
+
+def test_no_attestation_metadata_guard_accepts_buildx_proof(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_repo_path(*parts: str) -> Path:
+        return tmp_path.joinpath(*parts)
+
+    metadata_path = fake_repo_path(".tmp", "remote-image-tag.json")
+    metadata_path.parent.mkdir(parents=True, exist_ok=True)
+    metadata_path.write_text(
+        """
+{"image_tag":"abc123","image_ref":"vccr.io/example:abc123","vcr_image_base":"vccr.io/example","training_base_image_base":"vccr.io/example-base","provenance_attestation":false,"build_tool":"docker-buildx"}
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(dstack, "repo_path", fake_repo_path)
+
+    dstack.verify_no_attestation_image_metadata(
+        {
+            "VCR_IMAGE_BASE": "vccr.io/example",
+            "TRAINING_BASE_IMAGE_BASE": "vccr.io/example-base",
+        },
+        "abc123",
+    )
+
+
+def test_verify_fleet_ready_accepts_matching_non_terminal_fleet(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(dstack, "expected_fleet_name", lambda: "verda-spot")
+
+    def fake_run_command(command, **kwargs):
+        assert command == ["dstack", "fleet", "get", "--json", "verda-spot"]
+        assert kwargs["capture_output"] is True
+        return SimpleNamespace(stdout='{"name":"verda-spot","status":"active"}')
+
+    monkeypatch.setattr(dstack, "run_command", fake_run_command)
+
+    dstack.verify_fleet_ready("dstack")
+
+
+def test_verify_fleet_ready_rejects_terminal_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(dstack, "expected_fleet_name", lambda: "verda-spot")
+    monkeypatch.setattr(
+        dstack,
+        "run_command",
+        lambda *args, **kwargs: SimpleNamespace(stdout='{"name":"verda-spot","status":"failed"}'),
+    )
+
+    with pytest.raises(RuntimeError, match="terminal state"):
+        dstack.verify_fleet_ready("dstack")
 
 
 def test_task_max_duration_rounds_up_to_minutes() -> None:
@@ -159,9 +223,8 @@ def test_render_task_joins_multiple_gpu_names(tmp_path: Path, monkeypatch: pytes
     assert calls[0]["env"]["TASK_GPU_NAMES"] == "[B200, B300]"
 
 
-def test_launch_remote_keeps_tunnel_alive_after_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_launch_remote_uses_portable_mlflow_after_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
-    (tmp_path / ".cf-tunnel.url").write_text("https://mlflow.example", encoding="utf-8")
 
     def fake_repo_path(*parts: str) -> Path:
         return tmp_path.joinpath(*parts)
@@ -206,6 +269,8 @@ def test_launch_remote_keeps_tunnel_alive_after_success(tmp_path: Path, monkeypa
     )
     monkeypatch.setattr(dstack, "restart_dstack_server_if_needed", lambda *args, **kwargs: None)
     monkeypatch.setattr(dstack, "bash_script", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack, "verify_no_attestation_image_metadata", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack, "verify_fleet_ready", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         dstack,
         "render_task",
@@ -220,39 +285,35 @@ def test_launch_remote_keeps_tunnel_alive_after_success(tmp_path: Path, monkeypa
     monkeypatch.setattr(dstack, "kill_tunnel", lambda: kill_calls.append(None))
     apply_envs: list[dict[str, str]] = []
 
-    def fake_apply(*args: object, **kwargs: object) -> object:
-        apply_envs.append(kwargs["env"])
+    def fake_run_command(command: list[str], **kwargs: object) -> object:
+        if command[:2] == ["dstack", "apply"]:
+            apply_envs.append(kwargs["env"])
         return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr(dstack.subprocess, "run", fake_apply)
+    monkeypatch.setattr(dstack, "run_command", fake_run_command)
+    monkeypatch.setattr(dstack, "dstack_run_status_triplet", lambda *args, **kwargs: ("completed", "completed", ""))
 
     dstack.launch_remote(config, skip_build=True)
 
     assert kill_calls == []
-    assert mlflow_urls == [config.remote.mlflow_health_url]
-    assert mlflow_timeouts == [config.remote.health_timeout_seconds]
+    assert mlflow_urls == []
+    assert mlflow_timeouts == []
     assert dstack_urls == [config.remote.dstack_server_health_url]
     assert dstack_timeouts == [
         (config.remote.health_timeout_seconds, config.remote.dstack_server_start_timeout_seconds)
     ]
     assert wait_limits == [config.remote.run_start_timeout_seconds]
-    expected_runtime_env = build_training_runtime_env(
-        config,
-        dataset_path="/workspace/data/datasets/pretrain_t2t_mini",
-        output_dir="/workspace/custom-out",
-        mlflow_tracking_uri="https://mlflow.example",
-        extra_env={
-            "VERDA_PROFILE": "remote",
-            "DSTACK_RUN_NAME": config.name,
-            "OUT_DIR": "/workspace/custom-out",
-            "HF_DATASET_REPO": "example/dataset",
-            "HF_DATASET_FILENAME": "custom.jsonl",
-            "HF_PRETOKENIZED_DATASET_REPO": "example/dataset",
-            "HF_PRETOKENIZED_DATASET_FILENAME": "pretokenized/custom.tar.gz",
-        },
-    )
     assert apply_envs[0]["HF_TOKEN"] == "hf-token"
-    assert apply_envs[0]["GPUPOOR_RUN_CONFIG_B64"] == runtime_config_b64(expected_runtime_env)
+    assert apply_envs[0]["MLFLOW_TRACKING_URI"] == "http://127.0.0.1:5000"
+    assert apply_envs[0]["GPUPOOR_PORTABLE_MLFLOW"] == "1"
+    assert apply_envs[0]["MLFLOW_BUNDLE_DIR"] == "/workspace/mlflow-bundle"
+    assert apply_envs[0]["OUT_DIR"] == "/workspace/custom-out"
+    assert apply_envs[0]["HF_DATASET_REPO"] == "example/dataset"
+    assert apply_envs[0]["HF_PRETOKENIZED_DATASET_FILENAME"] == "pretokenized/custom.tar.gz"
+    assert apply_envs[0]["R2_TOKENIZED_DATASET_URI"] == config.remote.r2_tokenized_dataset_uri
+    assert apply_envs[0]["R2_TOKENIZED_DATASET_MAX_FILES"] == str(config.remote.r2_tokenized_dataset_max_files)
+    assert apply_envs[0]["R2_TOKENIZER_DIR"] == config.remote.r2_tokenizer_dir
+    assert apply_envs[0]["GPUPOOR_RUN_CONFIG_B64"] == merged_toml_b64(config)
 
 
 def test_launch_remote_reuses_cached_image_without_rebuild(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -268,7 +329,7 @@ def test_launch_remote_reuses_cached_image_without_rebuild(tmp_path: Path, monke
     metadata_path.parent.mkdir(parents=True, exist_ok=True)
     metadata_path.write_text(
         """
-{"image_tag":"abc123","image_ref":"vccr.io/example:abc123","vcr_image_base":"vccr.io/example","training_base_image_base":"vccr.io/example-base"}
+{"image_tag":"abc123","image_ref":"vccr.io/example:abc123","vcr_image_base":"vccr.io/example","training_base_image_base":"vccr.io/example-base","provenance_attestation":false,"build_tool":"docker-buildx"}
 """.strip(),
         encoding="utf-8",
     )
@@ -307,6 +368,8 @@ def test_launch_remote_reuses_cached_image_without_rebuild(tmp_path: Path, monke
     monkeypatch.setattr(dstack, "track_run", lambda run_name: None)
     monkeypatch.setattr(dstack, "run_command", lambda *args, **kwargs: None)
     monkeypatch.setattr(dstack, "kill_tunnel", lambda: None)
+    monkeypatch.setattr(dstack, "verify_fleet_ready", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack, "dstack_run_status_triplet", lambda *args, **kwargs: ("completed", "completed", ""))
 
     dstack.launch_remote(config)
 
@@ -314,7 +377,9 @@ def test_launch_remote_reuses_cached_image_without_rebuild(tmp_path: Path, monke
     assert REPO_ROOT / "training" / "scripts" / "build-and-push.sh" not in bash_calls
 
 
-def test_launch_remote_cleans_up_tunnel_when_startup_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_launch_remote_does_not_touch_tunnel_when_startup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
     (tmp_path / ".cf-tunnel.url").write_text("https://mlflow.example", encoding="utf-8")
 
@@ -349,15 +414,21 @@ def test_launch_remote_cleans_up_tunnel_when_startup_fails(tmp_path: Path, monke
         "wait_for_run_start",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("startup failed")),
     )
+    monkeypatch.setattr(dstack, "verify_no_attestation_image_metadata", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack, "verify_fleet_ready", lambda *args, **kwargs: None)
 
     kill_calls: list[None] = []
     monkeypatch.setattr(dstack, "kill_tunnel", lambda: kill_calls.append(None))
-    monkeypatch.setattr(dstack.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0))
+
+    def fake_run_command(command: list[str], **kwargs: object) -> object:
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(dstack, "run_command", fake_run_command)
 
     with pytest.raises(RuntimeError, match="startup failed"):
         dstack.launch_remote(config, skip_build=True)
 
-    assert kill_calls == [None]
+    assert kill_calls == []
 
 
 def test_wait_for_run_start_tolerates_retrying_no_capacity(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -581,6 +652,8 @@ def test_dstack_apply_timeout_propagates(tmp_path: Path, monkeypatch: pytest.Mon
     )
     monkeypatch.setattr(dstack, "read_required_secret", lambda filename: "hf-token")
     monkeypatch.setattr(dstack, "kill_tunnel", lambda: None)
+    monkeypatch.setattr(dstack, "verify_no_attestation_image_metadata", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack, "verify_fleet_ready", lambda *args, **kwargs: None)
 
     def fake_subprocess_run(*args: object, **kwargs: object) -> object:
         assert "timeout" in kwargs, "dstack apply must pass timeout= to subprocess.run"
@@ -687,12 +760,17 @@ def test_launch_remote_uses_connector_bundle_without_starting_tunnel(
     monkeypatch.setattr(dstack, "dstack_has_run", lambda dstack_bin, run_name: True)
     monkeypatch.setattr(dstack, "wait_for_run_start", lambda *args, **kwargs: None)
     monkeypatch.setattr(dstack, "track_run", lambda run_name: None)
+    monkeypatch.setattr(dstack, "verify_no_attestation_image_metadata", lambda *args, **kwargs: None)
+    monkeypatch.setattr(dstack, "verify_fleet_ready", lambda *args, **kwargs: None)
     apply_envs: list[dict[str, str]] = []
-    monkeypatch.setattr(
-        dstack,
-        "run_command",
-        lambda command, **kwargs: apply_envs.append(kwargs["env"]) or None,
-    )
+
+    def fake_run_command(command: list[str], **kwargs: object) -> object:
+        if command[:2] == ["dstack", "apply"]:
+            apply_envs.append(kwargs["env"])
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(dstack, "run_command", fake_run_command)
+    monkeypatch.setattr(dstack, "dstack_run_status_triplet", lambda *args, **kwargs: ("completed", "completed", ""))
 
     bundle = SimpleNamespace(
         mlflow_tracking_uri="https://mlflow-api.mlmonk96.net",
@@ -706,54 +784,8 @@ def test_launch_remote_uses_connector_bundle_without_starting_tunnel(
     dstack.launch_remote(config, skip_build=True, connection_bundle=bundle)
 
     assert not any(call[0].name == "run-tunnel.sh" for call in tunnel_calls)
-    runtime_env = json.loads(base64.b64decode(apply_envs[0]["GPUPOOR_RUN_CONFIG_B64"]).decode("utf-8"))["env"]
-    assert runtime_env["MLFLOW_TRACKING_URI"] == "https://mlflow-api.mlmonk96.net"
-    assert runtime_env["GPUPOOR_CONNECTOR_ARTIFACT_STORE"] == "r2"
-
-
-def test_launch_remote_raises_on_tunnel_thread_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """When the tunnel thread exceeds the join timeout, launch_remote raises and cleans up."""
-    config = load_run_config(REPO_ROOT / "examples" / "verda_remote.toml")
-    (tmp_path / ".cf-tunnel.url").write_text("https://mlflow.example", encoding="utf-8")
-
-    def fake_repo_path(*parts: str) -> Path:
-        return tmp_path.joinpath(*parts)
-
-    block_event = threading.Event()
-
-    def selective_bash_script(script: Path, *args: object, **kwargs: object) -> None:
-        if "run-tunnel" in str(script):
-            block_event.wait()  # block only the tunnel call
-        # all other bash_script calls are no-ops
-
-    monkeypatch.setattr(dstack, "repo_path", fake_repo_path)
-    monkeypatch.setattr(
-        dstack,
-        "load_remote_settings",
-        lambda config=None: {
-            "VCR_IMAGE_BASE": "vccr.io/example",
-            "VCR_USERNAME": "user",
-            "VCR_PASSWORD": "pass",
-        },
-    )
-    monkeypatch.setattr(dstack, "require_remote_settings", lambda settings: None)
-    monkeypatch.setattr(dstack, "find_dstack_bin", lambda: "dstack")
-    monkeypatch.setattr(dstack.ops, "run_preflight", lambda *args, **kwargs: None)
-    monkeypatch.setattr(dstack, "verify_mlflow", lambda url, **kwargs: None)
-    monkeypatch.setattr(dstack, "ensure_dstack_server", lambda *args, **kwargs: None)
-    monkeypatch.setattr(dstack, "bash_script", selective_bash_script)
-    monkeypatch.setattr(dstack, "_TUNNEL_JOIN_TIMEOUT", 0.5)
-
-    kill_calls: list[None] = []
-    monkeypatch.setattr(dstack, "kill_tunnel", lambda: kill_calls.append(None))
-
-    try:
-        with pytest.raises(RuntimeError, match="Tunnel startup timed out"):
-            dstack.launch_remote(config, skip_build=True)
-
-        assert kill_calls == [None]
-    finally:
-        block_event.set()  # release the blocked thread to avoid leaks
+    assert apply_envs[0]["MLFLOW_TRACKING_URI"] == "https://mlflow-api.mlmonk96.net"
+    assert apply_envs[0]["GPUPOOR_CONNECTOR_ARTIFACT_STORE"] == "r2"
 
 
 def test_track_run_concurrent_writes_do_not_interleave(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -766,6 +798,7 @@ def test_track_run_concurrent_writes_do_not_interleave(tmp_path: Path, monkeypat
     correctness guarantee, not the visible corruption.
     """
     import fcntl
+    import threading
 
     def fake_repo_path(*parts: str) -> Path:
         return tmp_path.joinpath(*parts)

@@ -6,7 +6,8 @@ import signal
 import subprocess
 
 import pytest
-import torch
+
+torch = pytest.importorskip("torch", reason="torch is required for trainer SIGTERM checkpoint tests")
 
 STUB_TIMEOUT = 15
 

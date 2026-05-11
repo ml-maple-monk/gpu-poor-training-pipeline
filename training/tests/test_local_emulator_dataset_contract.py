@@ -32,14 +32,20 @@ def test_local_emulator_entrypoint_bootstraps_dataset_from_hugging_face(repo_tex
     assert "hf_dataset_bootstrap" in entrypoint
 
 
-def test_remote_and_local_share_dataset_bootstrap_helper(repo_text):
+def test_remote_entrypoint_uses_r2_tokenized_dataset_puller(repo_text):
+    remote_entrypoint = repo_text("training", "scripts", "remote-entrypoint.sh")
+
+    assert "pull-r2-tokenized-dataset.py" in remote_entrypoint
+    assert "R2_TOKENIZED_DATASET_URI" in remote_entrypoint
+    assert "run-vendor-minimind.py" in remote_entrypoint
+
+
+def test_local_emulator_keeps_hf_dataset_bootstrap_helper(repo_text):
     helper_name = "hf-dataset-bootstrap.sh"
     helper = repo_text("training", "scripts", "lib", helper_name)
-    remote_entrypoint = repo_text("training", "scripts", "remote-entrypoint.sh")
     local_entrypoint = repo_text("infrastructure", "local-emulator", "scripts", "entrypoint.sh")
 
     assert "hf_dataset_bootstrap" in helper
-    assert helper_name in remote_entrypoint
     assert helper_name in local_entrypoint
 
 

@@ -1,11 +1,11 @@
 secrets
 .env*
-# Keep only the pretokenized training corpus available to Docker builds.
+# Remote training pulls the tokenized corpus from R2 at runtime; keep local datasets out of image contexts.
 data/*
-!data/datasets/
-data/datasets/*
-!data/datasets/pretrain_t2t_mini/
-!data/datasets/pretrain_t2t_mini/**
+!training/vendor/minimind_mfu_working/minimind_local/data/
+!training/vendor/minimind_mfu_working/minimind_local/data/**
+!training/vendor/minimind_mfu_working/data/
+!training/vendor/minimind_mfu_working/data/**
 .git/
 .omc/
 __pycache__
@@ -14,6 +14,8 @@ __pycache__
 .gitignore
 PARITY.md
 README.md
+!training/vendor/minimind_mfu_working/README.md
+!training/vendor/minimind_mfu_working/data/tokenizers/native_superbpe_1m_rows_max4w/README.md
 scripts/
 Makefile
 docker-compose*.yml

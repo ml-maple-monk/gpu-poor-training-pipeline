@@ -1,0 +1,30 @@
+name: fa2_dense_muon16bit_torch_adamw_fp8_rowwise_with_gw_hp_h2048_l8_s4096_bs2_wd02_clip1_no_skip
+description: FA2 dense MiniMind benchmark using torch.optim.Muon with torch.optim.AdamW fallback, TorchAO FP8 rowwise_with_gw_hp training, batch size 2, grad-norm clipping, and no non-finite-gradient skip.
+model:
+  batch_size: 2
+  sequence_length: 4096
+  hidden_size: 2048
+  num_hidden_layers: 8
+  num_attention_heads: 16
+  num_key_value_heads: 8
+  head_dim: 128
+  intermediate_size: 6496
+  vocab_size: 50014
+  max_position_embeddings: 32768
+  rms_norm_eps: 0.000001
+  rope_theta: 1000000.0
+  dropout: 0.0
+  loss_chunk_size: 1024
+components:
+  attention: flash_attention_2
+  sparsity: dense
+  optimizer: muon16bit_torch_adamw
+  compile: compile_fullgraph
+  precision: fp8_training
+training:
+  learning_rate: 0.0001
+  weight_decay: 0.2
+  fp8_recipe: rowwise_with_gw_hp
+  muon_quantization_bound: 127
+  gradient_clip_norm: 1.0
+  skip_nonfinite_gradients: false

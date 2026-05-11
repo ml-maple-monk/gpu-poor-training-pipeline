@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import importlib.util
 from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
-import torch
 
 transformers = pytest.importorskip("transformers", reason="transformers is required for trainer_utils import")
+requires_torch = pytest.mark.skipif(
+    importlib.util.find_spec("torch") is None,
+    reason="torch is required for concrete trainer runtime guards",
+)
 
 
+@requires_torch
 def test_train_pretrain_rejects_unknown_dtype(import_minimind_module) -> None:
     trainer_utils = import_minimind_module("minimind.trainer.trainer_utils")
 
@@ -16,6 +21,7 @@ def test_train_pretrain_rejects_unknown_dtype(import_minimind_module) -> None:
         trainer_utils.build_autocast_context("cuda", "fp32")
 
 
+@requires_torch
 def test_train_pretrain_accepts_float32_dtype(import_minimind_module) -> None:
     trainer_utils = import_minimind_module("minimind.trainer.trainer_utils")
 
@@ -24,6 +30,7 @@ def test_train_pretrain_accepts_float32_dtype(import_minimind_module) -> None:
     assert ctx is not None
 
 
+@requires_torch
 def test_validation_ppl_reports_overflow_as_infinity(import_minimind_module) -> None:
     trainer_utils = import_minimind_module("minimind.trainer.trainer_utils")
 
@@ -31,12 +38,14 @@ def test_validation_ppl_reports_overflow_as_infinity(import_minimind_module) -> 
     assert trainer_utils.validation_ppl_from_loss(1e6) == float("inf")
 
 
+@requires_torch
 def test_build_autocast_context_uses_nullcontext_on_cpu(import_minimind_module) -> None:
     trainer_utils = import_minimind_module("minimind.trainer.trainer_utils")
 
     assert isinstance(trainer_utils.build_autocast_context("cpu", "bfloat16"), nullcontext)
 
 
+@requires_torch
 def test_log_flash_attention_status_reports_cpu_fallback(import_minimind_module) -> None:
     trainer_utils = import_minimind_module("minimind.trainer.trainer_utils")
     messages: list[str] = []
@@ -48,6 +57,7 @@ def test_log_flash_attention_status_reports_cpu_fallback(import_minimind_module)
     ]
 
 
+@requires_torch
 def test_train_pretrain_marks_mlflow_failed_on_exception(train_pretrain_module, monkeypatch) -> None:
     finish_statuses: list[str] = []
     runtime_args = SimpleNamespace()
@@ -77,7 +87,68 @@ def test_train_pretrain_marks_mlflow_failed_on_exception(train_pretrain_module, 
     assert finish_statuses == ["FAILED"]
 
 
+def test_pretrain_executor_orders_lifecycle_and_finalizes(import_minimind_module) -> None:
+    executor_module = import_minimind_module("minimind.trainer.core.executor")
+    models_module = import_minimind_module("minimind.trainer.core.models")
+    events: list[str] = []
+
+    class RecordingExecutor(executor_module.PretrainExecutor):
+        def setup_runtime(self, request):
+            events.append("setup_runtime")
+            return super().setup_runtime(request)
+
+        def build_components(self, runtime):
+            events.append("build_components")
+            return super().build_components(runtime)
+
+        def restore_checkpoint(self, components):
+            events.append("restore_checkpoint")
+            return super().restore_checkpoint(components)
+
+        def train(self, components):
+            events.append("train")
+            return super().train(components)
+
+        def finalize(self, components, *, failed: bool):
+            events.append(f"finalize:{failed}")
+            return super().finalize(components, failed=failed)
+
+    executor = RecordingExecutor(lambda runtime_args: f"trained:{runtime_args}")
+
+    result = executor.run(models_module.PretrainRunRequest(runtime_args="args"))
+
+    assert result == "trained:args"
+    assert events == [
+        "setup_runtime",
+        "build_components",
+        "restore_checkpoint",
+        "train",
+        "finalize:False",
+    ]
+
+
+def test_pretrain_executor_finalizes_on_failure(import_minimind_module) -> None:
+    executor_module = import_minimind_module("minimind.trainer.core.executor")
+    models_module = import_minimind_module("minimind.trainer.core.models")
+    events: list[str] = []
+
+    class RecordingExecutor(executor_module.PretrainExecutor):
+        def finalize(self, components, *, failed: bool):
+            events.append(f"finalize:{failed}")
+            return super().finalize(components, failed=failed)
+
+    executor = RecordingExecutor(lambda runtime_args: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        executor.run(models_module.PretrainRunRequest(runtime_args="args"))
+
+    assert events == ["finalize:True"]
+
+
+@requires_torch
 def test_lm_checkpoint_preserves_step_versions_and_latest_alias(import_minimind_module, tmp_path) -> None:
+    import torch
+
     trainer_utils = import_minimind_module("minimind.trainer.trainer_utils")
     lm_config = SimpleNamespace(use_moe=False, hidden_size=2)
     model = torch.nn.Linear(2, 2)
@@ -126,6 +197,7 @@ def test_lm_checkpoint_preserves_step_versions_and_latest_alias(import_minimind_
     assert current_resume["optimizer_step"] == 400
 
 
+@requires_torch
 def test_train_window_logs_learning_progress_metrics(train_pretrain_module, monkeypatch) -> None:
     logged_steps: list[dict] = []
 
@@ -182,6 +254,7 @@ def test_train_window_logs_learning_progress_metrics(train_pretrain_module, monk
     assert logged_steps[0]["extra_metrics"]["train/tokens_per_optimizer_step"] == pytest.approx(10.0)
 
 
+@requires_torch
 def test_train_speed_metrics_log_corrected_mfu_fields(train_pretrain_module, monkeypatch) -> None:
     monkeypatch.setattr(train_pretrain_module, "ddp_sum", lambda value, device: float(value))
     monkeypatch.setattr(train_pretrain_module, "world_size", lambda: 1)
@@ -221,6 +294,7 @@ def test_train_speed_metrics_log_corrected_mfu_fields(train_pretrain_module, mon
     assert metrics["train/mfu_fp8_scope"] == pytest.approx(metrics["train/fp8_scope_tflops_per_gpu"] / 200.0)
 
 
+@requires_torch
 def test_learning_rate_helpers_start_warmup_at_zero(train_pretrain_module) -> None:
     train_pretrain_module.args = SimpleNamespace(
         learning_rate=1e-4,
@@ -240,7 +314,10 @@ def test_learning_rate_helpers_start_warmup_at_zero(train_pretrain_module) -> No
     assert [group["lr"] for group in train_pretrain_module.optimizer.param_groups] == [0.0, 0.0]
 
 
+@requires_torch
 def test_muon8bit_split_excludes_tied_vocab_and_uses_no_adamw(train_pretrain_module) -> None:
+    import torch
+
     class TinyCausalLm(torch.nn.Module):
         def __init__(self) -> None:
             super().__init__()

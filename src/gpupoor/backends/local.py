@@ -25,7 +25,7 @@ _CONTAINER_RUN_CONFIG_PATH = "/workspace/gpupoor-run-config.toml"
 _CONTAINER_TRAIN_SCRIPT = "/workspace/run-train.sh"
 _CONTAINER_DATA_ROOT = Path("/data")
 _REMOTE_WRAPPER_SERVICE = "minimind-remote-wrapper"
-_REMOTE_WRAPPER_DATASET_PATH = "/workspace/data/datasets/pretrain_t2t_mini"
+_REMOTE_WRAPPER_DATASET_PATH = "/workspace/data/datasets/native_superbpe_1m_rows_max4w/20260503T002359Z"
 _REMOTE_WRAPPER_OUTPUT_DIR = "/workspace/out"
 _REMOTE_WRAPPER_IMAGE_ENV = "REMOTE_WRAPPER_IMAGE"
 _PRETOKENIZED_DATASET_DIR = ("data", "datasets", "pretrain_t2t_mini")
@@ -214,7 +214,7 @@ def _remote_wrapper_env(
 ) -> dict[str, str]:
     settings = dict(remote_settings or {})
     hf_token = settings.get("HF_TOKEN") or _hf_token_env().get("HF_TOKEN", "")
-    return remote_worker_env(
+    runtime_env = remote_worker_env(
         config,
         settings,
         run_config_b64=merged_toml_b64(_remote_wrapper_runtime_config(config)),
@@ -224,6 +224,10 @@ def _remote_wrapper_env(
         connector_env=connector_env,
         hf_dataset_filename_default=_DEFAULT_HF_DATASET_FILENAME,
     )
+    runtime_env.pop("GPUPOOR_RUN_CONFIG", None)
+    if "GPUPOOR_RUN_CONFIG_B64" not in runtime_env:
+        raise RuntimeError("Local-emulator wrapper requires GPUPOOR_RUN_CONFIG_B64")
+    return runtime_env
 
 
 def run_remote_wrapper(
@@ -234,7 +238,6 @@ def run_remote_wrapper(
 ) -> None:
     settings = dict(remote_settings or load_remote_settings(config.remote))
     image_ref = _remote_wrapper_image_ref(config, settings)
-    _ensure_local_emulator_dataset()
     _pull_remote_wrapper_image(image_ref)
     _log_local_training_config_summary(config)
     runtime_env = _remote_wrapper_env(config, connector_env, remote_settings=settings)

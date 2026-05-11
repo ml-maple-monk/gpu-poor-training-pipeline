@@ -13,7 +13,7 @@ from typing import Any
 
 import torch
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).parent.parent
 MINIMIND_SRC = REPO_ROOT / "training" / "src" / "minimind"
 DEFAULT_CONFIG = Path("/tmp/gpupoor-minimind-1m-4096-muon8bit.toml")
 
@@ -89,7 +89,7 @@ def _checkpoint_candidates(save_dir: Path, hidden_size: int) -> list[Path]:
 
 def _resolve_checkpoint(explicit: Path | None, save_dir: str | os.PathLike[str], hidden_size: int) -> Path | None:
     if explicit is not None:
-        return explicit.expanduser().resolve()
+        return explicit.expanduser()
     candidates = _checkpoint_candidates(Path(save_dir).expanduser(), hidden_size)
     return candidates[0] if candidates else None
 

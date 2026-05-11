@@ -180,6 +180,11 @@ DEFAULT_REMOTE_OUTPUT_DIR = _DEFAULTS["remote"]["remote_output_dir"]
 DEFAULT_REMOTE_DATASET_PATH = _DEFAULTS["remote"]["remote_dataset_path"]
 DEFAULT_HF_DATASET_REPO = _DEFAULTS["remote"]["hf_dataset_repo"]
 DEFAULT_HF_PRETOKENIZED_DATASET_FILENAME = _DEFAULTS["remote"]["hf_pretokenized_dataset_filename"]
+DEFAULT_R2_TOKENIZED_DATASET_URI = _DEFAULTS["remote"]["r2_tokenized_dataset_uri"]
+DEFAULT_R2_TOKENIZED_DATASET_MAX_FILES = _DEFAULTS["remote"]["r2_tokenized_dataset_max_files"]
+DEFAULT_R2_TOKENIZED_DATASET_DIR = _DEFAULTS["remote"]["r2_tokenized_dataset_dir"]
+DEFAULT_R2_TOKENIZER_URI = _DEFAULTS["remote"]["r2_tokenizer_uri"]
+DEFAULT_R2_TOKENIZER_DIR = _DEFAULTS["remote"]["r2_tokenizer_dir"]
 
 # Emulator defaults (from defaults.toml)
 DEFAULT_EMULATOR_HEALTH_PORT = _DEFAULTS["emulator"]["health_port"]
@@ -203,6 +208,35 @@ DSTACK_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
 
 class ConfigError(ValueError):
     """Raised for invalid config files."""
+
+
+_DOCKER_HUB_REGISTRIES = {"docker.io", "index.docker.io", "registry-1.docker.io"}
+
+
+def explicit_image_registry(image_base: str) -> str | None:
+    """Return the explicit registry host from an image base, if one is present."""
+    first_component = image_base.split("/", 1)[0].strip().lower()
+    if "." in first_component or ":" in first_component or first_component == "localhost":
+        return first_component
+    return None
+
+
+def validate_dstack_image_base(image_base: str) -> None:
+    """Reject image names known to break dstack's python-dxf manifest lookup."""
+    registry = explicit_image_registry(image_base)
+    if registry == "docker.io":
+        raise ConfigError(
+            "remote.vcr_image_base must not start with docker.io/. "
+            "dstack 0.20.x resolves image manifests through python-dxf, and docker.io redirects "
+            "to Docker's website instead of the registry API. Use an unprefixed Docker Hub image "
+            "such as 'alextay96/gpupoor' or a registry API host such as 'index.docker.io'."
+        )
+
+
+def image_base_requires_registry_auth(image_base: str) -> bool:
+    """Return True when the image base names a non-Docker-Hub registry."""
+    registry = explicit_image_registry(image_base)
+    return registry is not None and registry not in _DOCKER_HUB_REGISTRIES
 
 
 def training_intermediate_size_default(hidden_size: int) -> int:
@@ -356,6 +390,11 @@ class RemoteConfig:
     gpu_count: int | None = None
     spot_policy: str | None = None
     max_price: float | None = None
+    r2_tokenized_dataset_uri: str = DEFAULT_R2_TOKENIZED_DATASET_URI
+    r2_tokenized_dataset_max_files: int = DEFAULT_R2_TOKENIZED_DATASET_MAX_FILES
+    r2_tokenized_dataset_dir: str = DEFAULT_R2_TOKENIZED_DATASET_DIR
+    r2_tokenizer_uri: str = DEFAULT_R2_TOKENIZER_URI
+    r2_tokenizer_dir: str = DEFAULT_R2_TOKENIZER_DIR
 
     def to_env(self) -> dict[str, str]:
         """Return TASK_* env vars for render-pretrain-task.sh.
@@ -377,6 +416,11 @@ class RemoteConfig:
             env["TASK_SPOT_POLICY"] = self.spot_policy
         if self.max_price is not None:
             env["TASK_MAX_PRICE"] = str(self.max_price)
+        env["R2_TOKENIZED_DATASET_URI"] = self.r2_tokenized_dataset_uri
+        env["R2_TOKENIZED_DATASET_MAX_FILES"] = str(self.r2_tokenized_dataset_max_files)
+        env["R2_TOKENIZED_DATASET_DIR"] = self.r2_tokenized_dataset_dir
+        env["R2_TOKENIZER_URI"] = self.r2_tokenizer_uri
+        env["R2_TOKENIZER_DIR"] = self.r2_tokenizer_dir
         return env
 
 
@@ -786,6 +830,11 @@ _KNOWN_REMOTE = {
     "remote_dataset_path",
     "hf_dataset_repo",
     "hf_pretokenized_dataset_filename",
+    "r2_tokenized_dataset_uri",
+    "r2_tokenized_dataset_max_files",
+    "r2_tokenized_dataset_dir",
+    "r2_tokenizer_uri",
+    "r2_tokenizer_dir",
 }
 _KNOWN_SEEKER = {"poll_seconds", "max_offer_age_seconds", "max_submit_retries", "targets"}
 _KNOWN_SEEKER_TARGET = {"backend", "gpu", "count", "mode", "regions", "max_price"}
@@ -1356,7 +1405,26 @@ def load_run_config(path: str | Path) -> RunConfig:
         gpu_count=_optional_int(remote_data, "gpu_count"),
         spot_policy=_optional_str(remote_data, "spot_policy"),
         max_price=_optional_number(remote_data, "max_price"),
+        r2_tokenized_dataset_uri=_require_str(
+            remote_data,
+            "r2_tokenized_dataset_uri",
+            default=DEFAULT_R2_TOKENIZED_DATASET_URI,
+        ),
+        r2_tokenized_dataset_max_files=_require_int(
+            remote_data,
+            "r2_tokenized_dataset_max_files",
+            default=DEFAULT_R2_TOKENIZED_DATASET_MAX_FILES,
+        ),
+        r2_tokenized_dataset_dir=_require_str(
+            remote_data,
+            "r2_tokenized_dataset_dir",
+            default=DEFAULT_R2_TOKENIZED_DATASET_DIR,
+        ),
+        r2_tokenizer_uri=_require_str(remote_data, "r2_tokenizer_uri", default=DEFAULT_R2_TOKENIZER_URI),
+        r2_tokenizer_dir=_require_str(remote_data, "r2_tokenizer_dir", default=DEFAULT_R2_TOKENIZER_DIR),
     )
+    if backend.kind == "dstack":
+        validate_dstack_image_base(remote.vcr_image_base)
     targets_raw = seeker_data.get("targets", [])
     if not isinstance(targets_raw, list):
         raise ConfigError("seeker.targets must be an array of tables when provided")

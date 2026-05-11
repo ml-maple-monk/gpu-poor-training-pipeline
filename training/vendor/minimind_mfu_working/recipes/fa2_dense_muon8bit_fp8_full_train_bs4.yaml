@@ -1,0 +1,75 @@
+name: fa2_dense_muon8bit_fp8_full_train_bs4
+description: Full-scale batch-size 4 baseline training recipe using FA2, dense linears, Muon8Bit with TorchAO AdamW8bit fallback, TorchAO FP8 rowwise training, and MLflow logging.
+model:
+  batch_size: 4
+  sequence_length: 4096
+  hidden_size: 2048
+  num_hidden_layers: 8
+  num_attention_heads: 16
+  num_key_value_heads: 8
+  head_dim: 128
+  intermediate_size: 6496
+  vocab_size: 50014
+  max_position_embeddings: 32768
+  rms_norm_eps: 0.000001
+  rope_theta: 1000000.0
+  dropout: 0.0
+  loss_chunk_size: 1024
+components:
+  attention: flash_attention_2
+  sparsity: dense
+  optimizer: muon8bit_torchao_adamw8bit
+  compile: compile_fullgraph
+  precision: fp8_training
+training:
+  learning_rate: 0.0001
+  weight_decay: 0.2
+  lr_warmup_steps: 2000
+  lr_decay_steps: 20000
+  min_learning_rate: 0.0
+  gradient_accumulation_steps: 16
+  fp8_recipe: rowwise
+  muon_quantization_bound: 127
+  gradient_clip_norm: 1.0
+  skip_nonfinite_gradients: false
+data:
+  tokenized_parquet_data: data/tokenized_parquet/native_superbpe_1m_rows_max4w_20260503T002359Z
+  tokenizer: data/tokenizers/native_superbpe_1m_rows_max4w
+  token_ids_column: token_ids
+  parquet_read_batch_rows: 8192
+  shuffle_buffer_size: 8192
+  shuffle_seed: 42
+  shuffle_files: true
+  train_split: train
+  validation_split: train
+  batch_size: 4
+  eval_batch_size: 4
+  tokenizer_batch_size: 256
+  dataloader_num_workers: 8
+  dataloader_prefetch_factor: 4
+  dataloader_pin_memory: true
+  dataloader_persistent_workers: true
+runtime:
+  max_steps: 20000
+  seed: 7
+  device: cuda
+  dtype: bfloat16
+  compile_fullgraph: true
+  data_source: tokenized_parquet
+  scheduler: linear_warmup_decay
+  stepper: clip_grad_norm
+  metric_sinks:
+    - jsonl_stdout
+    - mlflow
+logging:
+  eval_every: 0
+  save_every: 500
+  log_every: 10
+  perf_every: 10
+  measure_mfu: false
+  no_mlflow: false
+  mlflow_tracking_uri: http://localhost:5000
+  mlflow_experiment_name: minimind-mfu-working
+  mlflow_run_name: fa2-muon8bit-fp8-full-train-bs4-ga16-20000-lr1e-4-wd02
+  mlflow_upload_artifacts: false
+  mlflow_system_metrics: true

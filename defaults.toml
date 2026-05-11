@@ -134,6 +134,11 @@ remote_output_dir = "/workspace/out"
 remote_dataset_path = "/workspace/data/datasets/native_superbpe_1m_rows_max4w/20260503T002359Z"
 hf_dataset_repo = "jingyaogong/minimind_dataset"
 hf_pretokenized_dataset_filename = "pretokenized/pretrain_t2t_mini.tar.gz"
+r2_tokenized_dataset_uri = "s3://gpu-poor/dataset/processed/tokenized/native-superbpe-1m-rows-max4w/20260503T002359Z"
+r2_tokenized_dataset_max_files = 8
+r2_tokenized_dataset_dir = "/workspace/data/datasets/native_superbpe_1m_rows_max4w/20260503T002359Z"
+r2_tokenizer_uri = "s3://gpu-poor/dataset/processed/tokenized/native-superbpe-1m-rows-max4w/20260503T002359Z/control/tokenizer.json"
+r2_tokenizer_dir = "/workspace/data/tokenizers/native_superbpe_1m_rows_max4w"
 
 [seeker]
 poll_seconds = 30

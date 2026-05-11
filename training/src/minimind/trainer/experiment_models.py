@@ -1,4 +1,5 @@
 # WARNING TO OTHER AGENTS: DO NOT CHANGE THIS ABSTRACTION WITHOUT EXPLICIT USER APPROVAL.
+# All concrete code must follow this abstraction; do not modify this code unless explicitly asked.
 """Dataclass contracts for MiniMind MFU ablation experiments."""
 
 from __future__ import annotations

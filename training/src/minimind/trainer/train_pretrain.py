@@ -31,6 +31,9 @@ from trainer._benchmark_metrics import (
     should_log_dense_flops,
     world_size,
 )
+from trainer.core.executor import PretrainExecutor
+from trainer.core.models import SubmissionContext
+from trainer.core.submission import LocalTrainerSubmission
 from trainer.mlflow_logger import MlflowLogger
 from trainer.pretrain_config import (
     apply_dataset_environment,
@@ -1172,10 +1175,20 @@ def main():
         print("usage: train_pretrain.py <config.toml>", file=sys.stderr)
         raise SystemExit(2)
 
-    runtime_args = runtime_args_from_toml(sys.argv[1], cuda_available=torch.cuda.is_available())
-    apply_dataset_environment(runtime_args)
     try:
-        run_training(runtime_args)
+        submission = LocalTrainerSubmission(
+            context=SubmissionContext(
+                config_path=Path(sys.argv[1]),
+                cuda_available=torch.cuda.is_available(),
+            ),
+            load_runtime_args=lambda path, cuda_available: runtime_args_from_toml(
+                path,
+                cuda_available=cuda_available,
+            ),
+            apply_environment=apply_dataset_environment,
+            executor=PretrainExecutor(run_training),
+        )
+        submission.submit()
     except Exception:
         if is_main_process():
             mlflow_logger.finish(status="FAILED")

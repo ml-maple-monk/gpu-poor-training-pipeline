@@ -14,12 +14,16 @@ from gpupoor.backends.local import run_remote_wrapper as run_local_emulator
 from gpupoor.config import (
     RemoteConfig,
     RunConfig,
+    explicit_image_registry,
+    image_base_requires_registry_auth,
     load_remote_settings,
     load_run_config,
     normalize_backend_name,
     require_remote_settings,
+    validate_dstack_image_base,
 )
 from gpupoor.services import mlflow as mlflow_service
+from gpupoor.services import portable_mlflow
 from gpupoor.utils import repo_path
 from gpupoor.utils.http import http_ok
 from gpupoor.utils.logging import get_logger
@@ -101,31 +105,42 @@ class ConnectionBundle:
 class ConnectorRuntime:
     """Owns launch-time connector readiness and bundle construction."""
 
+    def _portable_remote_bundle(
+        self,
+        config: RunConfig,
+        *,
+        artifact_upload_requested: bool,
+        health_verdict: str,
+    ) -> ConnectionBundle:
+        r2_env = connector_service.read_r2_env()
+        artifact_env = connector_service.runtime_artifact_env()
+        artifact_store_kind = connector_service.artifact_store_kind()
+        portable_runtime = portable_mlflow.runtime_from_artifact_env(
+            run_name=config.name,
+            artifact_env=r2_env,
+        )
+        return ConnectionBundle(
+            mlflow_tracking_uri=portable_runtime.tracking_uri,
+            artifact_upload_enabled=artifact_upload_requested,
+            artifact_store_kind=artifact_store_kind,
+            health_verdict=health_verdict,
+            artifact_transport_mode=portable_mlflow.ARTIFACT_MODE_PORTABLE,
+            artifact_runtime_env={
+                **artifact_env,
+                **portable_runtime.to_env(),
+                "GPUPOOR_CONNECTOR_ARTIFACT_STORE": artifact_store_kind,
+            },
+        )
+
     def ensure_remote_runtime(self, config: RunConfig) -> ConnectionBundle:
-        mlflow_service.ensure_runtime(config.remote.mlflow_health_url)
-        payload = connector_service.status_payload()
-        if not payload.get("remote_mlflow_ready", False):
-            mlflow_service.tunnel()
         payload = connector_service.status_payload()
         blockers = connector_service.remote_runtime_blockers(payload)
         if blockers:
             raise RuntimeError("Connector remote lane is not ready: " + "; ".join(blockers))
-        tracking_uri = str(payload.get("tracking_uri") or connector_service.stable_tracking_uri())
-        if connector_service.is_quick_tunnel_uri(tracking_uri):
-            log.warning(
-                "Quick tunnel MLflow bootstrap is active at %s; the URL is ephemeral and "
-                "MLflow metrics can stop flowing if the tunnel dies mid-run.",
-                tracking_uri,
-            )
-        return ConnectionBundle(
-            mlflow_tracking_uri=tracking_uri,
-            artifact_upload_enabled=config.mlflow.artifact_upload,
-            artifact_store_kind=str(payload.get("artifact_store_kind", connector_service.artifact_store_kind())),
+        return self._portable_remote_bundle(
+            config,
+            artifact_upload_requested=config.mlflow.artifact_upload,
             health_verdict=HEALTH_OK,
-            artifact_transport_mode=str(
-                payload.get("artifact_transport_mode", connector_service.artifact_transport_mode())
-            ),
-            artifact_runtime_env=connector_service.runtime_artifact_env(),
         )
 
     def ensure_local_debug_runtime(self, config: RunConfig) -> ConnectionBundle:
@@ -161,18 +176,14 @@ class ConnectorRuntime:
             )
         if request.lane != LANE_REMOTE:
             raise RuntimeError(f"Unsupported connector lane: {request.lane}")
-        if ensure_ready:
-            return self.ensure_remote_runtime(config)
         payload = connector_service.status_payload()
-        return ConnectionBundle(
-            mlflow_tracking_uri=str(payload.get("tracking_uri") or connector_service.stable_tracking_uri()),
-            artifact_upload_enabled=request.artifact_upload_requested,
-            artifact_store_kind=str(payload.get("artifact_store_kind", connector_service.artifact_store_kind())),
-            health_verdict=HEALTH_OK if not connector_service.remote_runtime_blockers(payload) else "degraded",
-            artifact_transport_mode=str(
-                payload.get("artifact_transport_mode", connector_service.artifact_transport_mode())
-            ),
-            artifact_runtime_env=connector_service.runtime_artifact_env(),
+        blockers = connector_service.remote_runtime_blockers(payload)
+        if ensure_ready and blockers:
+            raise RuntimeError("Connector remote lane is not ready: " + "; ".join(blockers))
+        return self._portable_remote_bundle(
+            config,
+            artifact_upload_requested=request.artifact_upload_requested,
+            health_verdict=HEALTH_OK if not blockers else "degraded",
         )
 
 
@@ -199,6 +210,11 @@ def _truthy_env(name: str) -> bool:
 
 def _enforce_remote_artifact_guardrails(config: RunConfig, bundle: ConnectionBundle) -> None:
     if not bundle.artifact_upload_enabled:
+        return
+
+    if bundle.artifact_transport_mode == portable_mlflow.ARTIFACT_MODE_PORTABLE:
+        if not bundle.artifact_runtime_env.get("MLFLOW_BUNDLE_SYNC_URI"):
+            raise RuntimeError("artifact_upload=true requires a portable MLflow bundle sync URI backed by R2")
         return
 
     quick_tunnel_active = connector_service.is_quick_tunnel_uri(bundle.mlflow_tracking_uri)
@@ -388,12 +404,16 @@ def default_launch_orchestrator() -> LaunchOrchestrator:
 def validate_remote_registry_auth(remote: RemoteConfig) -> None:
     settings = load_remote_settings(remote)
     image_base = settings["VCR_IMAGE_BASE"]
+    validate_dstack_image_base(image_base)
+    if not image_base_requires_registry_auth(image_base):
+        return
     registry = settings.get("VCR_LOGIN_REGISTRY", "").strip()
     env_file = repo_path(remote.env_file)
     if not registry:
+        default_registry = explicit_image_registry(image_base) or "<registry>"
         raise RuntimeError(
             f"Remote registry login target is missing for {image_base}. "
-            f"Set VCR_LOGIN_REGISTRY via env vars or {env_file}."
+            f"Set VCR_LOGIN_REGISTRY={default_registry} via TOML or {env_file}."
         )
     try:
         require_remote_settings(settings)

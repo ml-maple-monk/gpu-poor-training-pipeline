@@ -39,6 +39,11 @@ env:
   - HF_DATASET_FILENAME=pretrain_t2t_mini.jsonl
   - HF_PRETOKENIZED_DATASET_REPO=jingyaogong/minimind_dataset
   - HF_PRETOKENIZED_DATASET_FILENAME=pretokenized/pretrain_t2t_mini.tar.gz
+  - R2_TOKENIZED_DATASET_URI=s3://gpu-poor/dataset/processed/tokenized/native-superbpe-1m-rows-max4w/20260503T002359Z
+  - R2_TOKENIZED_DATASET_MAX_FILES=8
+  - R2_TOKENIZED_DATASET_DIR=/workspace/data/datasets/native_superbpe_1m_rows_max4w/20260503T002359Z
+  - R2_TOKENIZER_URI=s3://gpu-poor/dataset/processed/tokenized/native-superbpe-1m-rows-max4w/20260503T002359Z/control/tokenizer.json
+  - R2_TOKENIZER_DIR=/workspace/data/tokenizers/native_superbpe_1m_rows_max4w
   - VALIDATION_SPLIT_RATIO=0.0
   - VALIDATION_INTERVAL_STEPS=0
 

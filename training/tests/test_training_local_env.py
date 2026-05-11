@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import runpy
+
 import pytest
 
 
@@ -78,10 +80,13 @@ def test_local_backend_passes_dynamic_env_on_compose_run(repo_text, expected_fra
         ("training", "scripts", "remote-entrypoint.sh"),
     ],
 )
-def test_training_wrappers_invoke_train_pretrain_via_python(repo_text, script_path) -> None:
+def test_training_wrappers_invoke_expected_training_entrypoint(repo_text, script_path) -> None:
     script = repo_text(*script_path)
 
-    assert "python3 train_pretrain.py" in script
+    if script_path[-1] == "remote-entrypoint.sh":
+        assert "run-vendor-minimind.py" in script
+    else:
+        assert "python3 train_pretrain.py" in script
 
 
 @pytest.mark.parametrize(
@@ -101,3 +106,43 @@ def test_local_training_wrapper_fails_fast_on_loader_errors(repo_text) -> None:
     script = repo_text("training", "scripts", "run-train.sh")
 
     assert "set -euo pipefail" in script
+
+
+def test_vendor_minimind_adapter_supplies_required_explicit_config(repo_path, tmp_path) -> None:
+    module_path = repo_path("training", "scripts", "run-vendor-minimind.py")
+    module = runpy.run_path(str(module_path), run_name="run_vendor_minimind")
+    config_path = tmp_path / "smoke.toml"
+    config_path.write_text(
+        """
+[recipe]
+max_seq_len = 64
+
+[training]
+max_steps = 1
+batch_size = 1
+num_workers = 0
+
+[dataset]
+shuffle_seed = 123
+
+[mlflow]
+experiment_name = "smoke"
+""",
+        encoding="utf-8",
+    )
+
+    command = module["trainer_command"](
+        config_path,
+        dataset_dir=tmp_path / "dataset",
+        tokenizer_dir=tmp_path / "tokenizer",
+        output_dir=tmp_path / "out",
+    )
+
+    assert "--token-ids-column" in command
+    assert command[command.index("--token-ids-column") + 1] == "token_ids"
+    assert "--tokenizer-batch-size" in command
+    assert "--dataloader-prefetch-factor" in command
+    assert "--seed" in command
+    assert command[command.index("--seed") + 1] == "123"
+    assert "--stepper" in command
+    assert command[command.index("--stepper") + 1] == "default"

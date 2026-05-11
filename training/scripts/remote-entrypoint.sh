@@ -6,8 +6,8 @@
 #
 # Responsibilities:
 #   1. Print a diagnostic banner
-#   2. Ensure dataset is present (download from HF if missing)
-#   3. Exec train_pretrain.py with the TOML config
+#   2. Pull a bounded tokenized parquet slice from R2
+#   3. Run the vendored MiniMind trainer through the TOML adapter
 
 set -euo pipefail
 
@@ -26,22 +26,18 @@ if [ ! -f "$RUN_CONFIG_FILE" ]; then
 fi
 
 DATA_DIR="/workspace/data/datasets"
-RAW_DATASET_FILE="$DATA_DIR/pretrain_t2t_mini.jsonl"
-DATASET_FILE="$RAW_DATASET_FILE"
-TOKENIZED_DATASET_DIR="$DATA_DIR/pretrain_t2t_mini"
-DATASET_MIN_BYTES=524288000  # 500 MB loose lower bound
-PRETOKENIZED_ARCHIVE_FILE="${PRETOKENIZED_ARCHIVE_FILE:-$DATA_DIR/pretrain_t2t_mini.tar.gz}"
 OUT_DIR="${OUT_DIR:-/workspace/out}"
-HF_DATASET_REPO="${HF_DATASET_REPO:-jingyaogong/minimind_dataset}"
-HF_DATASET_FILENAME="${HF_DATASET_FILENAME:-pretrain_t2t_mini.jsonl}"
-HF_PRETOKENIZED_DATASET_REPO="${HF_PRETOKENIZED_DATASET_REPO:-$HF_DATASET_REPO}"
-HF_PRETOKENIZED_DATASET_FILENAME="${HF_PRETOKENIZED_DATASET_FILENAME:-pretokenized/pretrain_t2t_mini.tar.gz}"
-HF_PRETOKENIZED_DATASET_MIN_BYTES="${HF_PRETOKENIZED_DATASET_MIN_BYTES:-1048576}"
-HF_BOOTSTRAP_HELPER="/opt/training/scripts/lib/hf-dataset-bootstrap.sh"
-PRETOKENIZE_SCRIPT="/opt/training/scripts/pretokenize-data.sh"
+R2_TOKENIZED_DATASET_URI="${R2_TOKENIZED_DATASET_URI:-s3://gpu-poor/dataset/processed/tokenized/native-superbpe-1m-rows-max4w/20260503T002359Z}"
+R2_TOKENIZED_DATASET_MAX_FILES="${R2_TOKENIZED_DATASET_MAX_FILES:-8}"
+R2_TOKENIZED_DATASET_DIR="${R2_TOKENIZED_DATASET_DIR:-/workspace/data/datasets/native_superbpe_1m_rows_max4w/20260503T002359Z}"
+R2_TOKENIZER_URI="${R2_TOKENIZER_URI:-s3://gpu-poor/dataset/processed/tokenized/native-superbpe-1m-rows-max4w/20260503T002359Z/control/tokenizer.json}"
+R2_TOKENIZER_DIR="${R2_TOKENIZER_DIR:-/workspace/data/tokenizers/native_superbpe_1m_rows_max4w}"
+PORTABLE_MLFLOW_HELPER="/opt/training/scripts/lib/portable-mlflow.sh"
+R2_DATASET_PULL_SCRIPT="/opt/training/scripts/pull-r2-tokenized-dataset.py"
+VENDOR_MINIMIND_RUNNER="/opt/training/scripts/run-vendor-minimind.py"
 
 mapfile -t RUN_CONFIG_VALUES < <(
-    python3 - "$RUN_CONFIG_FILE" "$TOKENIZED_DATASET_DIR" <<'PY'
+    python3 - "$RUN_CONFIG_FILE" "$R2_TOKENIZED_DATASET_DIR" <<'PY'
 try:
     import tomllib
 except ModuleNotFoundError:
@@ -68,24 +64,32 @@ RESOLVED_MLFLOW_EXPERIMENT_NAME="${RUN_CONFIG_VALUES[1]}"
 RESOLVED_MLFLOW_ARTIFACT_UPLOAD="${RUN_CONFIG_VALUES[2]}"
 TOML_DATASET_PATH="${RUN_CONFIG_VALUES[3]}"
 
-if [ ! -f "$HF_BOOTSTRAP_HELPER" ]; then
-    echo "[remote-entrypoint] ERROR: $HF_BOOTSTRAP_HELPER not found — image is missing shared dataset bootstrap helper" >&2
+if [ ! -f "$PORTABLE_MLFLOW_HELPER" ]; then
+    echo "[remote-entrypoint] ERROR: $PORTABLE_MLFLOW_HELPER not found — image is missing portable MLflow helper" >&2
     exit 1
 fi
 
-if [ ! -f "$PRETOKENIZE_SCRIPT" ]; then
-    echo "[remote-entrypoint] ERROR: $PRETOKENIZE_SCRIPT not found — image is missing the pretokenization helper" >&2
+if [ ! -f "$R2_DATASET_PULL_SCRIPT" ]; then
+    echo "[remote-entrypoint] ERROR: $R2_DATASET_PULL_SCRIPT not found — image is missing R2 dataset puller" >&2
+    exit 1
+fi
+
+if [ ! -f "$VENDOR_MINIMIND_RUNNER" ]; then
+    echo "[remote-entrypoint] ERROR: $VENDOR_MINIMIND_RUNNER not found — image is missing vendored trainer adapter" >&2
     exit 1
 fi
 
 # shellcheck source=/dev/null
-. "$HF_BOOTSTRAP_HELPER"
+. "$PORTABLE_MLFLOW_HELPER"
 
 # ── Banner ────────────────────────────────────────────────────────────────────
 echo "================================================================"
 echo "[remote-entrypoint] Verda/dstack remote training container"
 echo "================================================================"
 echo "  MLFLOW_TRACKING_URI      = ${MLFLOW_TRACKING_URI:-<not set>}"
+echo "  GPUPOOR_PORTABLE_MLFLOW  = ${GPUPOOR_PORTABLE_MLFLOW:-0}"
+echo "  MLFLOW_BUNDLE_DIR        = ${MLFLOW_BUNDLE_DIR:-/workspace/mlflow-bundle}"
+echo "  MLFLOW_BUNDLE_SYNC_URI   = ${MLFLOW_BUNDLE_SYNC_URI:-<not set>}"
 echo "  MLFLOW_EXPERIMENT_NAME   = ${RESOLVED_MLFLOW_EXPERIMENT_NAME}"
 echo "  MLFLOW_ARTIFACT_UPLOAD   = ${RESOLVED_MLFLOW_ARTIFACT_UPLOAD}"
 echo "  ARTIFACT_TRANSPORT_MODE  = ${GPUPOOR_CONNECTOR_ARTIFACT_MODE:-<not set>}"
@@ -94,9 +98,11 @@ echo "  AWS_ACCESS_KEY_ID        = $( [ -n \"${AWS_ACCESS_KEY_ID:-}\" ] && print
 echo "  AWS_SESSION_TOKEN        = $( [ -n \"${AWS_SESSION_TOKEN:-}\" ] && printf 'set' || printf 'not set' )"
 echo "  VERDA_PROFILE            = ${VERDA_PROFILE:-remote}"
 echo "  DSTACK_RUN_NAME          = ${DSTACK_RUN_NAME:-<not set>}"
-echo "  HF_TOKEN                 = ${HF_TOKEN:+set (${#HF_TOKEN} chars)}"
 echo "  DATA_DIR                 = $DATA_DIR"
-echo "  HF_PRETOKENIZED_DATASET  = ${HF_PRETOKENIZED_DATASET_REPO}/${HF_PRETOKENIZED_DATASET_FILENAME}"
+echo "  R2_TOKENIZED_DATASET_URI = $R2_TOKENIZED_DATASET_URI"
+echo "  R2_TOKENIZED_MAX_FILES   = $R2_TOKENIZED_DATASET_MAX_FILES"
+echo "  R2_TOKENIZED_DATASET_DIR = $R2_TOKENIZED_DATASET_DIR"
+echo "  R2_TOKENIZER_DIR         = $R2_TOKENIZER_DIR"
 echo "  OUT_DIR                  = $OUT_DIR"
 echo "  TIME_CAP_SECONDS         = $TIME_CAP_SECONDS"
 echo "  RUN_CONFIG_FILE          = $RUN_CONFIG_FILE"
@@ -111,73 +117,71 @@ if [ -s /root/.ssh/authorized_keys ]; then
 fi
 
 # ── Prepare directories ───────────────────────────────────────────────────────
-mkdir -p "$DATA_DIR" "$OUT_DIR"
+mkdir -p "$DATA_DIR" "$OUT_DIR" "$R2_TOKENIZED_DATASET_DIR" "$R2_TOKENIZER_DIR"
 
-download_pretokenized_dataset() {
-    if [ -f "$TOKENIZED_DATASET_DIR/metadata.json" ] && [ -f "$TOKENIZED_DATASET_DIR/tokens.bin" ] && [ -f "$TOKENIZED_DATASET_DIR/index.bin" ]; then
-        echo "[remote-entrypoint] Pretokenized dataset already present at $TOKENIZED_DATASET_DIR"
-        return 0
-    fi
-
-    if ! hf_dataset_download_to_path \
-        "$HF_PRETOKENIZED_DATASET_REPO" \
-        "$HF_PRETOKENIZED_DATASET_FILENAME" \
-        "$PRETOKENIZED_ARCHIVE_FILE" \
-        "$HF_PRETOKENIZED_DATASET_MIN_BYTES" \
-        "[remote-entrypoint]"
-    then
-        return 1
-    fi
-
-    rm -rf "$TOKENIZED_DATASET_DIR"
-    mkdir -p "$TOKENIZED_DATASET_DIR"
-    tar -xzf "$PRETOKENIZED_ARCHIVE_FILE" -C "$TOKENIZED_DATASET_DIR"
-
-    for required in metadata.json tokens.bin index.bin; do
-        if [ ! -f "$TOKENIZED_DATASET_DIR/$required" ]; then
-            echo "[remote-entrypoint] ERROR: extracted pretokenized dataset is missing $required" >&2
-            return 1
-        fi
-    done
-
-    echo "[remote-entrypoint] Reused pretokenized dataset from HF artifact"
-}
-
-# ── Dataset bootstrap (shared with local emulator) ───────────────────────────
-if ! download_pretokenized_dataset; then
-    echo "[remote-entrypoint] Pretokenized artifact unavailable — falling back to raw dataset bootstrap"
-    HF_BOOTSTRAP_LOG_PREFIX="[remote-entrypoint]"
-    if ! hf_dataset_bootstrap; then
-        exit 1
-    fi
-
-    echo "[remote-entrypoint] Pretokenizing dataset ..."
-    bash "$PRETOKENIZE_SCRIPT" "$RAW_DATASET_FILE" "$TOKENIZED_DATASET_DIR"
-fi
+# ── Dataset bootstrap ────────────────────────────────────────────────────────
+python3 "$R2_DATASET_PULL_SCRIPT" \
+    --dataset-uri "$R2_TOKENIZED_DATASET_URI" \
+    --output-dir "$R2_TOKENIZED_DATASET_DIR" \
+    --tokenizer-uri "$R2_TOKENIZER_URI" \
+    --tokenizer-dir "$R2_TOKENIZER_DIR" \
+    --max-files "$R2_TOKENIZED_DATASET_MAX_FILES"
 
 # ── Early dataset validation ──────────────────────────────────────────────────
 echo "[remote-entrypoint] TOML dataset_path = $TOML_DATASET_PATH"
-echo "[remote-entrypoint] Baked dataset dir = $TOKENIZED_DATASET_DIR"
-if [ -d "$TOML_DATASET_PATH" ]; then
-    echo "[remote-entrypoint] Dataset OK: $(ls "$TOML_DATASET_PATH" | tr '\n' ' ')"
-elif [ -d "$TOKENIZED_DATASET_DIR" ]; then
-    echo "[remote-entrypoint] WARNING: TOML path '$TOML_DATASET_PATH' not found, but baked dataset exists at $TOKENIZED_DATASET_DIR"
-    echo "[remote-entrypoint] Contents: $(ls "$TOKENIZED_DATASET_DIR" | tr '\n' ' ')"
+echo "[remote-entrypoint] R2 dataset dir = $R2_TOKENIZED_DATASET_DIR"
+if compgen -G "$R2_TOKENIZED_DATASET_DIR/parts/*.parquet" > /dev/null; then
+    echo "[remote-entrypoint] Dataset OK: $(find "$R2_TOKENIZED_DATASET_DIR/parts" -maxdepth 1 -name '*.parquet' | wc -l) parquet part(s)"
 else
-    echo "[remote-entrypoint] ERROR: No dataset found at '$TOML_DATASET_PATH' or '$TOKENIZED_DATASET_DIR'"
+    echo "[remote-entrypoint] ERROR: No parquet parts found under '$R2_TOKENIZED_DATASET_DIR/parts'"
     echo "[remote-entrypoint] Available dirs:" && find /workspace/data -type d 2>/dev/null || true
+    exit 1
+fi
+if [ ! -f "$R2_TOKENIZER_DIR/tokenizer.json" ]; then
+    echo "[remote-entrypoint] ERROR: tokenizer missing at '$R2_TOKENIZER_DIR/tokenizer.json'" >&2
     exit 1
 fi
 
 # ── Launch training ───────────────────────────────────────────────────────────
-echo "[remote-entrypoint] Starting train_pretrain.py ..."
-cd /opt/training/minimind/trainer
+echo "[remote-entrypoint] Starting vendored MiniMind trainer ..."
+cd /opt/training/vendor/minimind_mfu_working
+
+PORTABLE_MLFLOW_STARTED=0
+cleanup_portable_mlflow() {
+    local cleanup_rc=$?
+    if [ "$PORTABLE_MLFLOW_STARTED" -eq 1 ]; then
+        set +e
+        portable_mlflow_finalize "$cleanup_rc"
+        cleanup_rc=$?
+        set -e
+        PORTABLE_MLFLOW_STARTED=0
+    fi
+    exit "$cleanup_rc"
+}
+trap cleanup_portable_mlflow EXIT
+
+PORTABLE_MLFLOW_STARTED=1
+portable_mlflow_start
 
 set +e
 timeout --signal=SIGTERM --kill-after=30 "${TIME_CAP_SECONDS}" \
-    python3 train_pretrain.py "$RUN_CONFIG_FILE"
+    python3 "$VENDOR_MINIMIND_RUNNER" \
+        "$RUN_CONFIG_FILE" \
+        --dataset-dir "$R2_TOKENIZED_DATASET_DIR" \
+        --tokenizer-dir "$R2_TOKENIZER_DIR" \
+        --output-dir "$OUT_DIR"
 RC=$?
 set -e
+
+set +e
+portable_mlflow_finalize "$RC"
+FINALIZE_RC=$?
+set -e
+PORTABLE_MLFLOW_STARTED=0
+trap - EXIT
+if [ "$FINALIZE_RC" -ne "$RC" ]; then
+    RC="$FINALIZE_RC"
+fi
 
 echo "[remote-entrypoint] End UTC: $(date -u -Iseconds)"
 echo "[remote-entrypoint] Training exit code: $RC  (124 = reached ${TIME_CAP_SECONDS}s cap)"

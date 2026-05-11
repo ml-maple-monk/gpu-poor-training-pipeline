@@ -1,122 +1,86 @@
 flowchart LR
-    classDef surface fill:#e0f2fe,stroke:#0284c7,color:#0f172a,stroke-width:1.5px;
-    classDef contract fill:#fef3c7,stroke:#d97706,color:#111827,stroke-width:1.5px;
-    classDef control fill:#dcfce7,stroke:#16a34a,color:#111827,stroke-width:1.5px;
-    classDef exec fill:#ede9fe,stroke:#7c3aed,color:#111827,stroke-width:1.5px;
-    classDef state fill:#fee2e2,stroke:#dc2626,color:#111827,stroke-width:1.5px;
+    classDef config fill:#fef3c7,stroke:#d97706,color:#111827,stroke-width:1.5px;
+    classDef orchestration fill:#e0f2fe,stroke:#0284c7,color:#0f172a,stroke-width:1.5px;
+    classDef trainer fill:#dcfce7,stroke:#16a34a,color:#111827,stroke-width:1.5px;
+    classDef concrete fill:#ede9fe,stroke:#7c3aed,color:#111827,stroke-width:1.5px;
     classDef external fill:#f3f4f6,stroke:#4b5563,color:#111827,stroke-width:1.5px;
 
-    subgraph Entry["Entry Surfaces"]
-        direction TB
-        DEV["Developer / Operator"]
-        WRAPPERS["run.sh + Makefile"]
-        CLI["gpupoor CLI<br/>src/gpupoor/cli.py"]
+    TOML["TOML config<br/>examples/*.toml + defaults.toml"]
+    RUNCONFIG["RunConfig dataclasses<br/>src/gpupoor/config.py"]
+
+    subgraph Orchestration["src/gpupoor orchestration"]
+        CLI["gpupoor CLI"]
+        DEPLOYER["deployer.py<br/>launch gates + connector readiness"]
+        LOCAL["backends/local.py<br/>local process/container submission"]
+        DSTACK["backends/dstack.py<br/>dstack policy + render/apply"]
+        CONNECTOR["connector.py<br/>R2 readiness + artifact env"]
+        PORTABLE["services/portable_mlflow.py<br/>bundle runtime env"]
     end
 
-    subgraph Control["Control Plane + Contracts"]
-        direction TB
-        CFG["config.py<br/>TOML to RunConfig<br/>merged TOML + base64 payload"]
-        REQ["Launch contracts<br/>DeploymentRequest<br/>ConnectionProfileRequest<br/>ConnectionBundle"]
-        OPS["ops<br/>preflight + repo checks"]
-        SEEKER["services/seeker.py<br/>queue daemon + offer matching"]
-        DEPLOYER["deployer.py<br/>remote/local deployment gates"]
-        CONNECTOR["connector.py<br/>MLflow + tunnel + R2 readiness"]
-        MLFSVC["services/mlflow.py<br/>compose + tunnel control"]
-        EMUSVC["services/emulator.py<br/>local emulator control"]
+    subgraph TrainerCore["training/src/minimind/trainer/core"]
+        SUBMISSION["submission.submit()"]
+        EXECUTOR["executor.run()"]
+        OBS["observability helpers"]
+        OPS["ops helpers"]
     end
 
-    subgraph State["State + Sidecars"]
-        direction TB
-        SEEKERSTATE["data/seeker/<br/>queue.json<br/>latest_offers.json<br/>attempts.jsonl"]
-        CONNSTATE["capacity-seeker/<br/>.connector.json<br/>.env.connector<br/>.env.r2"]
-        TUNSTATE["repo sidecars<br/>.cf-tunnel.url / .pid<br/>.run-ids / .dstack-server.log"]
-        BUILDSTATE["generated task + cache<br/>.tmp/*<br/>remote-image-tag.json"]
+    subgraph MiniMind["Concrete MiniMind implementation"]
+        TRAIN["train_pretrain.py"]
+        VENDOR["vendor/minimind_mfu_working<br/>remote minimind-train"]
+        CONFIG["pretrain_config.py<br/>merged TOML adapter"]
+        DATA["dataset + collator"]
+        MODEL["model graph"]
+        METRICS["MLflow + MFU + checkpoint code"]
     end
 
-    subgraph Execute["Execution + Training"]
-        direction TB
-        LOCAL["backends/local.py<br/>compose run_training()"]
-        DSTACK["backends/dstack.py<br/>offers + render + apply + track"]
-        TRAIN["training/scripts<br/>prepare-data / build-push<br/>remote-entrypoint / run-train"]
-        MINIMIND["training/src/minimind<br/>trainer runtime"]
-        IMAGES["training/docker + compose<br/>base / train / remote images"]
-        REMOTERUN["Remote dstack task<br/>GPU container runtime"]
+    subgraph External["External systems"]
+        DSTACKSYS["dstack server + GPU providers"]
+        DOCKER["Docker / registry"]
+        MLFLOW["Portable MLflow bundle<br/>SQLite + artifacts"]
+        HF["Hugging Face datasets"]
+        R2["R2 / S3 artifacts + tokenized parquet"]
     end
 
-    subgraph External["External Systems"]
-        direction TB
-        DOCKER["Docker engine / compose"]
-        DSTACKSYS["dstack CLI + local server"]
-        CF["Cloudflare Tunnel + DNS"]
-        MLFLOW["MLflow service"]
-        R2["Cloudflare R2 / S3"]
-        HF["Hugging Face"]
-        GPUFLEET["Remote GPU providers"]
-    end
+    TOML --> RUNCONFIG
+    CLI --> RUNCONFIG
+    RUNCONFIG --> DEPLOYER
+    RUNCONFIG --> LOCAL
+    RUNCONFIG --> DSTACK
 
-    DEV --> WRAPPERS
-    DEV --> CLI
-    WRAPPERS --> CLI
-
-    CLI --> CFG
-    CLI --> OPS
-    CLI --> SEEKER
-    CLI --> DEPLOYER
-    CLI --> CONNECTOR
-    CLI --> MLFSVC
-    CLI --> EMUSVC
-
-    CFG --> SEEKER
-    CFG --> DEPLOYER
-    CFG --> CONNECTOR
-
-    SEEKER --> SEEKERSTATE
-    SEEKER -- "targeted offers" --> DSTACK
-    SEEKER -- "DeploymentRequest" --> DEPLOYER
-
-    DEPLOYER --> REQ
-    CONNECTOR --> REQ
-    DEPLOYER -- "ConnectionProfileRequest" --> CONNECTOR
-    CONNECTOR -- "ConnectionBundle" --> DEPLOYER
+    DEPLOYER --> CONNECTOR
+    DEPLOYER --> PORTABLE
     DEPLOYER --> LOCAL
     DEPLOYER --> DSTACK
 
-    CFG -- "GPUPOOR_RUN_CONFIG" --> LOCAL
-    CFG -- "GPUPOOR_RUN_CONFIG_B64" --> DSTACK
+    LOCAL --> SUBMISSION
+    DSTACK --> SUBMISSION
+    DSTACK --> MLFLOW
+    SUBMISSION --> EXECUTOR
+    EXECUTOR --> OBS
+    EXECUTOR --> OPS
+    EXECUTOR --> TRAIN
+    DSTACK --> VENDOR
 
-    CONNECTOR --> CONNSTATE
-    CONNECTOR --> TUNSTATE
-    CONNECTOR --> MLFSVC
-    CONNECTOR --> CF
-    CONNECTOR --> R2
+    TRAIN --> CONFIG
+    TRAIN --> DATA
+    TRAIN --> MODEL
+    TRAIN --> METRICS
+    VENDOR --> DATA
+    VENDOR --> MODEL
+    VENDOR --> METRICS
+    DATA --> HF
+    DATA --> R2
+    METRICS --> MLFLOW
+    METRICS --> R2
 
-    MLFSVC --> DOCKER
-    MLFSVC --> MLFLOW
-    MLFSVC -- "run-tunnel.sh" --> CF
-
-    EMUSVC --> DOCKER
-
-    LOCAL --> DOCKER
-    LOCAL --> TRAIN
-
-    DSTACK --> BUILDSTATE
     DSTACK --> DSTACKSYS
-    DSTACK --> TRAIN
-    DSTACKSYS --> GPUFLEET
-    GPUFLEET --> REMOTERUN
-    REMOTERUN --> TRAIN
+    DSTACK --> DOCKER
+    PORTABLE --> MLFLOW
+    CONNECTOR --> R2
+    MLFLOW --> R2
 
-    TRAIN --> IMAGES
-    TRAIN --> MINIMIND
-    TRAIN --> HF
-
-    MINIMIND --> MLFLOW
-    MINIMIND -- "artifacts / checkpoints" --> R2
-    CF --> MLFLOW
-
-    class DEV,WRAPPERS,CLI surface;
-    class CFG,REQ contract;
-    class OPS,SEEKER,DEPLOYER,CONNECTOR,MLFSVC,EMUSVC control;
-    class LOCAL,DSTACK,TRAIN,MINIMIND,IMAGES,REMOTERUN exec;
-    class SEEKERSTATE,CONNSTATE,TUNSTATE,BUILDSTATE state;
-    class DOCKER,DSTACKSYS,CF,MLFLOW,R2,HF,GPUFLEET external;
+    class TOML,RUNCONFIG config;
+    class CLI,DEPLOYER,LOCAL,DSTACK,CONNECTOR,PORTABLE orchestration;
+    class SUBMISSION,EXECUTOR,OBS,OPS trainer;
+    class TRAIN,VENDOR,CONFIG,DATA,MODEL,METRICS concrete;
+    class DSTACKSYS,DOCKER,MLFLOW,HF,R2 external;
