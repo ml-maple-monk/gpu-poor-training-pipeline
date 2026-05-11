@@ -79,6 +79,31 @@ if [ ! -f "$VENDOR_MINIMIND_RUNNER" ]; then
     exit 1
 fi
 
+start_remote_sshd() {
+    if ! command -v sshd >/dev/null 2>&1; then
+        echo "[remote-entrypoint] sshd not installed; SSH monitoring disabled"
+        return 0
+    fi
+    mkdir -p /root/.ssh /run/sshd
+    chmod 700 /root/.ssh
+    if [ -n "${PUBLIC_KEY:-}" ]; then
+        touch /root/.ssh/authorized_keys
+        chmod 600 /root/.ssh/authorized_keys
+        while IFS= read -r key_line; do
+            [ -n "$key_line" ] || continue
+            grep -qxF "$key_line" /root/.ssh/authorized_keys || printf '%s\n' "$key_line" >> /root/.ssh/authorized_keys
+        done <<EOF
+${PUBLIC_KEY}
+EOF
+    fi
+    if [ -s /root/.ssh/authorized_keys ]; then
+        ssh-keygen -A >/dev/null 2>&1 || true
+        /usr/sbin/sshd || echo "[remote-entrypoint] WARNING: failed to start sshd" >&2
+    fi
+}
+
+start_remote_sshd
+
 # shellcheck source=/dev/null
 . "$PORTABLE_MLFLOW_HELPER"
 

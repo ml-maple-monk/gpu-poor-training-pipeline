@@ -31,6 +31,10 @@ TOML config
 - `training/scripts/lib/portable-mlflow.sh` and
   `training/scripts/sync-mlflow-bundle.py` own the worker-side MLflow server
   lifecycle and R2/S3 bundle upload.
+- `training/docker/Dockerfile.remote` and `training/scripts/remote-entrypoint.sh`
+  own remote worker inspectability: the image includes `openssh-server`, and the
+  entrypoint starts sshd when an operator key is baked in or provider-supplied
+  `PUBLIC_KEY` is present.
 - `training/vendor/minimind_mfu_working` is the source-vendored MiniMind
   MFU trainer package and Docker dependency contract used by remote training.
 - `training/scripts/pull-r2-tokenized-dataset.py` pulls the bounded

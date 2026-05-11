@@ -11,7 +11,8 @@ portable MLflow bundle back to R2.
 - The base image installs the vendored `minimind_mfu_working` package, PyTorch,
   flash-attn, and the CUDA 12.8 runtime stack.
 - The remote image contains gpupoor shared code, worker scripts, portable MLflow
-  helpers, and the vendored trainer source.
+  helpers, the vendored trainer source, and an sshd runtime for remote
+  monitoring on providers such as RunPod.
 - `GPUPOOR_RUN_CONFIG_B64` still transports TOML into the worker.
 - `training/scripts/pull-r2-tokenized-dataset.py` can download the selected
   `native-superbpe-1m-rows-max4w/20260503T002359Z` parquet prefix and tokenizer
