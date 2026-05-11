@@ -15,6 +15,35 @@ from gpupoor.subprocess_utils import CommandError
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_remote_docker_context_excludes_runtime_dataset_artifacts() -> None:
+    dockerignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+
+    assert "data/*" in dockerignore
+    assert "training/vendor/minimind_mfu_working/data/**" in dockerignore
+    assert "!training/vendor/minimind_mfu_working/data/**" not in dockerignore
+
+    dockerfiles = [
+        REPO_ROOT / "training" / "docker" / "Dockerfile.base",
+        REPO_ROOT / "training" / "docker" / "Dockerfile.remote",
+    ]
+    for dockerfile in dockerfiles:
+        text = dockerfile.read_text(encoding="utf-8")
+        assert "COPY data/" not in text
+        assert "ADD data/" not in text
+
+    disallowed_vendor_artifacts = [
+        REPO_ROOT
+        / "training"
+        / "vendor"
+        / "minimind_mfu_working"
+        / "data"
+        / "tokenizers"
+        / "native_superbpe_1m_rows_max4w"
+        / "tokenizer.json",
+    ]
+    assert not any(path.exists() for path in disallowed_vendor_artifacts)
+
+
 def test_env_file_parsing_strips_quotes(tmp_path: Path) -> None:
     env_file = tmp_path / ".env.remote"
     env_file.write_text("VCR_USERNAME=\"user\"\nVCR_PASSWORD='pass'\n", encoding="utf-8")

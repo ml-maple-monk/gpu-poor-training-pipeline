@@ -60,6 +60,8 @@ WORKDIR /workspace
 
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 
+# Copy source and package metadata only. Runtime dataset and tokenizer artifacts
+# are excluded by .dockerignore and pulled from R2 by remote-entrypoint.sh.
 COPY training/vendor/minimind_mfu_working/ /opt/training/vendor/minimind_mfu_working/
 
 WORKDIR /opt/training/vendor/minimind_mfu_working
@@ -128,6 +130,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /opt/venv /opt/venv
+# Copy the installed source tree without dataset/tokenizer artifacts.
 COPY --from=builder /opt/training/vendor/minimind_mfu_working/ /opt/training/vendor/minimind_mfu_working/
 
 WORKDIR /workspace

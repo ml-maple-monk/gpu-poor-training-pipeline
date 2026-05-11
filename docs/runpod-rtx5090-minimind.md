@@ -39,6 +39,10 @@ The remote image must include:
 - `openssh-server` so a provider-injected `PUBLIC_KEY` can be used for live
   inspection.
 
+The remote image must not include tokenized dataset shards or the tokenizer
+artifact. Both are runtime data. `remote-entrypoint.sh` pulls them from R2 after
+the container starts and before `minimind-train` is invoked.
+
 The most recent validated image tag was:
 
 ```text

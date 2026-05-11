@@ -1,11 +1,15 @@
 secrets
 .env*
-# Remote training pulls the tokenized corpus from R2 at runtime; keep local datasets out of image contexts.
+# Remote training pulls tokenized data and tokenizer artifacts from R2 at
+# container startup. Keep local datasets and vendored runtime artifacts out of
+# image contexts.
 data/*
 !training/vendor/minimind_mfu_working/minimind_local/data/
 !training/vendor/minimind_mfu_working/minimind_local/data/**
+training/vendor/minimind_mfu_working/data/**
 !training/vendor/minimind_mfu_working/data/
-!training/vendor/minimind_mfu_working/data/**
+!training/vendor/minimind_mfu_working/data/tokenizers/
+!training/vendor/minimind_mfu_working/data/tokenizers/native_superbpe_1m_rows_max4w/
 .git/
 .omc/
 __pycache__

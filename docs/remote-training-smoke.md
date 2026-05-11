@@ -13,6 +13,8 @@ portable MLflow bundle back to R2.
 - The remote image contains gpupoor shared code, worker scripts, portable MLflow
   helpers, the vendored trainer source, and an sshd runtime for remote
   monitoring on providers such as RunPod.
+- Tokenized parquet shards and `tokenizer.json` are not baked into Docker
+  layers; the container pulls them from R2 after startup.
 - `GPUPOOR_RUN_CONFIG_B64` still transports TOML into the worker.
 - `training/scripts/pull-r2-tokenized-dataset.py` can download the selected
   `native-superbpe-1m-rows-max4w/20260503T002359Z` parquet prefix and tokenizer
