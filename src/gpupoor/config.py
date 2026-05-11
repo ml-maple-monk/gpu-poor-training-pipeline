@@ -49,6 +49,13 @@ DEFAULT_TRAINING_WEIGHT_DECAY = _DEFAULTS["training"].get("weight_decay", 0.0)
 DEFAULT_TRAINING_OPTIMIZER = _DEFAULTS["training"]["optimizer"]
 DEFAULT_TRAINING_ACCUMULATION_STEPS = _DEFAULTS["training"]["accumulation_steps"]
 DEFAULT_TRAINING_NUM_WORKERS = _DEFAULTS["training"]["num_workers"]
+DEFAULT_TRAINING_PREFETCH_FACTOR = _DEFAULTS["training"].get("prefetch_factor", 8)
+DEFAULT_TRAINING_PIN_MEMORY = _DEFAULTS["training"].get("pin_memory", True)
+DEFAULT_TRAINING_PERSISTENT_WORKERS = _DEFAULTS["training"].get(
+    "persistent_workers",
+    DEFAULT_TRAINING_NUM_WORKERS > 0,
+)
+DEFAULT_TRAINING_COLLATOR_MODE = _DEFAULTS["training"].get("collator_mode", "loop")
 DEFAULT_TRAINING_GRAD_CLIP = _DEFAULTS["training"]["grad_clip"]
 DEFAULT_TRAINING_HIDDEN_SIZE = _DEFAULTS["training"]["hidden_size"]
 DEFAULT_TRAINING_NUM_HIDDEN_LAYERS = _DEFAULTS["training"]["num_hidden_layers"]
@@ -62,6 +69,7 @@ DEFAULT_TRAINING_MAX_POSITION_EMBEDDINGS = _DEFAULTS["training"]["max_position_e
 DEFAULT_TRAINING_RMS_NORM_EPS = _DEFAULTS["training"]["rms_norm_eps"]
 DEFAULT_TRAINING_ROPE_THETA = _DEFAULTS["training"]["rope_theta"]
 DEFAULT_TRAINING_INFERENCE_ROPE_SCALING = _DEFAULTS["training"]["inference_rope_scaling"]
+DEFAULT_TRAINING_INITIALIZER_RANGE = _DEFAULTS["training"].get("initializer_range", 0.02)
 DEFAULT_TRAINING_DTYPE = _DEFAULTS["training"]["dtype"]
 DEFAULT_TRAINING_PRECISION = _DEFAULTS["training"].get("precision", "bf16_training")
 DEFAULT_TRAINING_FP8_RECIPE = _DEFAULTS["training"].get("fp8_recipe", "tensorwise")
@@ -69,9 +77,18 @@ DEFAULT_TRAINING_ARCHITECTURE_VARIANT = _DEFAULTS["training"].get(
     "architecture_variant", DEFAULT_RECIPE_ARCHITECTURE_VARIANT
 )
 DEFAULT_TRAINING_LOG_INTERVAL = _DEFAULTS["training"]["log_interval"]
+DEFAULT_TRAINING_PERF_LOG_INTERVAL = _DEFAULTS["training"]["perf_log_interval"]
 DEFAULT_TRAINING_SAVE_INTERVAL = _DEFAULTS["training"]["save_interval"]
 DEFAULT_TRAINING_USE_COMPILE = _DEFAULTS["training"]["use_compile"]
 DEFAULT_TRAINING_COMPILE_FULLGRAPH = _DEFAULTS["training"].get("compile_fullgraph", False)
+DEFAULT_TRAINING_PROFILE_PIPELINE = _DEFAULTS["training"].get("profile_pipeline", False)
+DEFAULT_TRAINING_PROFILE_METRICS_JSONL = _DEFAULTS["training"].get("profile_metrics_jsonl", "")
+DEFAULT_TRAINING_PROBE_MODE = _DEFAULTS["training"].get("probe_mode", "real_pipeline")
+DEFAULT_TRAINING_TORCH_PROFILER_TRACE_DIR = _DEFAULTS["training"].get("torch_profiler_trace_dir", "")
+DEFAULT_TRAINING_TORCH_PROFILER_WAIT_STEPS = _DEFAULTS["training"].get("torch_profiler_wait_steps", 1)
+DEFAULT_TRAINING_TORCH_PROFILER_WARMUP_STEPS = _DEFAULTS["training"].get("torch_profiler_warmup_steps", 1)
+DEFAULT_TRAINING_TORCH_PROFILER_ACTIVE_STEPS = _DEFAULTS["training"].get("torch_profiler_active_steps", 3)
+DEFAULT_TRAINING_TORCH_PROFILER_REPEAT = _DEFAULTS["training"].get("torch_profiler_repeat", 1)
 DEFAULT_TRAINING_USE_MOE = _DEFAULTS["training"]["use_moe"]
 DEFAULT_TRAINING_NUM_EXPERTS = _DEFAULTS["training"]["num_experts"]
 DEFAULT_TRAINING_NUM_EXPERTS_PER_TOK = _DEFAULTS["training"]["num_experts_per_tok"]
@@ -101,6 +118,11 @@ DEFAULT_MLFLOW_START_RETRY_SECONDS = _DEFAULTS["mlflow"]["start_retry_seconds"]
 DEFAULT_MLFLOW_PEAK_TFLOPS_PER_GPU = _DEFAULTS["mlflow"]["peak_tflops_per_gpu"]
 DEFAULT_MLFLOW_TIME_TO_TARGET_METRIC = _DEFAULTS["mlflow"]["time_to_target_metric"]
 DEFAULT_MLFLOW_TIME_TO_TARGET_VALUE = _DEFAULTS["mlflow"]["time_to_target_value"]
+DEFAULT_MLFLOW_RUN_NAME = _DEFAULTS["mlflow"].get("mlflow_run_name", "")
+DEFAULT_MLFLOW_EXPERIMENT_GROUP = _DEFAULTS["mlflow"].get("experiment_group", "")
+DEFAULT_MLFLOW_EXPERIMENT_STAGE = _DEFAULTS["mlflow"].get("experiment_stage", "")
+DEFAULT_MLFLOW_EXPERIMENT_VARIANT = _DEFAULTS["mlflow"].get("experiment_variant", "")
+DEFAULT_MLFLOW_BASELINE_RUN_ID = _DEFAULTS["mlflow"].get("baseline_run_id", "")
 
 # Smoke / local defaults (from defaults.toml)
 DEFAULT_LOCAL_BASE_IMAGE = _DEFAULTS["smoke"]["base_image"]
@@ -217,6 +239,10 @@ class TrainingConfig:
     optimizer: str = DEFAULT_TRAINING_OPTIMIZER
     accumulation_steps: int = DEFAULT_TRAINING_ACCUMULATION_STEPS
     num_workers: int = DEFAULT_TRAINING_NUM_WORKERS
+    prefetch_factor: int = DEFAULT_TRAINING_PREFETCH_FACTOR
+    pin_memory: bool = DEFAULT_TRAINING_PIN_MEMORY
+    persistent_workers: bool = DEFAULT_TRAINING_PERSISTENT_WORKERS
+    collator_mode: str = DEFAULT_TRAINING_COLLATOR_MODE
     grad_clip: float = DEFAULT_TRAINING_GRAD_CLIP
     hidden_size: int = DEFAULT_TRAINING_HIDDEN_SIZE
     num_hidden_layers: int = DEFAULT_TRAINING_NUM_HIDDEN_LAYERS
@@ -231,14 +257,24 @@ class TrainingConfig:
     rms_norm_eps: float = DEFAULT_TRAINING_RMS_NORM_EPS
     rope_theta: float = DEFAULT_TRAINING_ROPE_THETA
     inference_rope_scaling: bool = DEFAULT_TRAINING_INFERENCE_ROPE_SCALING
+    initializer_range: float = DEFAULT_TRAINING_INITIALIZER_RANGE
     dtype: str = DEFAULT_TRAINING_DTYPE
     precision: str = DEFAULT_TRAINING_PRECISION
     fp8_recipe: str = DEFAULT_TRAINING_FP8_RECIPE
     architecture_variant: str = DEFAULT_TRAINING_ARCHITECTURE_VARIANT
     log_interval: int = DEFAULT_TRAINING_LOG_INTERVAL
+    perf_log_interval: int = DEFAULT_TRAINING_PERF_LOG_INTERVAL
     save_interval: int = DEFAULT_TRAINING_SAVE_INTERVAL
     use_compile: bool = DEFAULT_TRAINING_USE_COMPILE
     compile_fullgraph: bool = DEFAULT_TRAINING_COMPILE_FULLGRAPH
+    profile_pipeline: bool = DEFAULT_TRAINING_PROFILE_PIPELINE
+    profile_metrics_jsonl: str = DEFAULT_TRAINING_PROFILE_METRICS_JSONL
+    probe_mode: str = DEFAULT_TRAINING_PROBE_MODE
+    torch_profiler_trace_dir: str = DEFAULT_TRAINING_TORCH_PROFILER_TRACE_DIR
+    torch_profiler_wait_steps: int = DEFAULT_TRAINING_TORCH_PROFILER_WAIT_STEPS
+    torch_profiler_warmup_steps: int = DEFAULT_TRAINING_TORCH_PROFILER_WARMUP_STEPS
+    torch_profiler_active_steps: int = DEFAULT_TRAINING_TORCH_PROFILER_ACTIVE_STEPS
+    torch_profiler_repeat: int = DEFAULT_TRAINING_TORCH_PROFILER_REPEAT
     use_moe: bool = DEFAULT_TRAINING_USE_MOE
     num_experts: int = DEFAULT_TRAINING_NUM_EXPERTS
     num_experts_per_tok: int = DEFAULT_TRAINING_NUM_EXPERTS_PER_TOK
@@ -251,6 +287,7 @@ class TrainingConfig:
     lr_schedule: str = DEFAULT_TRAINING_LR_SCHEDULE
     lr_warmup_steps: int = DEFAULT_TRAINING_LR_WARMUP_STEPS
     lr_min_ratio: float = DEFAULT_TRAINING_LR_MIN_RATIO
+
 
 @dataclass(slots=True)
 class BackendConfig:
@@ -274,6 +311,12 @@ class MlflowConfig:
     peak_tflops_per_gpu: float | None = None
     time_to_target_metric: str = "none"
     time_to_target_value: float | None = None
+    mlflow_run_name: str = DEFAULT_MLFLOW_RUN_NAME
+    experiment_group: str = DEFAULT_MLFLOW_EXPERIMENT_GROUP
+    experiment_stage: str = DEFAULT_MLFLOW_EXPERIMENT_STAGE
+    experiment_variant: str = DEFAULT_MLFLOW_EXPERIMENT_VARIANT
+    baseline_run_id: str = DEFAULT_MLFLOW_BASELINE_RUN_ID
+
 
 @dataclass(slots=True)
 class DoctorConfig:
@@ -445,6 +488,13 @@ def _require_str(data: dict[str, object], key: str, *, default: str | None = Non
     value = data.get(key, default)
     if not isinstance(value, str) or not value:
         raise ConfigError(f"{key} must be a non-empty string")
+    return value
+
+
+def _str_allow_empty(data: dict[str, object], key: str, *, default: str = "") -> str:
+    value = data.get(key, default)
+    if not isinstance(value, str):
+        raise ConfigError(f"{key} must be a string")
     return value
 
 
@@ -628,6 +678,10 @@ _KNOWN_TRAINING = {
     "optimizer",
     "accumulation_steps",
     "num_workers",
+    "prefetch_factor",
+    "pin_memory",
+    "persistent_workers",
+    "collator_mode",
     "grad_clip",
     "hidden_size",
     "num_hidden_layers",
@@ -642,14 +696,24 @@ _KNOWN_TRAINING = {
     "rms_norm_eps",
     "rope_theta",
     "inference_rope_scaling",
+    "initializer_range",
     "dtype",
     "precision",
     "fp8_recipe",
     "architecture_variant",
     "log_interval",
+    "perf_log_interval",
     "save_interval",
     "use_compile",
     "compile_fullgraph",
+    "profile_pipeline",
+    "profile_metrics_jsonl",
+    "probe_mode",
+    "torch_profiler_trace_dir",
+    "torch_profiler_wait_steps",
+    "torch_profiler_warmup_steps",
+    "torch_profiler_active_steps",
+    "torch_profiler_repeat",
     "use_moe",
     "num_experts",
     "num_experts_per_tok",
@@ -678,6 +742,17 @@ _KNOWN_MLFLOW = {
     "peak_tflops_per_gpu",
     "time_to_target_metric",
     "time_to_target_value",
+    "metric_queue_maxsize",
+    "metric_queue_poll_seconds",
+    "metric_flush_timeout_seconds",
+    "script_name",
+    "recipe_kind",
+    "recipe_prepare_data",
+    "mlflow_run_name",
+    "experiment_group",
+    "experiment_stage",
+    "experiment_variant",
+    "baseline_run_id",
 }
 _KNOWN_DOCTOR = {"skip_preflight", "max_clock_skew_seconds"}
 _KNOWN_SMOKE = {
@@ -735,6 +810,10 @@ _KNOWN_MODEL_ROPE_SCALING = {
 _KNOWN_PRETOKENIZE = {"tokenizer_path", "max_length", "overwrite", "progress_interval"}
 _KNOWN_DATASET = {
     "tokenizers_parallelism",
+    "shuffle_buffer_size",
+    "shuffle_seed",
+    "shuffle_files",
+    "parquet_read_batch_rows",
     "sample_add_system_ratio",
     "empty_think_ratio",
     "progress_interval",
@@ -888,6 +967,7 @@ def load_run_config(path: str | Path) -> RunConfig:
     intermediate_size = _optional_int(training_data, "intermediate_size") or intermediate_size_default
     moe_intermediate_size = _optional_int(training_data, "moe_intermediate_size") or intermediate_size
 
+    num_workers = _require_int(training_data, "num_workers", default=DEFAULT_TRAINING_NUM_WORKERS)
     training = TrainingConfig(
         epochs=_require_int(training_data, "epochs", default=DEFAULT_TRAINING_EPOCHS),
         max_steps=_require_int(training_data, "max_steps", default=DEFAULT_TRAINING_MAX_STEPS),
@@ -900,7 +980,15 @@ def load_run_config(path: str | Path) -> RunConfig:
             "accumulation_steps",
             default=DEFAULT_TRAINING_ACCUMULATION_STEPS,
         ),
-        num_workers=_require_int(training_data, "num_workers", default=DEFAULT_TRAINING_NUM_WORKERS),
+        num_workers=num_workers,
+        prefetch_factor=_require_int(training_data, "prefetch_factor", default=DEFAULT_TRAINING_PREFETCH_FACTOR),
+        pin_memory=_require_bool(training_data, "pin_memory", default=DEFAULT_TRAINING_PIN_MEMORY),
+        persistent_workers=_require_bool(
+            training_data,
+            "persistent_workers",
+            default=(num_workers > 0),
+        ),
+        collator_mode=_require_str(training_data, "collator_mode", default=DEFAULT_TRAINING_COLLATOR_MODE),
         grad_clip=_require_float(training_data, "grad_clip", default=DEFAULT_TRAINING_GRAD_CLIP),
         hidden_size=hidden_size,
         num_hidden_layers=_require_int(
@@ -935,6 +1023,11 @@ def load_run_config(path: str | Path) -> RunConfig:
             "inference_rope_scaling",
             default=DEFAULT_TRAINING_INFERENCE_ROPE_SCALING,
         ),
+        initializer_range=_require_float(
+            training_data,
+            "initializer_range",
+            default=DEFAULT_TRAINING_INITIALIZER_RANGE,
+        ),
         dtype=_require_str(training_data, "dtype", default=DEFAULT_TRAINING_DTYPE),
         precision=_require_str(training_data, "precision", default=DEFAULT_TRAINING_PRECISION),
         fp8_recipe=_require_str(training_data, "fp8_recipe", default=DEFAULT_TRAINING_FP8_RECIPE),
@@ -944,12 +1037,53 @@ def load_run_config(path: str | Path) -> RunConfig:
             default=DEFAULT_TRAINING_ARCHITECTURE_VARIANT,
         ),
         log_interval=_require_int(training_data, "log_interval", default=DEFAULT_TRAINING_LOG_INTERVAL),
+        perf_log_interval=_require_int(
+            training_data,
+            "perf_log_interval",
+            default=DEFAULT_TRAINING_PERF_LOG_INTERVAL,
+        ),
         save_interval=_require_int(training_data, "save_interval", default=DEFAULT_TRAINING_SAVE_INTERVAL),
         use_compile=_require_bool(training_data, "use_compile", default=DEFAULT_TRAINING_USE_COMPILE),
         compile_fullgraph=_require_bool(
             training_data,
             "compile_fullgraph",
             default=DEFAULT_TRAINING_COMPILE_FULLGRAPH,
+        ),
+        profile_pipeline=_require_bool(
+            training_data,
+            "profile_pipeline",
+            default=DEFAULT_TRAINING_PROFILE_PIPELINE,
+        ),
+        profile_metrics_jsonl=_str_allow_empty(
+            training_data,
+            "profile_metrics_jsonl",
+            default=DEFAULT_TRAINING_PROFILE_METRICS_JSONL,
+        ),
+        probe_mode=_require_str(training_data, "probe_mode", default=DEFAULT_TRAINING_PROBE_MODE),
+        torch_profiler_trace_dir=_str_allow_empty(
+            training_data,
+            "torch_profiler_trace_dir",
+            default=DEFAULT_TRAINING_TORCH_PROFILER_TRACE_DIR,
+        ),
+        torch_profiler_wait_steps=_require_int(
+            training_data,
+            "torch_profiler_wait_steps",
+            default=DEFAULT_TRAINING_TORCH_PROFILER_WAIT_STEPS,
+        ),
+        torch_profiler_warmup_steps=_require_int(
+            training_data,
+            "torch_profiler_warmup_steps",
+            default=DEFAULT_TRAINING_TORCH_PROFILER_WARMUP_STEPS,
+        ),
+        torch_profiler_active_steps=_require_int(
+            training_data,
+            "torch_profiler_active_steps",
+            default=DEFAULT_TRAINING_TORCH_PROFILER_ACTIVE_STEPS,
+        ),
+        torch_profiler_repeat=_require_int(
+            training_data,
+            "torch_profiler_repeat",
+            default=DEFAULT_TRAINING_TORCH_PROFILER_REPEAT,
         ),
         use_moe=_require_bool(training_data, "use_moe", default=DEFAULT_TRAINING_USE_MOE),
         num_experts=_require_int(training_data, "num_experts", default=DEFAULT_TRAINING_NUM_EXPERTS),
@@ -996,6 +1130,12 @@ def load_run_config(path: str | Path) -> RunConfig:
         raise ConfigError("training.accumulation_steps must be > 0")
     if training.num_workers < 0:
         raise ConfigError("training.num_workers must be >= 0")
+    if training.prefetch_factor <= 0:
+        raise ConfigError("training.prefetch_factor must be > 0")
+    if training.num_workers == 0 and training.persistent_workers:
+        raise ConfigError("training.persistent_workers requires training.num_workers > 0")
+    if training.collator_mode not in {"loop", "vectorized"}:
+        raise ConfigError("training.collator_mode must be one of: loop, vectorized")
     if training.grad_clip <= 0:
         raise ConfigError("training.grad_clip must be > 0")
     if training.hidden_size <= 0:
@@ -1024,6 +1164,8 @@ def load_run_config(path: str | Path) -> RunConfig:
         raise ConfigError("training.rms_norm_eps must be > 0")
     if training.rope_theta <= 0:
         raise ConfigError("training.rope_theta must be > 0")
+    if training.initializer_range <= 0:
+        raise ConfigError("training.initializer_range must be > 0")
     if training.dtype not in {"float16", "bfloat16", "float32"}:
         raise ConfigError("training.dtype must be one of: float16, bfloat16, float32")
     if training.precision not in {"bf16_training", "fp8_training"}:
@@ -1034,8 +1176,28 @@ def load_run_config(path: str | Path) -> RunConfig:
         raise ConfigError("training.precision=fp8_training requires training.optimizer=muon8bit")
     if training.compile_fullgraph and not training.use_compile:
         raise ConfigError("training.compile_fullgraph requires training.use_compile=true")
+    if training.probe_mode not in {
+        "real_pipeline",
+        "cached_gpu_batch",
+        "synthetic_cpu_batch",
+        "cached_packed_batch",
+    }:
+        raise ConfigError(
+            "training.probe_mode must be one of: real_pipeline, cached_gpu_batch, "
+            "synthetic_cpu_batch, cached_packed_batch"
+        )
+    if training.torch_profiler_wait_steps < 0:
+        raise ConfigError("training.torch_profiler_wait_steps must be >= 0")
+    if training.torch_profiler_warmup_steps < 0:
+        raise ConfigError("training.torch_profiler_warmup_steps must be >= 0")
+    if training.torch_profiler_active_steps <= 0:
+        raise ConfigError("training.torch_profiler_active_steps must be > 0")
+    if training.torch_profiler_repeat <= 0:
+        raise ConfigError("training.torch_profiler_repeat must be > 0")
     if training.log_interval <= 0:
         raise ConfigError("training.log_interval must be > 0")
+    if training.perf_log_interval <= 0:
+        raise ConfigError("training.perf_log_interval must be > 0")
     if training.save_interval <= 0:
         raise ConfigError("training.save_interval must be > 0")
     if training.num_experts <= 0:
@@ -1108,6 +1270,23 @@ def load_run_config(path: str | Path) -> RunConfig:
             default=DEFAULT_MLFLOW_TIME_TO_TARGET_METRIC,
         ),
         time_to_target_value=_optional_number(mlflow_data, "time_to_target_value"),
+        mlflow_run_name=_str_allow_empty(mlflow_data, "mlflow_run_name", default=DEFAULT_MLFLOW_RUN_NAME),
+        experiment_group=_str_allow_empty(
+            mlflow_data,
+            "experiment_group",
+            default=DEFAULT_MLFLOW_EXPERIMENT_GROUP,
+        ),
+        experiment_stage=_str_allow_empty(
+            mlflow_data,
+            "experiment_stage",
+            default=DEFAULT_MLFLOW_EXPERIMENT_STAGE,
+        ),
+        experiment_variant=_str_allow_empty(
+            mlflow_data,
+            "experiment_variant",
+            default=DEFAULT_MLFLOW_EXPERIMENT_VARIANT,
+        ),
+        baseline_run_id=_str_allow_empty(mlflow_data, "baseline_run_id", default=DEFAULT_MLFLOW_BASELINE_RUN_ID),
     )
     if mlflow.time_to_target_metric not in {"none", "val_loss", "val_ppl"}:
         raise ConfigError("time_to_target_metric must be one of: none, val_loss, val_ppl")

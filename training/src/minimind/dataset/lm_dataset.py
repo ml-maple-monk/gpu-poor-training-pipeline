@@ -3,6 +3,7 @@ import os
 import random
 import shutil
 import tempfile
+import time
 from pathlib import Path
 
 import numpy as np
@@ -145,10 +146,21 @@ def get_attention_mask_for_packed_sequence(x, eos_token_id, pad_token_id):
 class PretrainDataCollator:
     """Pack raw samples into fixed rows, then build packed masks and reset position IDs."""
 
-    def __init__(self, eos_token_id=2, pad_token_id=0, max_seq_len=512):
+    def __init__(
+        self,
+        eos_token_id=2,
+        pad_token_id=0,
+        max_seq_len=512,
+        profile_timing=False,
+        collator_mode="loop",
+    ):
+        if collator_mode not in {"loop", "vectorized"}:
+            raise ValueError("collator_mode must be one of: loop, vectorized")
         self.eos_token_id = eos_token_id
         self.pad_token_id = pad_token_id
         self.max_seq_len = max_seq_len
+        self.profile_timing = profile_timing
+        self.collator_mode = collator_mode
 
     def _extract_input_ids(self, feature):
         if torch.is_tensor(feature):
@@ -179,6 +191,7 @@ class PretrainDataCollator:
         return row
 
     def __call__(self, features):
+        collator_start = time.perf_counter() if self.profile_timing else None
         packed_rows = []
         current_row = []
         current_length = 0
@@ -205,27 +218,65 @@ class PretrainDataCollator:
         input_ids = torch.stack(packed_rows)
         labels = input_ids.clone()
         labels[input_ids == self.pad_token_id] = -100
-        attention_masks = []
-        position_ids = []
-        requires_packed_mask = False
-        token_indices = torch.arange(input_ids.size(1), device=input_ids.device)
-        for row_index, row in enumerate(input_ids):
-            row_attention_mask, row_position_ids = get_attention_mask_for_packed_sequence(
-                row,
-                eos_token_id=self.eos_token_id,
-                pad_token_id=self.pad_token_id,
-            )
-            segment_starts = (row_position_ids == 0) & row.ne(self.pad_token_id) & token_indices.gt(0)
-            labels[row_index, segment_starts] = -100
-            requires_packed_mask = requires_packed_mask or bool(segment_starts.any().item())
-            attention_masks.append(row_attention_mask)
-            position_ids.append(row_position_ids)
-        return {
+        if self.collator_mode == "vectorized":
+            position_ids, attention_mask, segment_starts = self._vectorized_position_ids_and_mask(input_ids)
+            labels[segment_starts] = -100
+        else:
+            attention_masks = []
+            position_ids = []
+            requires_packed_mask = False
+            token_indices = torch.arange(input_ids.size(1), device=input_ids.device)
+            for row_index, row in enumerate(input_ids):
+                row_attention_mask, row_position_ids = get_attention_mask_for_packed_sequence(
+                    row,
+                    eos_token_id=self.eos_token_id,
+                    pad_token_id=self.pad_token_id,
+                )
+                segment_starts = (row_position_ids == 0) & row.ne(self.pad_token_id) & token_indices.gt(0)
+                labels[row_index, segment_starts] = -100
+                requires_packed_mask = requires_packed_mask or bool(segment_starts.any().item())
+                attention_masks.append(row_attention_mask)
+                position_ids.append(row_position_ids)
+            position_ids = torch.stack(position_ids)
+            attention_mask = torch.stack(attention_masks) if requires_packed_mask else None
+        batch = {
             "input_ids": input_ids,
             "labels": labels,
-            "position_ids": torch.stack(position_ids),
-            "attention_mask": torch.stack(attention_masks) if requires_packed_mask else None,
+            "position_ids": position_ids,
+            "attention_mask": attention_mask,
         }
+        if collator_start is not None:
+            batch["__collator_build_s"] = torch.tensor(time.perf_counter() - collator_start, dtype=torch.float64)
+        return batch
+
+    def _vectorized_position_ids_and_mask(self, input_ids):
+        valid = input_ids.ne(self.pad_token_id)
+        batch_size, seq_len = input_ids.shape
+        token_indices = torch.arange(seq_len, device=input_ids.device, dtype=torch.long).unsqueeze(0)
+        previous_is_eos = torch.zeros_like(valid)
+        previous_is_eos[:, 1:] = input_ids[:, :-1].eq(self.eos_token_id)
+        segment_starts_all = valid & (token_indices.eq(0) | previous_is_eos)
+        segment_starts = segment_starts_all & token_indices.gt(0)
+
+        start_indices = torch.where(segment_starts_all, token_indices.expand(batch_size, -1), torch.zeros_like(input_ids))
+        last_start = torch.cummax(start_indices, dim=1).values
+        position_ids = (token_indices - last_start).expand(batch_size, -1).clone()
+        position_ids[~valid] = 0
+
+        if not bool(segment_starts.any().item()):
+            return position_ids, None, segment_starts
+
+        segment_ids = torch.cumsum(segment_starts_all.to(torch.long), dim=1) - 1
+        row = token_indices.view(1, seq_len, 1)
+        col = token_indices.view(1, 1, seq_len)
+        attention_mask = (row >= col).expand(batch_size, -1, -1).clone()
+        attention_mask &= segment_ids.unsqueeze(2).eq(segment_ids.unsqueeze(1))
+        attention_mask &= valid.unsqueeze(2) & valid.unsqueeze(1)
+        pad_positions = ~valid
+        if bool(pad_positions.any().item()):
+            diagonal = torch.eye(seq_len, device=input_ids.device, dtype=torch.bool).unsqueeze(0)
+            attention_mask |= diagonal & pad_positions.unsqueeze(2)
+        return position_ids, attention_mask, segment_starts
 
 
 def pretokenized_dataset_exists(path, metadata_file="metadata.json"):
@@ -352,6 +403,149 @@ def build_pretokenized_corpus(
         shutil.rmtree(output_dir)
     os.replace(temp_dir, output_dir)
     return metadata
+
+
+def build_pretokenized_from_tokenized_parquet(
+    input_path,
+    output_dir,
+    *,
+    eos_token_id,
+    pad_token_id=0,
+    bos_token_id=None,
+    max_samples=10000,
+    min_tokens_per_sample=0,
+    max_tokens_per_sample=0,
+    token_ids_column="token_ids",
+    read_batch_rows=8192,
+    overwrite=False,
+    progress_interval=10000,
+    tokens_file="tokens.bin",
+    index_file="index.bin",
+    metadata_file="metadata.json",
+    tokens_dtype_name="int32",
+    index_dtype_name="int64",
+    dataset_version=1,
+):
+    """Convert tokenized parquet rows into the mmap pretraining artifact layout."""
+
+    tokens_dtype = _DTYPE_MAP[tokens_dtype_name]
+    index_dtype = _DTYPE_MAP[index_dtype_name]
+    max_samples = int(max_samples)
+    min_tokens_per_sample = int(min_tokens_per_sample)
+    max_tokens_per_sample = int(max_tokens_per_sample)
+    read_batch_rows = max(1, int(read_batch_rows))
+    if max_samples <= 0:
+        raise ValueError("max_samples must be > 0")
+    if min_tokens_per_sample < 0:
+        raise ValueError("min_tokens_per_sample must be >= 0")
+    if max_tokens_per_sample < 0:
+        raise ValueError("max_tokens_per_sample must be >= 0")
+
+    output_dir = Path(output_dir)
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    if output_dir.exists() and not overwrite:
+        raise FileExistsError(f"{output_dir} already exists; pass overwrite=True to rebuild it")
+
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"{output_dir.name}.tmp.", dir=output_dir.parent))
+    tokens_tmp = temp_dir / tokens_file
+    index_tmp = temp_dir / index_file
+
+    token_count = 0
+    sample_count = 0
+    part_count = 0
+    source_path = Path(input_path)
+    try:
+        import pyarrow.parquet as pq
+
+        parts = _tokenized_parquet_parts(source_path)
+        with tokens_tmp.open("wb") as tokens_fp, index_tmp.open("wb") as index_fp:
+            for part in parts:
+                part_count += 1
+                parquet_file = pq.ParquetFile(part)
+                for record_batch in parquet_file.iter_batches(
+                    columns=[token_ids_column],
+                    batch_size=read_batch_rows,
+                    use_threads=False,
+                ):
+                    column = record_batch.column(0)
+                    for row_tokens in column.to_pylist():
+                        if min_tokens_per_sample > 0 and len(row_tokens or []) < min_tokens_per_sample:
+                            continue
+                        token_ids = _normalise_tokenized_parquet_row(
+                            row_tokens,
+                            eos_token_id=int(eos_token_id),
+                            max_tokens_per_sample=max_tokens_per_sample,
+                        )
+                        if not token_ids:
+                            continue
+                        np.asarray(token_ids, dtype=tokens_dtype).tofile(tokens_fp)
+                        np.asarray((token_count, len(token_ids)), dtype=index_dtype).tofile(index_fp)
+                        token_count += len(token_ids)
+                        sample_count += 1
+                        if progress_interval > 0 and sample_count % progress_interval == 0:
+                            print(
+                                f"[pretokenize-parquet] processed {sample_count} samples / {token_count} tokens",
+                                flush=True,
+                            )
+                        if sample_count >= max_samples:
+                            break
+                    if sample_count >= max_samples:
+                        break
+                if sample_count >= max_samples:
+                    break
+
+        metadata = {
+            "version": dataset_version,
+            "source_type": "tokenized_parquet_subset",
+            "source_path": str(source_path),
+            "source_parts_scanned": int(part_count),
+            "token_ids_column": token_ids_column,
+            "read_batch_rows": int(read_batch_rows),
+            "max_samples_requested": int(max_samples),
+            "min_tokens_per_sample": int(min_tokens_per_sample),
+            "max_tokens_per_sample": int(max_tokens_per_sample),
+            "sample_count": int(sample_count),
+            "token_count": int(token_count),
+            "tokens_dtype": tokens_dtype_name,
+            "index_dtype": index_dtype_name,
+            "bos_token_id": None if bos_token_id is None else int(bos_token_id),
+            "eos_token_id": int(eos_token_id),
+            "pad_token_id": int(pad_token_id),
+        }
+        with (temp_dir / metadata_file).open("w", encoding="utf-8") as handle:
+            json.dump(metadata, handle, ensure_ascii=True, indent=2)
+            handle.write("\n")
+
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+        os.replace(temp_dir, output_dir)
+        return metadata
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+
+def _normalise_tokenized_parquet_row(token_ids, *, eos_token_id, max_tokens_per_sample):
+    if not token_ids:
+        return []
+    usable = [int(token_id) for token_id in token_ids]
+    if max_tokens_per_sample > 0:
+        usable = usable[: max(0, max_tokens_per_sample - 1)]
+    if not usable or usable[-1] != eos_token_id:
+        usable.append(eos_token_id)
+    return usable
+
+
+def _tokenized_parquet_parts(source_path):
+    parts_dir = source_path / "parts"
+    if parts_dir.is_dir():
+        parts = sorted(parts_dir.glob("*.parquet"))
+    else:
+        parts = sorted(source_path.glob("*.parquet")) if source_path.is_dir() else [source_path]
+    parts = [part for part in parts if part.is_file()]
+    if not parts:
+        raise FileNotFoundError(f"No parquet files found under {source_path}")
+    return parts
 
 
 class SFTDataset(Dataset):

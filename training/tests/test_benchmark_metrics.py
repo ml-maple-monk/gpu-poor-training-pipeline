@@ -27,6 +27,28 @@ def test_count_valid_tokens_ignores_padding(benchmark_metrics):
     assert benchmark_metrics.count_valid_tokens(labels) == 3
 
 
+def test_percentile_uses_linear_interpolation(benchmark_metrics):
+    assert benchmark_metrics.percentile([1.0, 2.0, 3.0, 4.0], 50) == pytest.approx(2.5)
+    assert benchmark_metrics.percentile([1.0, 2.0, 3.0, 4.0], 95) == pytest.approx(3.85)
+    assert benchmark_metrics.percentile([], 50) is None
+
+
+def test_selected_linear_train_flops_uses_fp8_precision_split(benchmark_metrics):
+    module = torch.nn.Module()
+    module.block = torch.nn.Module()
+    module.block.q_proj = torch.nn.Linear(8, 16, bias=False)
+    module.block.norm = torch.nn.LayerNorm(16)
+    module.lm_head = torch.nn.Linear(16, 32, bias=False)
+    module.gpupoor_precision_split = {
+        "precision": "fp8_training",
+        "selected_linears": ("block.q_proj",),
+    }
+
+    flops = benchmark_metrics.selected_linear_train_flops_per_step(module, active_sequence_elements=4)
+
+    assert flops == pytest.approx(3 * 2 * 4 * 8 * 16)
+
+
 @pytest.mark.parametrize(
     ("use_moe", "peak_tflops_per_gpu", "expected"),
     [

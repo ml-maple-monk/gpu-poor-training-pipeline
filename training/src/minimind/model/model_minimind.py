@@ -227,6 +227,7 @@ class MiniMindConfig(PretrainedConfig):
         num_experts_per_tok,
         norm_topk_prob,
         router_aux_loss_coef,
+        initializer_range=0.02,
         use_moe=False,
         gradient_checkpointing=False,
         head_dim=None,
@@ -263,6 +264,7 @@ class MiniMindConfig(PretrainedConfig):
         self.rms_norm_eps = rms_norm_eps
         self.rope_theta = rope_theta
         self.inference_rope_scaling = inference_rope_scaling
+        self.initializer_range = initializer_range
         self.rope_scaling_config = rope_scaling_config
         self.rope_scaling = dict(self.rope_scaling_config) if self.inference_rope_scaling else None
         ### MoE specific configs (ignored if use_moe = False)
@@ -648,9 +650,49 @@ class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
     def __init__(self, config: MiniMindConfig = None):
         self.config = config or MiniMindConfig()
         super().__init__(self.config)
+        self.gpupoor_init_summary = {
+            "method": "olmo3_normal",
+            "initializer_range": float(self.config.initializer_range),
+            "linear_modules": 0,
+            "embedding_modules": 0,
+            "norm_modules": 0,
+        }
         self.model = MiniMindModel(self.config)
         self.lm_head = nn.Linear(self.config.hidden_size, self.config.vocab_size, bias=False)
+        self.post_init()
+        self._tie_weights()
+        self.gpupoor_init_summary["tied_embeddings"] = True
+
+    def get_input_embeddings(self):
+        return self.model.embed_tokens
+
+    def set_input_embeddings(self, value):
+        self.model.embed_tokens = value
+
+    def get_output_embeddings(self):
+        return self.lm_head
+
+    def set_output_embeddings(self, value):
+        self.lm_head = value
+
+    def _tie_weights(self):
         self.model.embed_tokens.weight = self.lm_head.weight
+
+    def _init_weights(self, module):
+        std = float(getattr(self.config, "initializer_range", 0.02))
+        if isinstance(module, nn.Linear):
+            nn.init.trunc_normal_(module.weight, mean=0.0, std=std, a=-3 * std, b=3 * std)
+            if module.bias is not None:
+                nn.init.zeros_(module.bias)
+            self.gpupoor_init_summary["linear_modules"] += 1
+        elif isinstance(module, nn.Embedding):
+            nn.init.trunc_normal_(module.weight, mean=0.0, std=std, a=-3 * std, b=3 * std)
+            if module.padding_idx is not None:
+                module.weight.data[module.padding_idx].zero_()
+            self.gpupoor_init_summary["embedding_modules"] += 1
+        elif isinstance(module, RMSNorm):
+            nn.init.ones_(module.weight)
+            self.gpupoor_init_summary["norm_modules"] += 1
 
     def forward(
         self,

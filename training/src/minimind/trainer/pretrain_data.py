@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,8 +34,13 @@ class PretrainDataPipeline:
     batch_size: int
     max_seq_len: int
     num_workers: int
+    pin_memory: bool
+    persistent_workers: bool
+    prefetch_factor: int
 
     def epoch_indices(self, epoch: int) -> list[int] | None:
+        if hasattr(self.train_ds, "set_epoch"):
+            self.train_ds.set_epoch(epoch)
         if self.train_sample_lengths is None:
             return None
         if self.train_sampler is not None:
@@ -47,11 +53,13 @@ class PretrainDataPipeline:
             loader = DataLoader(
                 self.train_ds,
                 batch_size=self.batch_size,
-                num_workers=self.num_workers,
-                pin_memory=True,
                 collate_fn=self.collator,
-                persistent_workers=self.num_workers > 0,
-                prefetch_factor=8 if self.num_workers > 0 else None,
+                **_dataloader_kwargs_from_values(
+                    num_workers=self.num_workers,
+                    pin_memory=self.pin_memory,
+                    persistent_workers=self.persistent_workers,
+                    prefetch_factor=self.prefetch_factor,
+                ),
             )
             return _BatchSkippingLoader(loader, skip_batches) if skip_batches > 0 else loader
         if indices is None:
@@ -67,11 +75,13 @@ class PretrainDataPipeline:
         return DataLoader(
             self.train_ds,
             batch_sampler=batch_sampler,
-            num_workers=self.num_workers,
-            pin_memory=True,
             collate_fn=self.collator,
-            persistent_workers=self.num_workers > 0,
-            prefetch_factor=8 if self.num_workers > 0 else None,
+            **_dataloader_kwargs_from_values(
+                num_workers=self.num_workers,
+                pin_memory=self.pin_memory,
+                persistent_workers=self.persistent_workers,
+                prefetch_factor=self.prefetch_factor,
+            ),
         )
 
 
@@ -89,6 +99,9 @@ class TokenizedParquetDataset(IterableDataset):
         validation_split_seed: int = 42,
         token_ids_column: str = "token_ids",
         read_batch_rows: int = 2048,
+        shuffle_buffer_size: int = 0,
+        shuffle_seed: int = 42,
+        shuffle_files: bool = False,
     ) -> None:
         super().__init__()
         if split not in {"train", "validation"}:
@@ -101,8 +114,13 @@ class TokenizedParquetDataset(IterableDataset):
         self.validation_split_ratio = validation_split_ratio
         self.validation_split_seed = validation_split_seed
         self.token_ids_column = token_ids_column
-        self.read_batch_rows = read_batch_rows
+        self.read_batch_rows = max(1, int(read_batch_rows))
+        self.shuffle_buffer_size = max(0, int(shuffle_buffer_size))
+        self.shuffle_seed = int(shuffle_seed)
+        self.shuffle_files = bool(shuffle_files)
+        self._epoch = 0
         self._sample_count: int | None = None
+        self._part_offsets: list[int] | None = None
 
     def __len__(self) -> int:
         sample_count = self.sample_count()
@@ -120,9 +138,10 @@ class TokenizedParquetDataset(IterableDataset):
             self._sample_count = sum(pq.ParquetFile(part).metadata.num_rows for part in self.parts)
         return self._sample_count
 
-    def __iter__(self):  # type: ignore[override]
-        import pyarrow.parquet as pq
+    def set_epoch(self, epoch: int) -> None:
+        self._epoch = int(epoch)
 
+    def __iter__(self):  # type: ignore[override]
         rank = dist.get_rank() if dist.is_initialized() else 0
         world = dist.get_world_size() if dist.is_initialized() else 1
         worker = get_worker_info()
@@ -130,9 +149,28 @@ class TokenizedParquetDataset(IterableDataset):
         worker_count = worker.num_workers if worker is not None else 1
         shard_count = world * worker_count
         shard_id = rank * worker_count + worker_id
-        batch_index = 0
+        rng = random.Random(self.shuffle_seed + self._epoch * 1_000_003 + shard_id)
+        row_iter = self._iter_shard_rows(shard_count, shard_id)
+        if self.split == "train" and self.shuffle_buffer_size > 1:
+            yield from self._shuffle_rows(row_iter, rng)
+        else:
+            yield from row_iter
 
-        for part in self.parts:
+    def _part_iteration_order(self, rng: random.Random) -> list[int]:
+        part_order = list(range(len(self.parts)))
+        if self.split == "train" and self.shuffle_files:
+            rng.shuffle(part_order)
+        return part_order
+
+    def _iter_shard_rows(self, shard_count: int, shard_id: int) -> Iterator[torch.Tensor]:
+        import pyarrow.parquet as pq
+
+        rng = random.Random(self.shuffle_seed + self._epoch * 1_000_003 + shard_id)
+        part_offsets = self._get_part_offsets()
+        for part_index in self._part_iteration_order(rng):
+            part = self.parts[part_index]
+            part_row_base = part_offsets[part_index]
+            part_row_offset = 0
             parquet_file = pq.ParquetFile(part)
             for record_batch in parquet_file.iter_batches(
                 columns=[self.token_ids_column],
@@ -140,17 +178,37 @@ class TokenizedParquetDataset(IterableDataset):
                 use_threads=False,
             ):
                 column = record_batch.column(0)
-                for row_tokens in column.to_pylist():
-                    if batch_index % shard_count != shard_id:
-                        batch_index += 1
+                for row_offset, row_tokens in enumerate(column.to_pylist()):
+                    row_index = part_row_base + part_row_offset + row_offset
+                    if row_index % shard_count != shard_id:
                         continue
-                    if not self._matches_split(batch_index):
-                        batch_index += 1
+                    if not self._matches_split(row_index):
                         continue
                     tensor = self._tensor_with_eos(row_tokens)
-                    batch_index += 1
                     if tensor.numel() > 0:
                         yield tensor
+                part_row_offset += record_batch.num_rows
+
+    def _shuffle_rows(self, rows: Iterator[torch.Tensor], rng: random.Random) -> Iterator[torch.Tensor]:
+        buffer: list[torch.Tensor] = []
+        for row in rows:
+            buffer.append(row)
+            if len(buffer) >= self.shuffle_buffer_size:
+                yield buffer.pop(rng.randrange(len(buffer)))
+        while buffer:
+            yield buffer.pop(rng.randrange(len(buffer)))
+
+    def _get_part_offsets(self) -> list[int]:
+        if self._part_offsets is None:
+            import pyarrow.parquet as pq
+
+            offsets = []
+            running_total = 0
+            for part in self.parts:
+                offsets.append(running_total)
+                running_total += pq.ParquetFile(part).metadata.num_rows
+            self._part_offsets = offsets
+        return self._part_offsets
 
     def _matches_split(self, row_index: int) -> bool:
         if self.validation_split_ratio <= 0.0:
@@ -172,8 +230,18 @@ def build_pretrain_data_pipeline(args: Any, tokenizer: Any) -> PretrainDataPipel
         eos_token_id=int(tokenizer.eos_token_id),
         pad_token_id=int(tokenizer.pad_token_id),
         max_seq_len=args.max_seq_len,
+        profile_timing=bool(getattr(args, "profile_pipeline", False)),
+        collator_mode=str(getattr(args, "collator_mode", "loop")),
     )
     drop_last_for_compile = bool(args.use_compile)
+    if is_main_process():
+        Logger(
+            "DataLoader options: "
+            f"num_workers={args.num_workers}; "
+            f"pin_memory={bool(getattr(args, 'pin_memory', True))}; "
+            f"persistent_workers={bool(getattr(args, 'persistent_workers', args.num_workers > 0))}; "
+            f"prefetch_factor={getattr(args, 'prefetch_factor', 8)}"
+        )
     if is_tokenized_parquet_dataset(args.data_path):
         train_ds, val_ds = _build_parquet_datasets(args, tokenizer)
         val_loader = _build_iterable_validation_loader(args, val_ds, collator) if val_ds is not None else None
@@ -188,6 +256,9 @@ def build_pretrain_data_pipeline(args: Any, tokenizer: Any) -> PretrainDataPipel
             batch_size=args.batch_size,
             max_seq_len=args.max_seq_len,
             num_workers=args.num_workers,
+            pin_memory=bool(getattr(args, "pin_memory", True)),
+            persistent_workers=bool(getattr(args, "persistent_workers", args.num_workers > 0)),
+            prefetch_factor=int(getattr(args, "prefetch_factor", 8)),
         )
 
     train_ds, val_ds = _build_pretrain_datasets(args)
@@ -203,6 +274,9 @@ def build_pretrain_data_pipeline(args: Any, tokenizer: Any) -> PretrainDataPipel
         batch_size=args.batch_size,
         max_seq_len=args.max_seq_len,
         num_workers=args.num_workers,
+        pin_memory=bool(getattr(args, "pin_memory", True)),
+        persistent_workers=bool(getattr(args, "persistent_workers", args.num_workers > 0)),
+        prefetch_factor=int(getattr(args, "prefetch_factor", 8)),
     )
 
 
@@ -217,6 +291,10 @@ def is_tokenized_parquet_dataset(data_path: str | Path) -> bool:
 def _build_parquet_datasets(args: Any, tokenizer: Any) -> tuple[TokenizedParquetDataset, TokenizedParquetDataset | None]:
     validation_requested = args.validation_split_ratio > 0.0 or args.validation_interval_steps > 0
     validation_enabled = args.validation_split_ratio > 0.0 and args.validation_interval_steps > 0
+    shuffle_buffer_size = int(getattr(args, "shuffle_buffer_size", 0))
+    shuffle_seed = int(getattr(args, "shuffle_seed", args._validation_split_seed))
+    shuffle_files = bool(getattr(args, "shuffle_files", False))
+    parquet_read_batch_rows = int(getattr(args, "parquet_read_batch_rows", 2048))
     train_ds = TokenizedParquetDataset(
         args.data_path,
         max_length=args.max_seq_len,
@@ -224,6 +302,10 @@ def _build_parquet_datasets(args: Any, tokenizer: Any) -> tuple[TokenizedParquet
         split="train",
         validation_split_ratio=args.validation_split_ratio if validation_enabled else 0.0,
         validation_split_seed=args._validation_split_seed,
+        shuffle_buffer_size=shuffle_buffer_size,
+        shuffle_seed=shuffle_seed,
+        shuffle_files=shuffle_files,
+        read_batch_rows=parquet_read_batch_rows,
     )
     val_ds = None
     if validation_enabled:
@@ -234,6 +316,7 @@ def _build_parquet_datasets(args: Any, tokenizer: Any) -> tuple[TokenizedParquet
             split="validation",
             validation_split_ratio=args.validation_split_ratio,
             validation_split_seed=args._validation_split_seed,
+            read_batch_rows=parquet_read_batch_rows,
         )
         if is_main_process():
             Logger(
@@ -247,6 +330,13 @@ def _build_parquet_datasets(args: Any, tokenizer: Any) -> tuple[TokenizedParquet
         Logger("Time-to-target disabled because validation is not active")
     if is_main_process():
         Logger(f"Using tokenized parquet dataset at {args.data_path}")
+        Logger(
+            "Parquet sampling: "
+            f"shuffle_buffer_size={shuffle_buffer_size}; "
+            f"shuffle_seed={shuffle_seed}; "
+            f"shuffle_files={shuffle_files}; "
+            f"read_batch_rows={parquet_read_batch_rows}"
+        )
     return train_ds, val_ds
 
 
@@ -294,11 +384,8 @@ def _build_iterable_validation_loader(
     return DataLoader(
         val_ds,
         batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        pin_memory=True,
         collate_fn=collator,
-        persistent_workers=args.num_workers > 0,
-        prefetch_factor=8 if args.num_workers > 0 else None,
+        **_dataloader_kwargs(args),
     )
 
 
@@ -320,12 +407,35 @@ def _build_validation_loader(
     return DataLoader(
         val_ds,
         batch_sampler=val_batches,
-        num_workers=args.num_workers,
-        pin_memory=True,
         collate_fn=collator,
-        persistent_workers=args.num_workers > 0,
-        prefetch_factor=8 if args.num_workers > 0 else None,
+        **_dataloader_kwargs(args),
     )
+
+
+def _dataloader_kwargs(args: Any) -> dict[str, Any]:
+    return _dataloader_kwargs_from_values(
+        num_workers=int(getattr(args, "num_workers", 0)),
+        pin_memory=bool(getattr(args, "pin_memory", True)),
+        persistent_workers=bool(getattr(args, "persistent_workers", getattr(args, "num_workers", 0) > 0)),
+        prefetch_factor=int(getattr(args, "prefetch_factor", 8)),
+    )
+
+
+def _dataloader_kwargs_from_values(
+    *,
+    num_workers: int,
+    pin_memory: bool,
+    persistent_workers: bool,
+    prefetch_factor: int,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+        "persistent_workers": persistent_workers if num_workers > 0 else False,
+    }
+    if num_workers > 0:
+        kwargs["prefetch_factor"] = prefetch_factor
+    return kwargs
 
 
 class _BatchSkippingLoader:

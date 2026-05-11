@@ -48,6 +48,7 @@ DEFAULT_MODEL_CONFIG = {
     "rms_norm_eps": 1e-6,
     "rope_theta": 1e6,
     "inference_rope_scaling": False,
+    "initializer_range": 0.02,
     "use_moe": False,
     "num_experts": 4,
     "num_experts_per_tok": 1,
@@ -70,6 +71,12 @@ DEFAULT_GENERATION_CONFIG = {
     "top_k": 50,
     "eos_token_id": 2,
     "repetition_penalty": 1.0,
+}
+DEFAULT_DATASET_CONFIG = {
+    "shuffle_buffer_size": 8192,
+    "shuffle_seed": 42,
+    "shuffle_files": True,
+    "parquet_read_batch_rows": 2048,
 }
 
 
@@ -126,6 +133,12 @@ def runtime_args_from_config(
             recipe.get("architecture_variant", DEFAULT_ARCHITECTURE_VARIANT),
         ),
         "num_workers": training["num_workers"],
+        "prefetch_factor": training.get("prefetch_factor", 8),
+        "pin_memory": 1 if training.get("pin_memory", True) else 0,
+        "persistent_workers": (
+            1 if training.get("persistent_workers", int(training["num_workers"]) > 0) else 0
+        ),
+        "collator_mode": training.get("collator_mode", "loop"),
         "accumulation_steps": training["accumulation_steps"],
         "grad_clip": training["grad_clip"],
         "log_interval": training["log_interval"],
@@ -153,6 +166,7 @@ def runtime_args_from_config(
         "inference_rope_scaling": (
             1 if training.get("inference_rope_scaling", DEFAULT_MODEL_CONFIG["inference_rope_scaling"]) else 0
         ),
+        "initializer_range": training.get("initializer_range", DEFAULT_MODEL_CONFIG["initializer_range"]),
         "max_seq_len": recipe["max_seq_len"],
         "use_moe": 1 if training.get("use_moe", DEFAULT_MODEL_CONFIG["use_moe"]) else 0,
         "num_experts": training.get("num_experts", DEFAULT_MODEL_CONFIG["num_experts"]),
@@ -171,11 +185,37 @@ def runtime_args_from_config(
         "from_resume": 1 if training["from_resume"] else 0,
         "use_compile": 1 if training["use_compile"] else 0,
         "compile_fullgraph": 1 if training.get("compile_fullgraph", False) else 0,
+        "profile_pipeline": 1 if training.get("profile_pipeline", False) else 0,
+        "profile_metrics_jsonl": _resolve_runtime_path(training.get("profile_metrics_jsonl", ""), base_dir),
+        "probe_mode": training.get("probe_mode", "real_pipeline"),
+        "torch_profiler_trace_dir": _resolve_runtime_path(training.get("torch_profiler_trace_dir", ""), base_dir),
+        "torch_profiler_wait_steps": training.get("torch_profiler_wait_steps", 1),
+        "torch_profiler_warmup_steps": training.get("torch_profiler_warmup_steps", 1),
+        "torch_profiler_active_steps": training.get("torch_profiler_active_steps", 3),
+        "torch_profiler_repeat": training.get("torch_profiler_repeat", 1),
         "validation_split_ratio": recipe["validation_split_ratio"],
         "validation_interval_steps": recipe["validation_interval_steps"],
+        "perf_log_interval": training.get("perf_log_interval", training["log_interval"]),
         "peak_tflops_per_gpu": mlflow_cfg.get("peak_tflops_per_gpu", 0.0),
         "time_to_target_metric": mlflow_cfg.get("time_to_target_metric", "none"),
         "time_to_target_value": mlflow_cfg.get("time_to_target_value", 0.0),
+        "mlflow_run_name": mlflow_cfg.get("mlflow_run_name", ""),
+        "experiment_group": mlflow_cfg.get("experiment_group", ""),
+        "experiment_stage": mlflow_cfg.get("experiment_stage", ""),
+        "experiment_variant": mlflow_cfg.get("experiment_variant", ""),
+        "baseline_run_id": mlflow_cfg.get("baseline_run_id", ""),
+        "shuffle_buffer_size": dataset_cfg.get(
+            "shuffle_buffer_size",
+            DEFAULT_DATASET_CONFIG["shuffle_buffer_size"],
+        ),
+        "shuffle_seed": dataset_cfg.get("shuffle_seed", DEFAULT_DATASET_CONFIG["shuffle_seed"]),
+        "shuffle_files": (
+            1 if dataset_cfg.get("shuffle_files", DEFAULT_DATASET_CONFIG["shuffle_files"]) else 0
+        ),
+        "parquet_read_batch_rows": dataset_cfg.get(
+            "parquet_read_batch_rows",
+            DEFAULT_DATASET_CONFIG["parquet_read_batch_rows"],
+        ),
     }
 
     runtime_args = coerce_args(options)
@@ -189,6 +229,44 @@ def runtime_args_from_config(
 
 def coerce_args(options: dict[str, Any]) -> SimpleNamespace:
     runtime_args = SimpleNamespace(**options)
+    if not hasattr(runtime_args, "initializer_range"):
+        runtime_args.initializer_range = DEFAULT_MODEL_CONFIG["initializer_range"]
+    if not hasattr(runtime_args, "num_workers"):
+        runtime_args.num_workers = 0
+    if not hasattr(runtime_args, "shuffle_buffer_size"):
+        runtime_args.shuffle_buffer_size = DEFAULT_DATASET_CONFIG["shuffle_buffer_size"]
+    if not hasattr(runtime_args, "shuffle_seed"):
+        runtime_args.shuffle_seed = DEFAULT_DATASET_CONFIG["shuffle_seed"]
+    if not hasattr(runtime_args, "shuffle_files"):
+        runtime_args.shuffle_files = 1 if DEFAULT_DATASET_CONFIG["shuffle_files"] else 0
+    if not hasattr(runtime_args, "parquet_read_batch_rows"):
+        runtime_args.parquet_read_batch_rows = DEFAULT_DATASET_CONFIG["parquet_read_batch_rows"]
+    if not hasattr(runtime_args, "prefetch_factor"):
+        runtime_args.prefetch_factor = 8
+    if not hasattr(runtime_args, "pin_memory"):
+        runtime_args.pin_memory = 1
+    if not hasattr(runtime_args, "persistent_workers"):
+        runtime_args.persistent_workers = 1 if getattr(runtime_args, "num_workers", 0) > 0 else 0
+    if not hasattr(runtime_args, "perf_log_interval"):
+        runtime_args.perf_log_interval = getattr(runtime_args, "log_interval", 1)
+    if not hasattr(runtime_args, "collator_mode"):
+        runtime_args.collator_mode = "loop"
+    if not hasattr(runtime_args, "profile_pipeline"):
+        runtime_args.profile_pipeline = 0
+    if not hasattr(runtime_args, "profile_metrics_jsonl"):
+        runtime_args.profile_metrics_jsonl = ""
+    if not hasattr(runtime_args, "probe_mode"):
+        runtime_args.probe_mode = "real_pipeline"
+    if not hasattr(runtime_args, "torch_profiler_trace_dir"):
+        runtime_args.torch_profiler_trace_dir = ""
+    if not hasattr(runtime_args, "torch_profiler_wait_steps"):
+        runtime_args.torch_profiler_wait_steps = 1
+    if not hasattr(runtime_args, "torch_profiler_warmup_steps"):
+        runtime_args.torch_profiler_warmup_steps = 1
+    if not hasattr(runtime_args, "torch_profiler_active_steps"):
+        runtime_args.torch_profiler_active_steps = 3
+    if not hasattr(runtime_args, "torch_profiler_repeat"):
+        runtime_args.torch_profiler_repeat = 1
     for field_name in POSITIVE_INT_FIELDS:
         if getattr(runtime_args, field_name) <= 0:
             raise ValueError(f"{field_name} must be > 0")
@@ -196,6 +274,8 @@ def coerce_args(options: dict[str, Any]) -> SimpleNamespace:
         raise ValueError("rms_norm_eps must be > 0")
     if runtime_args.rope_theta <= 0:
         raise ValueError("rope_theta must be > 0")
+    if runtime_args.initializer_range <= 0:
+        raise ValueError("initializer_range must be > 0")
     if runtime_args.router_aux_loss_coef < 0.0:
         raise ValueError("router_aux_loss_coef must be >= 0.0")
     if runtime_args.dropout < 0.0 or runtime_args.dropout >= 1.0:
@@ -214,6 +294,16 @@ def coerce_args(options: dict[str, Any]) -> SimpleNamespace:
         raise ValueError("lr_min_ratio must be >= 0.0 and <= 1.0")
     if runtime_args.weight_decay < 0.0:
         raise ValueError("weight_decay must be >= 0.0")
+    if runtime_args.shuffle_buffer_size < 0:
+        raise ValueError("shuffle_buffer_size must be >= 0")
+    if runtime_args.parquet_read_batch_rows <= 0:
+        raise ValueError("parquet_read_batch_rows must be > 0")
+    if runtime_args.prefetch_factor <= 0:
+        raise ValueError("prefetch_factor must be > 0")
+    if runtime_args.num_workers <= 0 and runtime_args.persistent_workers:
+        raise ValueError("persistent_workers requires num_workers > 0")
+    if runtime_args.collator_mode not in {"loop", "vectorized"}:
+        raise ValueError("collator_mode must be one of: loop, vectorized")
     if runtime_args.optimizer not in {"adamw", "muon8bit", "sgd"}:
         raise ValueError("optimizer must be one of: adamw, muon8bit, sgd")
     if runtime_args.precision not in SUPPORTED_PRECISION_AXES:
@@ -224,6 +314,25 @@ def coerce_args(options: dict[str, Any]) -> SimpleNamespace:
         raise ValueError("precision='fp8_training' requires optimizer='muon8bit' for the dense Muon8Bit recipe")
     if runtime_args.compile_fullgraph and not runtime_args.use_compile:
         raise ValueError("compile_fullgraph requires use_compile=true")
+    if runtime_args.perf_log_interval <= 0:
+        raise ValueError("perf_log_interval must be > 0")
+    if runtime_args.probe_mode not in {
+        "real_pipeline",
+        "cached_gpu_batch",
+        "synthetic_cpu_batch",
+        "cached_packed_batch",
+    }:
+        raise ValueError(
+            "probe_mode must be one of: real_pipeline, cached_gpu_batch, synthetic_cpu_batch, cached_packed_batch"
+        )
+    if runtime_args.torch_profiler_wait_steps < 0:
+        raise ValueError("torch_profiler_wait_steps must be >= 0")
+    if runtime_args.torch_profiler_warmup_steps < 0:
+        raise ValueError("torch_profiler_warmup_steps must be >= 0")
+    if runtime_args.torch_profiler_active_steps <= 0:
+        raise ValueError("torch_profiler_active_steps must be > 0")
+    if runtime_args.torch_profiler_repeat <= 0:
+        raise ValueError("torch_profiler_repeat must be > 0")
     runtime_args.peak_tflops_per_gpu = (
         runtime_args.peak_tflops_per_gpu if runtime_args.peak_tflops_per_gpu > 0 else None
     )
@@ -256,6 +365,7 @@ def build_default_minimind_config(config_cls: type, **overrides: Any) -> Any:
         rms_norm_eps=model_values["rms_norm_eps"],
         rope_theta=model_values["rope_theta"],
         inference_rope_scaling=bool(model_values["inference_rope_scaling"]),
+        initializer_range=model_values["initializer_range"],
         num_experts=model_values["num_experts"],
         num_experts_per_tok=model_values["num_experts_per_tok"],
         moe_intermediate_size=model_values["moe_intermediate_size"],
@@ -299,6 +409,7 @@ def build_minimind_config(runtime_args: SimpleNamespace, config_cls: type) -> An
         rms_norm_eps=runtime_args.rms_norm_eps,
         rope_theta=runtime_args.rope_theta,
         inference_rope_scaling=bool(runtime_args.inference_rope_scaling),
+        initializer_range=runtime_args.initializer_range,
         num_experts=runtime_args.num_experts,
         num_experts_per_tok=runtime_args.num_experts_per_tok,
         moe_intermediate_size=runtime_args.moe_intermediate_size,

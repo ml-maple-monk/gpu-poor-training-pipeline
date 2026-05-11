@@ -307,7 +307,10 @@ def start(runtime_args, model_config, mlflow_config: dict) -> None:
             mlflow.set_experiment(exp_name)
             script_name = str(mlflow_config.get("script_name", "train_pretrain"))
             accumulation_steps = int(getattr(runtime_args, "accumulation_steps", 1) or 1)
-            run_name = (
+            configured_run_name = str(
+                getattr(runtime_args, "mlflow_run_name", "") or mlflow_config.get("mlflow_run_name", "")
+            ).strip()
+            run_name = configured_run_name or (
                 f"{script_name}-h{runtime_args.hidden_size}-L{runtime_args.num_hidden_layers}"
                 f"-bs{runtime_args.batch_size}-ga{accumulation_steps}-lr{runtime_args.learning_rate}"
             )
@@ -327,6 +330,16 @@ def start(runtime_args, model_config, mlflow_config: dict) -> None:
                 "verda.emulation": os.environ.get("VERDA_EMULATION", "true"),
                 "verda.run_name": os.environ.get("DSTACK_RUN_NAME", ""),
             }
+            experiment_tag_names = {
+                "experiment_group": "experiment.group",
+                "experiment_stage": "experiment.stage",
+                "experiment_variant": "experiment.variant",
+                "baseline_run_id": "baseline_run_id",
+            }
+            for arg_name, tag_name in experiment_tag_names.items():
+                value = str(getattr(runtime_args, arg_name, "") or mlflow_config.get(arg_name, "")).strip()
+                if value:
+                    tags[tag_name] = value
             started_run = mlflow.start_run(run_name=run_name, log_system_metrics=log_sys, tags=tags)
             _run_id = _active_run_id(mlflow, started_run)
             _log_runtime_config(mlflow, runtime_args, model_config, mlflow_config)

@@ -66,12 +66,71 @@ def test_pretrain_data_collator_stacks_inputs_and_builds_position_ids(lm_dataset
     )
 
 
+def test_vectorized_pretrain_data_collator_matches_loop_mode(lm_dataset_module, packed_eos_features) -> None:
+    loop = lm_dataset_module.PretrainDataCollator(eos_token_id=3, max_seq_len=6, collator_mode="loop")
+    vectorized = lm_dataset_module.PretrainDataCollator(eos_token_id=3, max_seq_len=6, collator_mode="vectorized")
+
+    loop_batch = loop(packed_eos_features)
+    vectorized_batch = vectorized(packed_eos_features)
+
+    for key in ("input_ids", "labels", "position_ids"):
+        assert torch.equal(vectorized_batch[key], loop_batch[key])
+    assert torch.equal(vectorized_batch["attention_mask"], loop_batch["attention_mask"])
+
+
+def test_vectorized_pretrain_data_collator_omits_mask_for_single_unpacked_rows(lm_dataset_module) -> None:
+    collator = lm_dataset_module.PretrainDataCollator(
+        eos_token_id=9,
+        pad_token_id=0,
+        max_seq_len=8,
+        collator_mode="vectorized",
+    )
+
+    batch = collator([torch.tensor([1, 2, 3])])
+
+    assert batch["attention_mask"] is None
+    assert torch.equal(batch["position_ids"][0], torch.tensor([0, 1, 2, 3, 0, 0, 0, 0]))
+
+
 def test_minimind_requires_explicit_position_ids(model_minimind_module) -> None:
     model = model_minimind_module.MiniMindForCausalLM(_tiny_model_config(model_minimind_module))
     input_ids = torch.tensor([[1, 2, 3]])
 
     with pytest.raises(ValueError, match="position_ids"):
         model(input_ids)
+
+
+def test_minimind_uses_olmo3_style_nonzero_component_init(model_minimind_module) -> None:
+    torch.manual_seed(0)
+    model = model_minimind_module.MiniMindForCausalLM(_tiny_model_config(model_minimind_module))
+    std = model.config.initializer_range
+
+    assert model.model.embed_tokens.weight.data_ptr() == model.lm_head.weight.data_ptr()
+    assert model.gpupoor_init_summary["method"] == "olmo3_normal"
+    assert model.gpupoor_init_summary["linear_modules"] == 8
+    assert model.gpupoor_init_summary["embedding_modules"] == 1
+    assert model.gpupoor_init_summary["norm_modules"] == 5
+
+    initialized_weights = [
+        model.lm_head.weight,
+        model.model.layers[0].self_attn.q_proj.weight,
+        model.model.layers[0].self_attn.k_proj.weight,
+        model.model.layers[0].self_attn.v_proj.weight,
+        model.model.layers[0].self_attn.o_proj.weight,
+        model.model.layers[0].mlp.gate_proj.weight,
+        model.model.layers[0].mlp.up_proj.weight,
+        model.model.layers[0].mlp.down_proj.weight,
+    ]
+    for weight in initialized_weights:
+        assert torch.count_nonzero(weight).item() > 0
+        assert weight.float().std().item() > 0
+        assert weight.abs().max().item() <= 3 * std + 1e-6
+
+    assert torch.all(model.model.layers[0].self_attn.q_norm.weight == 1)
+    assert torch.all(model.model.layers[0].self_attn.k_norm.weight == 1)
+    assert torch.all(model.model.layers[0].input_layernorm.weight == 1)
+    assert torch.all(model.model.layers[0].post_attention_layernorm.weight == 1)
+    assert torch.all(model.model.norm.weight == 1)
 
 
 def test_minimind_accepts_packed_attention_mask(

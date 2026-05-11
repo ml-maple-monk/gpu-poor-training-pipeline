@@ -27,8 +27,13 @@ def test_tiny_local_example_loads() -> None:
     assert config.training.learning_rate == 5e-4
     assert config.training.weight_decay == 0.4
     assert config.training.optimizer in {"adamw", "muon8bit", "sgd"}
+    assert config.training.prefetch_factor == 8
+    assert config.training.pin_memory is True
+    assert config.training.persistent_workers == (config.training.num_workers > 0)
+    assert config.training.perf_log_interval > 0
     assert config.training.num_attention_heads == 8
     assert config.training.num_key_value_heads == 4
+    assert config.training.initializer_range == 0.02
     assert config.training.intermediate_size > config.training.hidden_size
     assert config.training.flash_attn is True
     assert config.training.lr_schedule == "cosine"
@@ -165,6 +170,51 @@ kind = "local"
     )
 
     with pytest.raises(ConfigError, match="num_attention_heads must be divisible by training.num_key_value_heads"):
+        load_run_config(config_file)
+
+
+def test_config_rejects_persistent_workers_without_workers(tmp_path: Path) -> None:
+    config_file = tmp_path / "bad-workers.toml"
+    config_file.write_text(
+        """
+name = "tiny_local"
+[recipe]
+[training]
+num_workers = 0
+persistent_workers = true
+[backend]
+kind = "local"
+[mlflow]
+[doctor]
+[smoke]
+[remote]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="persistent_workers requires training.num_workers > 0"):
+        load_run_config(config_file)
+
+
+def test_config_rejects_invalid_perf_log_interval(tmp_path: Path) -> None:
+    config_file = tmp_path / "bad-perf-log.toml"
+    config_file.write_text(
+        """
+name = "tiny_local"
+[recipe]
+[training]
+perf_log_interval = 0
+[backend]
+kind = "local"
+[mlflow]
+[doctor]
+[smoke]
+[remote]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="training.perf_log_interval must be > 0"):
         load_run_config(config_file)
 
 

@@ -160,6 +160,42 @@ def test_mlflow_start_logs_recipe_and_runtime_config(
     assert "config/mlflow_config.json" in logged_paths
 
 
+def test_mlflow_start_uses_ablation_run_name_and_tags(
+    mlflow_helper,
+    build_mlflow_module,
+    fake_torch_module,
+    fake_train_args,
+    fake_model_config,
+    monkeypatch,
+):
+    started = []
+    mlflow_module = build_mlflow_module(start_run=lambda **kwargs: started.append(kwargs))
+
+    monkeypatch.setitem(sys.modules, "mlflow", mlflow_module)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch_module())
+
+    fake_train_args.mlflow_run_name = "mfu_ablation-calibration-real_pipeline-h768-L8-bs16-ga1"
+    fake_train_args.experiment_group = "minimind_fp8_mfu_ablation"
+    fake_train_args.experiment_stage = "calibration"
+    fake_train_args.experiment_variant = "real_pipeline"
+    fake_train_args.baseline_run_id = "baseline-123"
+    mlflow_helper.start(
+        fake_train_args,
+        fake_model_config,
+        {
+            "tracking_uri": "https://mlflow.example",
+            "start_retry_seconds": 0,
+        },
+    )
+    mlflow_helper.finish()
+
+    assert started[0]["run_name"] == "mfu_ablation-calibration-real_pipeline-h768-L8-bs16-ga1"
+    assert started[0]["tags"]["experiment.group"] == "minimind_fp8_mfu_ablation"
+    assert started[0]["tags"]["experiment.stage"] == "calibration"
+    assert started[0]["tags"]["experiment.variant"] == "real_pipeline"
+    assert started[0]["tags"]["baseline_run_id"] == "baseline-123"
+
+
 def test_mlflow_start_cleans_up_leaked_active_run_before_retry(
     mlflow_helper,
     build_mlflow_module,

@@ -113,6 +113,54 @@ def dense_model_flops_per_step(
     )
 
 
+def selected_linear_train_flops_per_step(module: torch.nn.Module, *, active_sequence_elements: float) -> float:
+    """Training FLOPs for linears selected by the torchao FP8 conversion pass.
+
+    The precision split is recorded before torch.compile/DDP wrapping. The
+    converted modules may no longer be exact ``torch.nn.Linear`` instances, so
+    the contract keys are the module names plus their ``in_features`` and
+    ``out_features`` attributes.
+    """
+
+    precision_split = getattr(module, "gpupoor_precision_split", {}) or {}
+    selected_linears = precision_split.get("selected_linears", ())
+    if not selected_linears:
+        return 0.0
+
+    named_modules = dict(module.named_modules())
+    forward_flops = 0.0
+    for name in selected_linears:
+        child = named_modules.get(str(name))
+        if child is None:
+            continue
+        in_features = getattr(child, "in_features", None)
+        out_features = getattr(child, "out_features", None)
+        if in_features is None or out_features is None:
+            continue
+        forward_flops += 2.0 * float(active_sequence_elements) * float(in_features) * float(out_features)
+    return 3.0 * forward_flops
+
+
+def percentile(values: list[float], q: float) -> float | None:
+    """Return a deterministic linear-interpolated percentile for small windows."""
+
+    if not values:
+        return None
+    if q <= 0:
+        return float(min(values))
+    if q >= 100:
+        return float(max(values))
+
+    ordered = sorted(float(value) for value in values)
+    if len(ordered) == 1:
+        return ordered[0]
+    rank = (len(ordered) - 1) * (q / 100.0)
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = rank - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
 def should_log_dense_flops(*, use_moe: bool, peak_tflops_per_gpu: float | None) -> bool:
     return (not use_moe) and peak_tflops_per_gpu is not None and peak_tflops_per_gpu > 0
 

@@ -1,11 +1,13 @@
 import glob
 import importlib
 import importlib.util
+import json
 import math
 import os
 import signal
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 __package__ = "trainer"
@@ -23,7 +25,9 @@ from trainer._benchmark_metrics import (
     ddp_sum,
     dense_model_flops_per_step,
     maybe_record_time_to_target,
+    percentile,
     resolve_peak_flops_profile,
+    selected_linear_train_flops_per_step,
     should_log_dense_flops,
     world_size,
 )
@@ -59,6 +63,18 @@ from trainer.trainer_utils import (
 
 mlflow_logger = MlflowLogger()
 _MUON_STEP_PARAM = None
+torch_profiler = None
+_PROFILE_WINDOW_KEYS = (
+    "loader_wait_s",
+    "collator_build_s",
+    "h2d_s",
+    "forward_s",
+    "backward_s",
+    "optimizer_s",
+    "logging_enqueue_s",
+    "checkpoint_s",
+    "total_step_s",
+)
 
 
 def _sigterm_handler(signum, frame):
@@ -91,6 +107,8 @@ def _reset_metric_window(state: dict[str, float | int | None]) -> None:
     state["window_grad_norm_sum"] = 0.0
     state["window_grad_norm_max"] = None
     state["window_grad_norm_count"] = 0
+    for key in _PROFILE_WINDOW_KEYS:
+        state[f"window_{key}"] = []
     if device_type == "cuda":
         torch.cuda.reset_peak_memory_stats(args.device)
 
@@ -100,8 +118,9 @@ def _build_metric_state(
     *,
     resolved_peak_tflops_per_gpu: float | None,
     resolved_peak_fp8_tflops_per_gpu: float | None,
-) -> dict[str, float | int | None | dict[str, float]]:
-    state: dict[str, float | int | None | dict[str, float]] = {
+    fp8_train_flops_per_active_sequence_element: float,
+) -> dict[str, object]:
+    state: dict[str, object] = {
         "job_start_time": time.perf_counter(),
         "consumed_tokens_local_total": 0,
         "optimizer_step": start_optimizer_step,
@@ -109,9 +128,69 @@ def _build_metric_state(
         "time_to_target_hit": None,
         "resolved_peak_tflops_per_gpu": resolved_peak_tflops_per_gpu,
         "resolved_peak_fp8_tflops_per_gpu": resolved_peak_fp8_tflops_per_gpu,
+        "fp8_train_flops_per_active_sequence_element": fp8_train_flops_per_active_sequence_element,
     }
     _reset_metric_window(state)
     return state
+
+
+def _profile_pipeline_enabled() -> bool:
+    return bool(getattr(args, "profile_pipeline", 0))
+
+
+def _record_profile_value(name: str, value: float | None) -> None:
+    if not _profile_pipeline_enabled() or value is None:
+        return
+    bucket = metric_state.get(f"window_{name}")
+    if isinstance(bucket, list):
+        bucket.append(float(value))
+
+
+def _sync_for_profile() -> None:
+    if _profile_pipeline_enabled() and device_type == "cuda":
+        torch.cuda.synchronize(args.device)
+
+
+def _add_profile_window_metrics(extra_metrics: dict[str, float]) -> None:
+    if not _profile_pipeline_enabled():
+        return
+
+    for key in _PROFILE_WINDOW_KEYS:
+        values = metric_state.get(f"window_{key}")
+        if not isinstance(values, list) or not values:
+            continue
+        p50 = percentile(values, 50)
+        p95 = percentile(values, 95)
+        if p50 is not None:
+            extra_metrics[f"train/{key}_p50"] = p50
+        if p95 is not None:
+            extra_metrics[f"train/{key}_p95"] = p95
+
+    loader_values = metric_state.get("window_loader_wait_s")
+    total_values = metric_state.get("window_total_step_s")
+    if isinstance(loader_values, list) and isinstance(total_values, list) and total_values:
+        total_step_wall = sum(float(value) for value in total_values)
+        if total_step_wall > 0:
+            extra_metrics["train/gpu_starvation_fraction"] = (
+                sum(float(value) for value in loader_values) / total_step_wall
+            )
+
+
+def _write_metrics_jsonl(*, step: int, metrics: dict[str, float]) -> None:
+    path = str(getattr(args, "profile_metrics_jsonl", "") or "").strip()
+    if not path or not is_main_process():
+        return
+
+    payload = {
+        "step": int(step),
+        "optimizer_step": int(metric_state["optimizer_step"]),
+        "metrics": {key: float(value) for key, value in metrics.items()},
+        "time": time.time(),
+    }
+    metrics_path = Path(path)
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    with metrics_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
 def _save_checkpoint(epoch: int, step: int) -> None:
@@ -141,6 +220,102 @@ def _target_update_steps(iters: int) -> int:
 
 def _target_reached() -> bool:
     return args.max_steps > 0 and int(metric_state["optimizer_step"]) >= int(args.max_steps)
+
+
+def _scheduled_learning_rate(update_step: int, total_update_steps: int) -> float:
+    return get_lr(
+        update_step,
+        total_update_steps,
+        args.learning_rate,
+        schedule=args.lr_schedule,
+        warmup_steps=args.lr_warmup_steps,
+        min_lr_ratio=args.lr_min_ratio,
+    )
+
+
+def _set_optimizer_lr(lr: float) -> None:
+    for param_group in optimizer.param_groups:
+        param_group["lr"] = lr
+
+
+def _perf_log_due(step: int, iters: int, reached_target: bool) -> bool:
+    if step == iters or reached_target:
+        return True
+    update_step = int(metric_state["optimizer_step"])
+    return update_step <= 1 or update_step % int(args.perf_log_interval) == 0
+
+
+def _add_train_speed_metrics(
+    extra_metrics: dict[str, float],
+    summary: list[str],
+    *,
+    global_tokens: float,
+    elapsed_window: float,
+    step_time_s: float,
+    include_perf_summary: bool,
+) -> None:
+    optimizer_steps = float(metric_state["window_optimizer_steps"])
+    global_sequences = ddp_sum(metric_state["window_sequences_local"], collective_device)
+    global_tokens_per_sec = global_tokens / elapsed_window
+    tokens_per_sec_per_gpu = global_tokens_per_sec / world_size()
+    optimizer_steps_per_sec = optimizer_steps / elapsed_window
+
+    extra_metrics["train/step_time_s"] = step_time_s
+    extra_metrics["train/tokens_per_sec_per_gpu"] = tokens_per_sec_per_gpu
+    extra_metrics["train/global_tokens_per_sec"] = global_tokens_per_sec
+    extra_metrics["train/optimizer_steps_per_sec"] = optimizer_steps_per_sec
+    extra_metrics["train/global_sequences_per_sec"] = global_sequences / elapsed_window
+    extra_metrics["train/sequences_per_sec_per_gpu"] = global_sequences / elapsed_window / world_size()
+    extra_metrics["train/tokens_per_optimizer_step"] = global_tokens / optimizer_steps
+    extra_metrics["train/tokens_per_optimizer_step_per_gpu"] = global_tokens / optimizer_steps / world_size()
+    extra_metrics["train/useful_tokens"] = global_tokens
+    extra_metrics["train/window_tokens"] = global_tokens
+    extra_metrics["train/window_optimizer_steps"] = optimizer_steps
+    summary.append(f"tok/s/gpu: {tokens_per_sec_per_gpu:.2f}")
+
+    if should_log_dense_flops(use_moe=bool(args.use_moe), peak_tflops_per_gpu=args.peak_tflops_per_gpu):
+        avg_global_batch_seqs = global_sequences / optimizer_steps
+        model_flops = dense_model_flops_per_step(
+            global_batch_seqs=avg_global_batch_seqs,
+            seq_len=args.max_seq_len,
+            num_layers=args.num_hidden_layers,
+            hidden_size=args.hidden_size,
+            vocab_size=lm_config.vocab_size,
+        )
+        model_tflops_per_gpu = model_flops / max(step_time_s, 1e-12) / world_size() / 1e12
+        extra_metrics["train/analytic_train_flops_per_step"] = model_flops
+        extra_metrics["train/model_tflops_per_gpu"] = model_tflops_per_gpu
+        extra_metrics["train/mfu_dense"] = model_tflops_per_gpu / args.peak_tflops_per_gpu
+        extra_metrics["train/mfu"] = extra_metrics["train/mfu_dense"]
+        peak_fp8_tflops = metric_state["resolved_peak_fp8_tflops_per_gpu"]
+        if peak_fp8_tflops is not None and peak_fp8_tflops > 0:
+            extra_metrics["train/legacy_fp8_mfu_wrong_denominator"] = model_tflops_per_gpu / float(
+                peak_fp8_tflops
+            )
+            fp8_flops_per_element = float(metric_state.get("fp8_train_flops_per_active_sequence_element", 0.0))
+            fp8_train_flops = fp8_flops_per_element * avg_global_batch_seqs * args.max_seq_len
+            if fp8_train_flops > 0:
+                fp8_scope_tflops_per_gpu = fp8_train_flops / max(step_time_s, 1e-12) / world_size() / 1e12
+                extra_metrics["train/analytic_fp8_eligible_flops_per_step"] = fp8_train_flops
+                extra_metrics["train/fp8_scope_tflops_per_gpu"] = fp8_scope_tflops_per_gpu
+                extra_metrics["train/mfu_fp8_scope"] = fp8_scope_tflops_per_gpu / float(peak_fp8_tflops)
+                extra_metrics["train/fp8_mfu"] = extra_metrics["train/mfu_fp8_scope"]
+
+    if include_perf_summary:
+        summary.extend(
+            [
+                f"step_s: {step_time_s:.2f}",
+                f"global_tok/s: {global_tokens_per_sec:.2f}",
+                f"opt_step/s: {optimizer_steps_per_sec:.3f}",
+                f"seq/s/gpu: {extra_metrics['train/sequences_per_sec_per_gpu']:.2f}",
+            ]
+        )
+        if "train/model_tflops_per_gpu" in extra_metrics:
+            summary.append(f"tflops/gpu: {extra_metrics['train/model_tflops_per_gpu']:.2f}")
+        if "train/mfu" in extra_metrics:
+            summary.append(f"mfu: {100.0 * extra_metrics['train/mfu']:.2f}%")
+        if "train/mfu_fp8_scope" in extra_metrics:
+            summary.append(f"fp8_scope_mfu: {100.0 * extra_metrics['train/mfu_fp8_scope']:.2f}%")
 
 
 def _load_muon_step_param():
@@ -375,7 +550,117 @@ def _build_optimizer(module: torch.nn.Module):
     raise ValueError(f"Unsupported optimizer: {args.optimizer}")
 
 
-def _log_train_window(epoch: int, step: int, iters: int, start_step: int) -> None:
+def _move_batch_to_device(batch: dict) -> dict:
+    moved = dict(batch)
+    for key in ("input_ids", "labels", "position_ids", "attention_mask"):
+        value = moved.get(key)
+        if torch.is_tensor(value):
+            moved[key] = value.to(args.device, non_blocking=True)
+    return moved
+
+
+class _RepeatBatchLoader:
+    def __init__(self, batch: dict, repeats: int) -> None:
+        self.batch = batch
+        self.repeats = max(1, int(repeats))
+
+    def __iter__(self):
+        for _ in range(self.repeats):
+            yield self.batch
+
+    def __len__(self) -> int:
+        return self.repeats
+
+
+def _synthetic_cpu_batch() -> dict:
+    input_ids = torch.randint(
+        low=0,
+        high=int(lm_config.vocab_size),
+        size=(int(args.batch_size), int(args.max_seq_len)),
+        dtype=torch.long,
+    )
+    labels = input_ids.clone()
+    position_ids = torch.arange(int(args.max_seq_len), dtype=torch.long).unsqueeze(0).expand_as(input_ids).clone()
+    return {
+        "input_ids": input_ids,
+        "labels": labels,
+        "position_ids": position_ids,
+        "attention_mask": None,
+    }
+
+
+def _build_probe_loader(data_pipeline, epoch: int, skip: int) -> tuple[object, int, int]:
+    probe_mode = getattr(args, "probe_mode", "real_pipeline")
+    if probe_mode == "real_pipeline":
+        indices = data_pipeline.epoch_indices(epoch)
+        loader = data_pipeline.train_loader(indices, skip_batches=skip)
+        return loader, len(loader) + skip, skip
+
+    repeats = max(1, int(args.max_steps or args.perf_log_interval) * int(args.accumulation_steps))
+    if probe_mode == "synthetic_cpu_batch":
+        return _RepeatBatchLoader(_synthetic_cpu_batch(), repeats), repeats, 0
+
+    indices = data_pipeline.epoch_indices(epoch)
+    source_loader = data_pipeline.train_loader(indices, skip_batches=0)
+    cached_batch = next(iter(source_loader))
+    if probe_mode == "cached_gpu_batch":
+        cached_batch = _move_batch_to_device(cached_batch)
+    elif probe_mode != "cached_packed_batch":
+        raise ValueError(f"Unsupported probe_mode: {probe_mode}")
+    return _RepeatBatchLoader(cached_batch, repeats), repeats, 0
+
+
+def _iter_train_batches(loader, *, start_step: int):
+    if not _profile_pipeline_enabled():
+        yield from ((step, batch, None) for step, batch in enumerate(loader, start=start_step + 1))
+        return
+
+    iterator = iter(loader)
+    step = start_step
+    while True:
+        _sync_for_profile()
+        wait_start = time.perf_counter()
+        try:
+            batch = next(iterator)
+        except StopIteration:
+            return
+        loader_wait_s = time.perf_counter() - wait_start
+        step += 1
+        yield step, batch, loader_wait_s
+
+
+def _build_torch_profiler_context():
+    trace_dir = str(getattr(args, "torch_profiler_trace_dir", "") or "").strip()
+    if not trace_dir:
+        return nullcontext(None)
+
+    activities = [torch.profiler.ProfilerActivity.CPU]
+    if device_type == "cuda":
+        activities.append(torch.profiler.ProfilerActivity.CUDA)
+    Path(trace_dir).mkdir(parents=True, exist_ok=True)
+    return torch.profiler.profile(
+        activities=activities,
+        schedule=torch.profiler.schedule(
+            wait=int(getattr(args, "torch_profiler_wait_steps", 1)),
+            warmup=int(getattr(args, "torch_profiler_warmup_steps", 1)),
+            active=int(getattr(args, "torch_profiler_active_steps", 3)),
+            repeat=int(getattr(args, "torch_profiler_repeat", 1)),
+        ),
+        on_trace_ready=torch.profiler.tensorboard_trace_handler(trace_dir),
+        record_shapes=False,
+        profile_memory=False,
+        with_stack=False,
+    )
+
+
+def _log_train_window(
+    epoch: int,
+    step: int,
+    iters: int,
+    start_step: int,
+    *,
+    include_perf_summary: bool = False,
+) -> None:
     if device_type == "cuda":
         torch.cuda.synchronize(args.device)
 
@@ -417,24 +702,15 @@ def _log_train_window(epoch: int, step: int, iters: int, start_step: int) -> Non
 
     if metric_state["window_optimizer_steps"] > 0 and elapsed_window > 0:
         step_time_s = elapsed_window / float(metric_state["window_optimizer_steps"])
-        tokens_per_sec_per_gpu = global_tokens / elapsed_window / world_size()
-        extra_metrics["train/step_time_s"] = step_time_s
-        extra_metrics["train/tokens_per_sec_per_gpu"] = tokens_per_sec_per_gpu
-        summary.append(f"tok/s/gpu: {tokens_per_sec_per_gpu:.2f}")
-
-        if should_log_dense_flops(use_moe=bool(args.use_moe), peak_tflops_per_gpu=args.peak_tflops_per_gpu):
-            global_sequences = ddp_sum(metric_state["window_sequences_local"], collective_device)
-            avg_global_batch_seqs = global_sequences / float(metric_state["window_optimizer_steps"])
-            model_flops = dense_model_flops_per_step(
-                global_batch_seqs=avg_global_batch_seqs,
-                seq_len=args.max_seq_len,
-                num_layers=args.num_hidden_layers,
-                hidden_size=args.hidden_size,
-                vocab_size=lm_config.vocab_size,
-            )
-            model_tflops_per_gpu = model_flops / max(step_time_s, 1e-12) / world_size() / 1e12
-            extra_metrics["train/model_tflops_per_gpu"] = model_tflops_per_gpu
-            extra_metrics["train/mfu"] = model_tflops_per_gpu / args.peak_tflops_per_gpu
+        _add_train_speed_metrics(
+            extra_metrics,
+            summary,
+            global_tokens=global_tokens,
+            elapsed_window=elapsed_window,
+            step_time_s=step_time_s,
+            include_perf_summary=include_perf_summary,
+        )
+        _add_profile_window_metrics(extra_metrics)
 
     grad_norm_count = int(metric_state["window_grad_norm_count"])
     if grad_norm_count > 0:
@@ -445,8 +721,13 @@ def _log_train_window(epoch: int, step: int, iters: int, start_step: int) -> Non
         summary.append(f"grad_norm: {avg_grad_norm:.4f}")
 
     if device_type == "cuda":
+        extra_metrics["train/cuda_allocated_gb"] = torch.cuda.memory_allocated(args.device) / 1e9
+        extra_metrics["train/cuda_reserved_gb"] = torch.cuda.memory_reserved(args.device) / 1e9
         extra_metrics["train/peak_allocated_gb"] = torch.cuda.max_memory_allocated(args.device) / 1e9
         extra_metrics["train/peak_reserved_gb"] = torch.cuda.max_memory_reserved(args.device) / 1e9
+        if include_perf_summary:
+            summary.append(f"cuda_alloc_gb: {extra_metrics['train/cuda_allocated_gb']:.2f}")
+            summary.append(f"cuda_peak_gb: {extra_metrics['train/peak_allocated_gb']:.2f}")
 
     local_energy_j = energy_meter.joules_since_start()
     if local_energy_j is not None:
@@ -457,8 +738,10 @@ def _log_train_window(epoch: int, step: int, iters: int, start_step: int) -> Non
 
     Logger(", ".join(summary))
     if is_main_process():
+        mlflow_step = _current_mlflow_step(epoch, step, iters)
+        log_start = time.perf_counter()
         mlflow_logger.log_step(
-            step=_current_mlflow_step(epoch, step, iters),
+            step=mlflow_step,
             epoch=epoch + 1,
             loss=current_loss,
             logits_loss=current_logits_loss,
@@ -468,6 +751,16 @@ def _log_train_window(epoch: int, step: int, iters: int, start_step: int) -> Non
             update_step=metric_state["optimizer_step"],
             extra_metrics=extra_metrics,
         )
+        log_enqueue_s = time.perf_counter() - log_start
+        logging_metrics = {
+            "train/logging_enqueue_s": log_enqueue_s,
+            "train/logging_enqueue_s_p50": log_enqueue_s,
+            "train/logging_enqueue_s_p95": log_enqueue_s,
+        }
+        if hasattr(mlflow_logger, "log_metrics"):
+            mlflow_logger.log_metrics(step=mlflow_step, metrics=logging_metrics)
+        _write_metrics_jsonl(step=mlflow_step, metrics=extra_metrics)
+        _write_metrics_jsonl(step=mlflow_step, metrics=logging_metrics)
 
     _reset_metric_window(metric_state)
 
@@ -558,16 +851,29 @@ def train_epoch(epoch, loader, iters, start_step=0, val_loader=None):
     epoch_start_time = time.time()
     last_step = start_step
     total_update_steps = _target_update_steps(iters)
-    for step, batch in enumerate(loader, start=start_step + 1):
+    _set_optimizer_lr(_scheduled_learning_rate(int(metric_state["optimizer_step"]), total_update_steps))
+    for step, batch, loader_wait_s in _iter_train_batches(loader, start_step=start_step):
         if _target_reached():
             break
+        step_wall_start = time.perf_counter()
+        _record_profile_value("loader_wait_s", loader_wait_s)
+        collator_build_s = batch.get("__collator_build_s") if isinstance(batch, dict) else None
+        if torch.is_tensor(collator_build_s):
+            _record_profile_value("collator_build_s", float(collator_build_s.item()))
+
+        _sync_for_profile()
+        h2d_start = time.perf_counter()
         input_ids = batch["input_ids"].to(args.device, non_blocking=True)
         labels = batch["labels"].to(args.device, non_blocking=True)
         position_ids = batch["position_ids"].to(args.device, non_blocking=True)
         attention_mask = batch.get("attention_mask")
         attention_mask = attention_mask.to(args.device, non_blocking=True) if attention_mask is not None else None
+        _sync_for_profile()
+        _record_profile_value("h2d_s", time.perf_counter() - h2d_start)
         last_step = step
 
+        _sync_for_profile()
+        forward_start = time.perf_counter()
         with autocast_ctx:
             res = model(
                 input_ids,
@@ -578,8 +884,14 @@ def train_epoch(epoch, loader, iters, start_step=0, val_loader=None):
             )
             aux_loss = res.aux_loss if res.aux_loss is not None else res.loss.new_zeros(())
             loss = (res.loss + aux_loss) / args.accumulation_steps
+        _sync_for_profile()
+        _record_profile_value("forward_s", time.perf_counter() - forward_start)
 
+        _sync_for_profile()
+        backward_start = time.perf_counter()
         scaler.scale(loss).backward()
+        _sync_for_profile()
+        _record_profile_value("backward_s", time.perf_counter() - backward_start)
 
         valid_tokens = count_valid_tokens(labels)
         logits_loss_value = float(res.loss.detach().float().item())
@@ -595,17 +907,11 @@ def train_epoch(epoch, loader, iters, start_step=0, val_loader=None):
 
         update_due = step % args.accumulation_steps == 0 or step == iters
         if update_due:
+            _sync_for_profile()
+            optimizer_start = time.perf_counter()
             next_update_step = int(metric_state["optimizer_step"]) + 1
-            lr = get_lr(
-                next_update_step,
-                total_update_steps,
-                args.learning_rate,
-                schedule=args.lr_schedule,
-                warmup_steps=args.lr_warmup_steps,
-                min_lr_ratio=args.lr_min_ratio,
-            )
-            for param_group in optimizer.param_groups:
-                param_group["lr"] = lr
+            lr = _scheduled_learning_rate(next_update_step, total_update_steps)
+            _set_optimizer_lr(lr)
             scaler.unscale_(optimizer)
             grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             grad_norm_value = float(grad_norm.detach().float().item() if torch.is_tensor(grad_norm) else grad_norm)
@@ -620,20 +926,38 @@ def train_epoch(epoch, loader, iters, start_step=0, val_loader=None):
             optimizer.zero_grad(set_to_none=True)
             metric_state["optimizer_step"] += 1
             metric_state["window_optimizer_steps"] += 1
+            _sync_for_profile()
+            _record_profile_value("optimizer_s", time.perf_counter() - optimizer_start)
 
         reached_target = _target_reached()
+        _record_profile_value(
+            "total_step_s",
+            (float(loader_wait_s) if loader_wait_s is not None else 0.0) + (time.perf_counter() - step_wall_start),
+        )
 
-        if step % args.log_interval == 0 or step == iters or reached_target:
-            _log_train_window(epoch, step, iters, start_step)
+        log_due = step % args.log_interval == 0 or step == iters or reached_target
+        perf_due = update_due and _perf_log_due(step, iters, reached_target)
+        if log_due or perf_due:
+            _log_train_window(
+                epoch,
+                step,
+                iters,
+                start_step,
+                include_perf_summary=perf_due,
+            )
 
         save_due = update_due and int(metric_state["optimizer_step"]) % args.save_interval == 0
         if (save_due or step == iters or reached_target) and is_main_process():
+            checkpoint_start = time.perf_counter()
             _save_checkpoint(epoch, step)
+            _record_profile_value("checkpoint_s", time.perf_counter() - checkpoint_start)
 
         if update_due:
             _maybe_run_validation(epoch, step, iters, val_loader, force=(step == iters or reached_target))
 
         del input_ids, labels, position_ids, attention_mask, res, loss
+        if torch_profiler is not None:
+            torch_profiler.step()
         if reached_target:
             break
 
@@ -651,9 +975,11 @@ def run_training(runtime_args):
         metric_state, \
         model, \
         optimizer, \
-        scaler
+        scaler, \
+        torch_profiler
 
     args = runtime_args
+    torch_profiler = None
     signal.signal(signal.SIGTERM, _sigterm_handler)
 
     # ========== 1. 初始化环境和随机种子 ==========
@@ -709,7 +1035,24 @@ def run_training(runtime_args):
         tokenizer_path=args.tokenizer_path,
         device=args.device,
     )
+    if is_main_process():
+        init_summary = getattr(model, "gpupoor_init_summary", {})
+        if init_summary:
+            Logger(
+                "Weight init: "
+                f"method={init_summary.get('method')}; "
+                f"std={init_summary.get('initializer_range')}; "
+                f"linears={init_summary.get('linear_modules')}; "
+                f"embeddings={init_summary.get('embedding_modules')}; "
+                f"norms={init_summary.get('norm_modules')}; "
+                f"tied_embeddings={init_summary.get('tied_embeddings')}"
+            )
+            mlflow_logger.log_params({f"init.{key}": value for key, value in init_summary.items()})
     _maybe_apply_fp8_training(model)
+    fp8_train_flops_per_active_sequence_element = selected_linear_train_flops_per_step(
+        model,
+        active_sequence_elements=1.0,
+    )
     if is_main_process():
         precision_split = getattr(model, "gpupoor_precision_split", {})
         Logger(
@@ -734,6 +1077,9 @@ def run_training(runtime_args):
                     "precision.fp8_linears": precision_split["fp8_linears"],
                     "precision.skipped_linears": precision_split["skipped_linears"],
                     "precision.skipped_linear_names": precision_split["skipped_linear_names"],
+                    "precision.fp8_train_flops_per_active_sequence_element": (
+                        fp8_train_flops_per_active_sequence_element
+                    ),
                     "architecture.variant": getattr(args, "architecture_variant", ""),
                 }
             )
@@ -781,6 +1127,7 @@ def run_training(runtime_args):
         start_optimizer_step,
         resolved_peak_tflops_per_gpu=args.peak_tflops_per_gpu,
         resolved_peak_fp8_tflops_per_gpu=args.peak_fp8_tflops_per_gpu,
+        fp8_train_flops_per_active_sequence_element=fp8_train_flops_per_active_sequence_element,
     )
 
     # ========== 7. 编译和分布式包装 ==========
@@ -794,20 +1141,23 @@ def run_training(runtime_args):
 
     # ========== 8. 开始训练 ==========
     epoch = start_epoch
-    while epoch < args.epochs or args.max_steps > 0:
-        if _target_reached():
-            break
-        setup_seed(42 + epoch)
-        indices = data_pipeline.epoch_indices(epoch)
-        skip = start_step if (epoch == start_epoch and start_step > 0) else 0
-        loader = data_pipeline.train_loader(indices, skip_batches=skip)
-        if skip > 0:
-            Logger(f"Epoch [{epoch + 1}/{args.epochs}]: 跳过前{start_step}个step，从step {start_step + 1}开始")
-            train_epoch(epoch, loader, len(loader) + skip, start_step, val_loader=val_loader)
-        else:
-            train_epoch(epoch, loader, len(loader), 0, val_loader=val_loader)
-        start_step = 0
-        epoch += 1
+    with _build_torch_profiler_context() as active_profiler:
+        torch_profiler = active_profiler
+        while epoch < args.epochs or args.max_steps > 0:
+            if _target_reached():
+                break
+            setup_seed(42 + epoch)
+            skip = start_step if (epoch == start_epoch and start_step > 0) else 0
+            loader, iters, effective_start_step = _build_probe_loader(data_pipeline, epoch, skip)
+            if effective_start_step > 0:
+                Logger(
+                    f"Epoch [{epoch + 1}/{args.epochs}]: "
+                    f"跳过前{start_step}个step，从step {start_step + 1}开始"
+                )
+            train_epoch(epoch, loader, iters, effective_start_step, val_loader=val_loader)
+            start_step = 0
+            epoch += 1
+        torch_profiler = None
 
     # ========== 9. 清理分布进程 ==========
     if is_main_process():

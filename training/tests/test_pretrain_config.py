@@ -20,6 +20,7 @@ def test_default_model_config_function_matches_native_superbpe_recipe(import_min
     assert config.num_key_value_heads == 8
     assert config.hidden_act == "silu"
     assert config.intermediate_size == 8128
+    assert config.initializer_range == 0.02
 
 
 def test_runtime_args_include_documented_dataset_and_tokenizer_paths(import_minimind_module) -> None:
@@ -65,9 +66,23 @@ def test_runtime_args_include_documented_dataset_and_tokenizer_paths(import_mini
     assert args.optimizer == "muon8bit"
     assert args.weight_decay == 0.4
     assert args.hidden_act == "silu"
+    assert args.initializer_range == 0.02
+    assert args.shuffle_buffer_size == pretrain_config.DEFAULT_DATASET_CONFIG["shuffle_buffer_size"]
+    assert args.shuffle_seed == pretrain_config.DEFAULT_DATASET_CONFIG["shuffle_seed"]
+    assert args.shuffle_files == 1
+    assert args.parquet_read_batch_rows == pretrain_config.DEFAULT_DATASET_CONFIG["parquet_read_batch_rows"]
+    assert args.prefetch_factor == 8
+    assert args.pin_memory == 1
+    assert args.persistent_workers == 0
+    assert args.collator_mode == "loop"
+    assert args.perf_log_interval == 1
     assert args.precision == "bf16_training"
     assert args.fp8_recipe == "tensorwise"
     assert args.compile_fullgraph == 0
+    assert args.profile_pipeline == 0
+    assert args.profile_metrics_jsonl == ""
+    assert args.probe_mode == "real_pipeline"
+    assert args.mlflow_run_name == ""
 
 
 def test_runtime_args_from_toml_resolves_relative_runtime_paths(import_minimind_module, tmp_path) -> None:
@@ -162,6 +177,77 @@ def test_runtime_args_enable_fp8_fullgraph_recipe(import_minimind_module) -> Non
     assert args.fp8_recipe == "tensorwise"
     assert args.use_compile == 1
     assert args.compile_fullgraph == 1
+
+
+def test_runtime_args_accept_dataloader_overrides(import_minimind_module) -> None:
+    pretrain_config = import_minimind_module("minimind.trainer.pretrain_config")
+    config = {
+        "recipe": {
+            "output_dir": "out",
+            "max_seq_len": 4096,
+            "validation_split_ratio": 0.0,
+            "validation_interval_steps": 0,
+        },
+        "training": {
+            "save_weight": "pretrain",
+            "epochs": 1,
+            "max_steps": 10,
+            "batch_size": 1,
+            "learning_rate": 5e-4,
+            "weight_decay": 0.4,
+            "optimizer": "muon8bit",
+            "dtype": "bfloat16",
+            "num_workers": 4,
+            "prefetch_factor": 6,
+            "pin_memory": False,
+            "persistent_workers": True,
+            "collator_mode": "vectorized",
+            "accumulation_steps": 1,
+            "grad_clip": 1.0,
+            "log_interval": 1,
+            "perf_log_interval": 5,
+            "save_interval": 10,
+            "lr_schedule": "cosine",
+            "lr_warmup_steps": 0,
+            "lr_min_ratio": 0.1,
+            "from_weight": "none",
+            "from_resume": False,
+            "use_compile": False,
+            "profile_pipeline": True,
+            "profile_metrics_jsonl": "metrics.jsonl",
+            "probe_mode": "cached_packed_batch",
+            "torch_profiler_trace_dir": "torch-profiler",
+        },
+        "mlflow": {
+            "mlflow_run_name": "mfu_ablation-calibration-real_pipeline-h2560-L24-bs1-ga1",
+            "experiment_group": "minimind_fp8_mfu_ablation",
+            "experiment_stage": "calibration",
+            "experiment_variant": "real_pipeline",
+            "baseline_run_id": "run-abc",
+        },
+        "dataset": {
+            "parquet_read_batch_rows": 8192,
+        },
+    }
+
+    args = pretrain_config.runtime_args_from_config(config, cuda_available=True)
+
+    assert args.num_workers == 4
+    assert args.prefetch_factor == 6
+    assert args.pin_memory == 0
+    assert args.persistent_workers == 1
+    assert args.collator_mode == "vectorized"
+    assert args.perf_log_interval == 5
+    assert args.parquet_read_batch_rows == 8192
+    assert args.profile_pipeline == 1
+    assert args.profile_metrics_jsonl == "metrics.jsonl"
+    assert args.probe_mode == "cached_packed_batch"
+    assert args.torch_profiler_trace_dir == "torch-profiler"
+    assert args.mlflow_run_name == "mfu_ablation-calibration-real_pipeline-h2560-L24-bs1-ga1"
+    assert args.experiment_group == "minimind_fp8_mfu_ablation"
+    assert args.experiment_stage == "calibration"
+    assert args.experiment_variant == "real_pipeline"
+    assert args.baseline_run_id == "run-abc"
 
 
 def test_fp8_recipe_rejects_adamw_fallback(import_minimind_module) -> None:

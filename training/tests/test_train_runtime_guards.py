@@ -177,6 +177,67 @@ def test_train_window_logs_learning_progress_metrics(train_pretrain_module, monk
     assert logged_steps[0]["lr"] == pytest.approx(5e-4)
     assert logged_steps[0]["extra_metrics"]["train/grad_norm"] == pytest.approx(3.0)
     assert logged_steps[0]["extra_metrics"]["train/grad_norm_max"] == pytest.approx(4.0)
+    assert logged_steps[0]["extra_metrics"]["train/global_tokens_per_sec"] > 0
+    assert logged_steps[0]["extra_metrics"]["train/optimizer_steps_per_sec"] > 0
+    assert logged_steps[0]["extra_metrics"]["train/tokens_per_optimizer_step"] == pytest.approx(10.0)
+
+
+def test_train_speed_metrics_log_corrected_mfu_fields(train_pretrain_module, monkeypatch) -> None:
+    monkeypatch.setattr(train_pretrain_module, "ddp_sum", lambda value, device: float(value))
+    monkeypatch.setattr(train_pretrain_module, "world_size", lambda: 1)
+
+    train_pretrain_module.args = SimpleNamespace(
+        peak_tflops_per_gpu=100.0,
+        use_moe=0,
+        max_seq_len=4,
+        num_hidden_layers=2,
+        hidden_size=8,
+    )
+    train_pretrain_module.collective_device = "cpu"
+    train_pretrain_module.lm_config = SimpleNamespace(vocab_size=32)
+    train_pretrain_module.metric_state = {
+        "window_sequences_local": 2,
+        "window_optimizer_steps": 1,
+        "resolved_peak_fp8_tflops_per_gpu": 200.0,
+        "fp8_train_flops_per_active_sequence_element": 100.0,
+    }
+    metrics: dict[str, float] = {}
+
+    train_pretrain_module._add_train_speed_metrics(
+        metrics,
+        [],
+        global_tokens=7.0,
+        elapsed_window=0.5,
+        step_time_s=0.5,
+        include_perf_summary=False,
+    )
+
+    assert metrics["train/useful_tokens"] == pytest.approx(7.0)
+    assert metrics["train/mfu_dense"] == metrics["train/mfu"]
+    assert metrics["train/legacy_fp8_mfu_wrong_denominator"] == pytest.approx(
+        metrics["train/model_tflops_per_gpu"] / 200.0
+    )
+    assert metrics["train/analytic_fp8_eligible_flops_per_step"] == pytest.approx(800.0)
+    assert metrics["train/mfu_fp8_scope"] == pytest.approx(metrics["train/fp8_scope_tflops_per_gpu"] / 200.0)
+
+
+def test_learning_rate_helpers_start_warmup_at_zero(train_pretrain_module) -> None:
+    train_pretrain_module.args = SimpleNamespace(
+        learning_rate=1e-4,
+        lr_schedule="linear",
+        lr_warmup_steps=500,
+        lr_min_ratio=0.0,
+    )
+    train_pretrain_module.optimizer = SimpleNamespace(param_groups=[{"lr": 1e-4}, {"lr": 1e-4}])
+
+    initial_lr = train_pretrain_module._scheduled_learning_rate(0, 1000)
+    first_update_lr = train_pretrain_module._scheduled_learning_rate(1, 1000)
+
+    train_pretrain_module._set_optimizer_lr(initial_lr)
+
+    assert initial_lr == 0.0
+    assert first_update_lr == pytest.approx(2e-7)
+    assert [group["lr"] for group in train_pretrain_module.optimizer.param_groups] == [0.0, 0.0]
 
 
 def test_muon8bit_split_excludes_tied_vocab_and_uses_no_adamw(train_pretrain_module) -> None:
