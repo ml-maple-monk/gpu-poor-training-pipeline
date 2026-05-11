@@ -90,11 +90,10 @@ The local Docker verification flow is documented in
 automated bounded R2 parquet pull, a one-step vendored MiniMind run, and
 portable MLflow bundle upload.
 
-The live RTX 5090 RunPod operating path, including the direct provider fallback
-used when dstack capacity acquisition bounces despite advertised offers, is
-documented in `docs/runpod-rtx5090-minimind.md`. That path keeps the same image,
-TOML transport, R2 dataset, and portable MLflow contract as the stable dstack
-launch path.
+The live RTX 5090 RunPod operating notes are documented in
+`docs/runpod-rtx5090-minimind.md`. Direct RunPod launch is a separate
+no-dstack operator path documented in `docs/runpod-direct-launch.md`; it keeps
+the same image, TOML transport, R2 dataset, and portable MLflow worker contract.
 
 ## dstack Policy Boundary
 

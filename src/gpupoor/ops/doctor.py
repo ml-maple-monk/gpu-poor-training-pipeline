@@ -330,6 +330,6 @@ def _run_remote_preflight(
     if settings.get("PUSH_GHCR") == "1":
         gh_token = repo / "gh_token"
         if not gh_token.is_file():
-            reporter.fail(f"PUSH_GHCR=1 but {gh_token} is missing — GHCR fallback needs a write:packages token")
+            reporter.fail(f"PUSH_GHCR=1 but {gh_token} is missing — GHCR distribution push needs a write:packages token")
     elif (repo / "gh_token").is_file():
-        reporter.warn("gh_token is not used by the default remote path anymore; GHCR is optional fallback only")
+        reporter.warn("gh_token is not used by the default remote path anymore; GHCR is optional distribution only")

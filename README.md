@@ -76,7 +76,7 @@ What `launch dstack` actually does:
 
 The TOML in the example sets `max_price = 3.0` USD/hr and `time_cap_seconds = 600` — **bounded at $0.50 per run in the absolute worst case**, and in practice the winning spot bid is usually a small fraction of the ceiling. `time_cap_seconds` is a hard wall-clock ceiling enforced inside the trainer, so the run self-terminates before the price ever surprises you.
 
-For the validated RTX 5090 RunPod operating lane, including the direct RunPod recovery path used when dstack capacity acquisition bounces despite advertised offers, see [docs/runpod-rtx5090-minimind.md](./docs/runpod-rtx5090-minimind.md).
+For the validated RTX 5090 RunPod operating lane, see [docs/runpod-rtx5090-minimind.md](./docs/runpod-rtx5090-minimind.md). To bypass dstack and launch RunPod directly with the same image, R2 dataset pull, and portable MLflow contract, see [docs/runpod-direct-launch.md](./docs/runpod-direct-launch.md).
 
 ### 3. Dry-run the remote plan (free)
 

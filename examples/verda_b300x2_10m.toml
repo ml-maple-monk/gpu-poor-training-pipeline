@@ -27,7 +27,7 @@ mlflow_health_url = "http://127.0.0.1:5000/health"
 health_timeout_seconds = 5
 dstack_server_start_timeout_seconds = 30
 run_start_timeout_seconds = 480
-# 2x B300 fallback when single-B300 spot capacity is unavailable.
+# 2x B300 alternative when single-B300 spot capacity is unavailable.
 gpu_names = ["B300"]
 gpu_count = 2
 spot_policy = "spot"

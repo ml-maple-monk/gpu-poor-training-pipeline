@@ -6,7 +6,7 @@
 #   VCR_USERNAME        required for VCR login
 #   VCR_PASSWORD        required for VCR login
 #
-# Optional GHCR fallback/distribution push:
+# Optional GHCR distribution push:
 #   PUSH_GHCR=1         also push ghcr.io/<GH_USER>/verda-minimind
 #   gh_token            required only when PUSH_GHCR=1
 #   gh_user/.omc cache  used to resolve GH_USER when PUSH_GHCR=1
@@ -141,10 +141,10 @@ if [ "${PUSH_GHCR:-0}" = "1" ]; then
         echo "[build] Package visibility set to public (HTTP $HTTP_STATUS)"
     elif [ "$HTTP_STATUS" = "404" ]; then
         echo "[build] WARN: Package not found via API yet (first push? try again after push propagates)" >&2
-        echo "[build] Manual fallback: https://github.com/users/$GH_USER/packages/container/verda-minimind/settings" >&2
+        echo "[build] Manual package visibility fix: https://github.com/users/$GH_USER/packages/container/verda-minimind/settings" >&2
     else
         echo "[build] WARN: Visibility API returned HTTP $HTTP_STATUS — set manually if needed" >&2
-        echo "[build] Manual fallback: https://github.com/users/$GH_USER/packages/container/verda-minimind/settings" >&2
+        echo "[build] Manual package visibility fix: https://github.com/users/$GH_USER/packages/container/verda-minimind/settings" >&2
     fi
 
     docker logout ghcr.io

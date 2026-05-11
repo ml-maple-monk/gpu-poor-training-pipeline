@@ -652,7 +652,7 @@ def wait_for_run_start(
             continue
         if run_status in {"pending", "submitted"} and termination_reason == "failed_to_start_due_to_no_capacity":
             log.info(
-                "Run '%s' is retrying after a no-capacity offer; waiting for the next submission",
+                "Run '%s' is waiting after a no-capacity offer; polling for the next submission",
                 run_name,
             )
             time.sleep(_RUN_START_POLL_INTERVAL_SECONDS)

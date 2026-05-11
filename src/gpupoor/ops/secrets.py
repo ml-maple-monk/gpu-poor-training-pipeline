@@ -140,7 +140,7 @@ def leak_scan(image: str = "verda-local", *, canary: bool = False) -> None:
         print("Using: syft")
         output = _scan_output(["syft", full_image])
     else:
-        print("Using: docker history (fallback)")
+        print("Using: docker history (secondary scanner)")
         output = _scan_output(["docker", "history", "--no-trunc", "--format", "{{.CreatedBy}}", full_image])
 
     findings = detect_secret_leaks(output, collect_leak_scan_secrets())

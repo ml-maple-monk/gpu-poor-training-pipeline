@@ -2,9 +2,9 @@
 
 This document describes the current live GPU operating path validated on
 May 11, 2026. It is an operator note for the existing system, not a new public
-API. The stable launch contract remains TOML-driven `gpupoor launch dstack`;
-the direct RunPod lane is the recovery path used when dstack advertises RTX
-5090 offers but task startup repeatedly returns provider capacity failures.
+API. The stable dstack launch contract remains TOML-driven
+`gpupoor launch dstack`. Direct RunPod launch is a separate no-dstack operator
+path for renting the same training image on RunPod.
 
 No secrets belong in committed files or command transcripts.
 
@@ -101,11 +101,11 @@ dstack apply must pass:
 - `provenance_attestation=false`.
 - Fleet readiness for the configured fleet.
 
-If dstack repeatedly reports `failed_to_start_due_to_no_capacity` for RTX 5090
-while RunPod itself still has advertised machines, the operational fallback is a
-direct RunPod pod with the same image, env, dataset, and portable MLflow
-contract. That fallback should not be routed through `experiment_executor.py` or
-`experiment_models.py`.
+The separate direct RunPod path uses a pod with the same image, env, dataset,
+and portable MLflow contract. It should not be routed through
+`experiment_executor.py` or `experiment_models.py`. The full no-dstack launch
+procedure is documented in
+[`docs/runpod-direct-launch.md`](./runpod-direct-launch.md).
 
 ## Monitoring
 

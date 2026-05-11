@@ -29,7 +29,7 @@ mlflow_health_url = "http://127.0.0.1:5000/health"
 health_timeout_seconds = 5
 dstack_server_start_timeout_seconds = 30
 run_start_timeout_seconds = 480
-# 2x A100 fallback when single-A100 spot capacity is unavailable.
+# 2x A100 alternative when single-A100 spot capacity is unavailable.
 gpu_names = ["A100"]
 gpu_count = 2
 spot_policy = "spot"
