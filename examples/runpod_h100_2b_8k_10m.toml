@@ -48,7 +48,7 @@ lr_warmup_steps = 0
 lr_min_ratio = 0.1
 
 [backend]
-kind = "dstack"
+kind = "runpod"
 skip_build = false
 
 [mlflow]
@@ -70,10 +70,8 @@ max_clock_skew_seconds = 5
 [remote]
 env_file = ".env.remote"
 vcr_image_base = "alextay96/gpupoor"
-dstack_server_health_url = "http://127.0.0.1:3000/"
 mlflow_health_url = "http://127.0.0.1:5000/health"
 health_timeout_seconds = 5
-dstack_server_start_timeout_seconds = 60
 run_start_timeout_seconds = 7200
 backends = ["runpod"]
 regions = ["US-NE-1", "US-CA-2", "CA-MTL-1"]

@@ -8,7 +8,6 @@ import sys
 from gpupoor import __version__, ops
 from gpupoor import connector as connector_module
 from gpupoor import deployer as deployer_module
-from gpupoor.backends import dstack as dstack_backend
 from gpupoor.backends.local import run_training as run_local_training
 from gpupoor.config import (
     ConfigError,
@@ -19,7 +18,7 @@ from gpupoor.config import (
 from gpupoor.services import emulator as emulator_service
 from gpupoor.services import mlflow as mlflow_service
 from gpupoor.services import seeker as seeker_service
-from gpupoor.subprocess_utils import CommandError, bash_script, run_command
+from gpupoor.subprocess_utils import CommandError, run_command
 from gpupoor.utils import repo_path
 from gpupoor.utils.logging import configure_root
 
@@ -55,10 +54,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     launch_parser = subparsers.add_parser("launch", help="Launch a backend from config")
     launch_subparsers = launch_parser.add_subparsers(dest="launch_target", required=True)
-    dstack_parser = launch_subparsers.add_parser("dstack", help="Launch a Verda/dstack run from config")
-    dstack_parser.add_argument("config", help="Path to a TOML run config")
-    dstack_parser.add_argument("--skip-build", action="store_true", default=None, help="Skip image build and push")
-    dstack_parser.add_argument("--dry-run", action="store_true", help="Print the remote plan without mutating")
+    remote_parser = launch_subparsers.add_parser("remote", help="Launch a remote run from config (RunPod or Verda)")
+    remote_parser.add_argument("config", help="Path to a TOML run config")
+    remote_parser.add_argument("--skip-build", action="store_true", default=None, help="Skip image build and push")
+    remote_parser.add_argument("--dry-run", action="store_true", help="Print the remote plan without mutating")
 
     seeker_parser = subparsers.add_parser("seeker", help="Manage remote GPU seeker jobs")
     seeker_subparsers = seeker_parser.add_subparsers(dest="seeker_action", required=True)
@@ -69,7 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     deploy_parser = subparsers.add_parser("deploy", help="Deploy training containers")
     deploy_subparsers = deploy_parser.add_subparsers(dest="deploy_target", required=True)
-    deploy_remote = deploy_subparsers.add_parser("remote", help="Deploy a remote dstack task")
+    deploy_remote = deploy_subparsers.add_parser("remote", help="Deploy a remote training task (RunPod or Verda)")
     deploy_remote.add_argument("config", help="Path to a TOML run config")
     deploy_remote.add_argument("--skip-build", action="store_true", default=None, help="Skip image build and push")
     deploy_remote.add_argument("--dry-run", action="store_true", help="Print the remote plan without mutating")
@@ -81,19 +80,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     connector_parser = subparsers.add_parser("connector", help="Manage shared MLflow/tunnel/storage wiring")
     connector_parser.add_argument("action", choices=("setup", "doctor", "status"))
-
-    dstack_admin_parser = subparsers.add_parser("dstack", help="Manage repo-owned dstack helper flows")
-    dstack_admin_subparsers = dstack_admin_parser.add_subparsers(dest="dstack_action", required=True)
-    dstack_setup = dstack_admin_subparsers.add_parser("setup", help="Render and validate dstack config")
-    dstack_setup.add_argument("extra_args", nargs=argparse.REMAINDER)
-    dstack_registry = dstack_admin_subparsers.add_parser(
-        "registry-login",
-        help="Log in to the configured remote registry",
-    )
-    dstack_registry.add_argument("--dry-run", action="store_true", help="Print the registry login command only")
-    dstack_fleet = dstack_admin_subparsers.add_parser("fleet-apply", help="Apply the repo-owned fleet config")
-    dstack_fleet.add_argument("extra_args", nargs=argparse.REMAINDER)
-    dstack_admin_subparsers.add_parser("teardown", help="Stop tracked remote runs and clean up tunnel state")
 
     infra_parser = subparsers.add_parser("infra", help="Manage local debug/runtime services")
     infra_subparsers = infra_parser.add_subparsers(dest="infra_target", required=True)
@@ -191,8 +177,6 @@ def dispatch(args: argparse.Namespace) -> None:
         return
 
     if args.command == "launch":
-        if args.launch_target != "dstack":
-            raise ValueError(f"Unsupported launch target: {args.launch_target}")
         deployer_module.deploy_remote_config(
             args.config,
             skip_build=args.skip_build,
@@ -232,31 +216,6 @@ def dispatch(args: argparse.Namespace) -> None:
             return
         if args.action == "status":
             connector_module.status()
-            return
-
-    if args.command == "dstack":
-        if args.dstack_action == "setup":
-            bash_script(repo_path("dstack", "scripts", "setup-config.sh"), *args.extra_args)
-            return
-        if args.dstack_action == "registry-login":
-            registry_args = ["--dry-run"] if args.dry_run else []
-            bash_script(repo_path("dstack", "scripts", "registry-login.sh"), *registry_args)
-            return
-        if args.dstack_action == "fleet-apply":
-            dstack_bin = dstack_backend.find_dstack_bin()
-            run_command(
-                [
-                    dstack_bin,
-                    "apply",
-                    "-f",
-                    str(repo_path("dstack", "config", "fleet.dstack.yml")),
-                    "-y",
-                    *args.extra_args,
-                ]
-            )
-            return
-        if args.dstack_action == "teardown":
-            dstack_backend.teardown_remote_state()
             return
 
     if args.command == "infra":

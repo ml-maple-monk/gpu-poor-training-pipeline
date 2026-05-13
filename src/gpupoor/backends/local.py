@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
-from gpupoor.backends.dstack import read_cached_remote_image_tag, remote_image_tag, remote_worker_env
+from gpupoor.backends.common import read_cached_remote_image_tag, remote_image_tag, remote_worker_env
 from gpupoor.config import RunConfig, load_remote_settings, merged_toml_b64, write_merged_toml
 from gpupoor.subprocess_utils import CommandError, bash_script, run_command
 from gpupoor.utils import repo_path

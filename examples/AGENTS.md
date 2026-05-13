@@ -51,8 +51,8 @@ None.
 ### Common Patterns
 - Sections used by every example: `[recipe]`, `[backend]`, `[mlflow]`, `[doctor]`. Remote examples additionally use `[remote]`.
 - `[recipe].kind = "minimind_pretrain"` is the only recipe kind currently shipped; new examples must use it unless adding a new recipe.
-- Time caps are expressed in seconds (`time_cap_seconds`), and remote files set `health_timeout_seconds`, `dstack_server_start_timeout_seconds`, `run_start_timeout_seconds` to bound startup.
-- `[backend].kind` selects the runner: `local`, `local_emulator`, `runpod`, or `dstack`.
+- Time caps are expressed in seconds (`time_cap_seconds`), and remote files set `health_timeout_seconds`, `run_start_timeout_seconds` to bound startup.
+- `[backend].kind` selects the runner: `local`, `local_emulator`, `runpod`, or `verda`.
 
 ## Cross-references
 - Parent: `../AGENTS.md`

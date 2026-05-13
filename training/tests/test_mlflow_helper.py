@@ -30,7 +30,7 @@ def test_mlflow_start_retries_transient_failures(
 
     monkeypatch.setitem(sys.modules, "mlflow", mlflow_module)
     monkeypatch.setitem(sys.modules, "torch", fake_torch_module())
-    monkeypatch.setenv("DSTACK_RUN_NAME", "verda-minimind-pretrain")
+    monkeypatch.setenv("REMOTE_RUN_NAME", "verda-minimind-pretrain")
 
     mlflow_config = {
         "tracking_uri": "https://mlflow.example",

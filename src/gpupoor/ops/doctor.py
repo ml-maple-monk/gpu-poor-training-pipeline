@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from gpupoor.config import DoctorConfig, RemoteConfig, find_dstack_bin, load_remote_settings
+from gpupoor.config import DoctorConfig, RemoteConfig, load_remote_settings
 from gpupoor.subprocess_utils import CommandError, run_command
 from gpupoor.utils import repo_path, repo_root
 
@@ -143,7 +143,6 @@ def check_doc_anchors(*, root: str | Path | None = None) -> None:
         [
             base / "infrastructure",
             base / "training",
-            base / "dstack",
             base / "src",
         ]
     )
@@ -154,7 +153,6 @@ def check_doc_anchors(*, root: str | Path | None = None) -> None:
             base / "training" / "docs" / "README.md",
             base / "infrastructure" / "local-emulator" / "docs" / "README.md",
             base / "infrastructure" / "mlflow" / "docs" / "README.md",
-            base / "dstack" / "docs" / "README.md",
         ]
     )
     if not referenced:
@@ -296,10 +294,8 @@ def _run_remote_preflight(
         else:
             reporter.fail(f"{binary} not found — install via apt or your package manager")
 
-    try:
-        find_dstack_bin()
-    except RuntimeError:
-        reporter.fail("no working dstack CLI found — install the isolated uv venv described in dstack/docs/README.md")
+    if not shutil.which("runpodctl"):
+        reporter.warn("runpodctl not found — remote RunPod launches will fail; install from https://www.runpod.io/")
 
     if not shutil.which("jq"):
         reporter.warn("jq not found — python3 fallback will be used for JSON parsing (safe, but slower)")

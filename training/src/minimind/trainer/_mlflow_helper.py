@@ -328,7 +328,7 @@ def start(runtime_args, model_config, mlflow_config: dict) -> None:
                 "recipe.kind": str(mlflow_config.get("recipe_kind", "minimind_pretrain")),
                 "verda.profile": os.environ.get("VERDA_PROFILE", ""),
                 "verda.emulation": os.environ.get("VERDA_EMULATION", "true"),
-                "verda.run_name": os.environ.get("DSTACK_RUN_NAME", ""),
+                "remote.run_name": os.environ.get("REMOTE_RUN_NAME", ""),
             }
             experiment_tag_names = {
                 "experiment_group": "experiment.group",

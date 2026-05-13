@@ -10,7 +10,7 @@ validation_split_ratio = 0.01
 validation_interval_steps = 100
 
 [backend]
-kind = "dstack"
+kind = "verda"
 skip_build = false
 
 [mlflow]
@@ -24,10 +24,8 @@ max_clock_skew_seconds = 5
 [remote]
 env_file = ".env.remote"
 vcr_image_base = "vccr.io/f53909d3-a071-4826-8635-a62417ffc867/verda-minimind"
-dstack_server_health_url = "http://127.0.0.1:3000/"
 mlflow_health_url = "http://127.0.0.1:5000/health"
 health_timeout_seconds = 5
-dstack_server_start_timeout_seconds = 30
 run_start_timeout_seconds = 480
 # 2x A100 alternative when single-A100 spot capacity is unavailable.
 gpu_names = ["A100"]

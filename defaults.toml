@@ -124,10 +124,8 @@ base_image = "nvidia/cuda:12.4.1-runtime-ubuntu22.04"
 [remote]
 env_file = ".env.remote"
 vcr_image_base = "vccr.io/f53909d3-a071-4826-8635-a62417ffc867/verda-minimind"
-dstack_server_health_url = "http://127.0.0.1:3000/"
 mlflow_health_url = "http://127.0.0.1:5000/health"
 health_timeout_seconds = 5
-dstack_server_start_timeout_seconds = 30
 run_start_timeout_seconds = 7200
 remote_image_tag = "latest"
 remote_output_dir = "/workspace/out"
@@ -149,22 +147,6 @@ max_submit_retries = 3
 data_root = "/data"
 runtime_dataset_path = "/data/datasets/native_superbpe_1m_rows_max4w/20260503T002359Z"
 runtime_output_dir = "/data/minimind-out"
-
-[dstack]
-rendered_task_path = ".tmp/pretrain.task.rendered.yml"
-tunnel_join_timeout_seconds = 180
-min_restart_wait_seconds = 5
-health_recheck_timeout_seconds = 1
-task_sigterm_grace_seconds = 30
-task_duration_buffer_minutes = 2
-offer_timeout_seconds = 60
-offer_query_timeout_seconds = 30
-provider_max_offers = 200
-targeted_max_offers = 400
-run_start_poll_interval_seconds = 10
-apply_timeout_buffer_seconds = 60
-final_tunnel_join_timeout_seconds = 5
-dry_run_mlflow_url = "https://dry-run-example.trycloudflare.com"
 
 [emulator]
 health_port = 8000

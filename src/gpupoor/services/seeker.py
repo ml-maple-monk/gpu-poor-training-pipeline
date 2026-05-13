@@ -56,7 +56,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from gpupoor.backends import dstack as dstack_backend
+from gpupoor.backends import runpod as runpod_backend
+from gpupoor.backends import verda as verda_backend
+from gpupoor.backends.common import read_required_secret
 from gpupoor.config import (
     DEFAULT_SEEKER_MAX_OFFER_AGE_SECONDS,
     RemoteConfig,
@@ -68,7 +70,7 @@ from gpupoor.config import (
     normalize_backend_name,
 )
 from gpupoor.deployer import DeploymentRequest, deploy_remote_request
-from gpupoor.subprocess_utils import CommandError, bash_script
+from gpupoor.subprocess_utils import CommandError
 from gpupoor.utils import repo_path
 from gpupoor.utils.logging import get_logger
 
@@ -85,7 +87,6 @@ _GPU_STRIP_TOKENS = ("nvidia", "geforce", "tesla", "accelerator", "gpu")
 _LIVE_AVAILABILITY_VALUES = frozenset({"available", "idle"})
 _ID_HEX_LENGTH = 12
 _DEFAULT_IDLE_POLL_SECONDS = 30
-_SETUP_CONFIG_SCRIPT = ("dstack", "scripts", "setup-config.sh")
 _DEFAULT_QUEUE_DSN = "postgresql://mlflow:mlflow@127.0.0.1:55432/mlflow"
 _DEFAULT_QUEUE_LEASE_SECONDS = 60
 _MAX_TARGET_PROBE_WORKERS = 8
@@ -510,22 +511,46 @@ def choose_targeted_offer(probe_results: list[TargetProbeResult]) -> tuple[Seeke
     return None, None
 
 
-def fetch_target_offers(dstack_bin: str, target: SeekerTarget) -> list[SeekerOffer]:
-    payload = dstack_backend.fetch_targeted_offers(
-        dstack_bin,
+def _normalize_runpod_offer(raw: dict, target: SeekerTarget) -> SeekerOffer:
+    gpu_name = str(raw.get("gpu_name", ""))
+    mode = "spot" if raw.get("spot") else "on-demand"
+    stock = str(raw.get("stock_status", "")).lower()
+    # RunPod availability: treat "available" stock as available
+    availability = "available" if stock in ("available", "low") else "unavailable"
+    return SeekerOffer(
         backend=normalize_backend_name(target.backend),
-        gpu=target.gpu,
-        count=target.count,
-        mode=target.mode,
-        regions=tuple(target.regions),
-        max_price=target.max_price,
+        region=str(raw.get("region", "")),
+        gpu=gpu_name,
+        count=int(raw.get("gpu_count", 1)),
+        mode=mode,
+        price_per_hour=float(raw.get("price_per_hr", 0.0) or 0.0),
+        instance_type="",
+        availability=availability,
+        normalized_gpu=normalize_gpu_name(gpu_name),
+        raw=raw,
     )
-    raw_offers = payload.get("offers", [])
-    if not isinstance(raw_offers, list):
-        raise RuntimeError("dstack targeted offer JSON did not include an offers list")
-    offers = [normalize_offer(offer) for offer in raw_offers if isinstance(offer, dict)]
-    offers.sort(key=_offer_sort_key)
-    return offers
+
+
+def fetch_target_offers(target: SeekerTarget) -> list[SeekerOffer]:
+    backend_kind = normalize_backend_name(target.backend)
+    if backend_kind == "runpod":
+        remote_config = RemoteConfig()
+        raw_offers = runpod_backend.fetch_offers(remote_config)
+        offers = [_normalize_runpod_offer(raw, target) for raw in raw_offers if isinstance(raw, dict)]
+        offers.sort(key=_offer_sort_key)
+        return offers
+    if backend_kind == "verda":
+        try:
+            remote_config = RemoteConfig()
+            raw_offers = verda_backend.fetch_offers(remote_config)
+            offers = [_normalize_runpod_offer(raw, target) for raw in raw_offers if isinstance(raw, dict)]
+            offers.sort(key=_offer_sort_key)
+            return offers
+        except NotImplementedError:
+            log.warning("verda backend is not yet configured; skipping offer fetch for target %s", target.gpu)
+            return []
+    log.warning("unknown backend kind '%s'; skipping offer fetch for target %s", backend_kind, target.gpu)
+    return []
 
 
 class QueueStore:
@@ -1159,8 +1184,8 @@ class SeekerOrchestrator:
 
     def enqueue_job(self, config_path_text: str) -> SeekerJob:
         config = load_run_config(config_path_text)
-        if config.backend.kind != "dstack":
-            raise RuntimeError("seeker enqueue requires backend.kind='dstack'")
+        if config.backend.kind not in ("runpod", "verda"):
+            raise RuntimeError("seeker enqueue requires backend.kind='runpod' or 'verda'")
         if not config.seeker.targets:
             raise RuntimeError("seeker enqueue requires at least one [[seeker.targets]] entry")
         job = self.store.enqueue_job(FrozenRunConfigSnapshot.from_config(config))
@@ -1170,19 +1195,21 @@ class SeekerOrchestrator:
     def claim_next_pending_job(self, now: datetime) -> SeekerJob | None:
         return self.store.claim_next_pending_job(self.worker_id, now, self.lease_seconds)
 
-    def refresh_claimed_job(self, job: SeekerJob, dstack_bin: str, now: datetime) -> None:
-        if not job.submitted_run_name:
+    def refresh_claimed_job(self, job: SeekerJob, now: datetime) -> None:
+        pod_id = job.submitted_run_name
+        if not pod_id:
             self.store.move_to_retry_wait(
                 job,
                 status="failed_to_start",
-                reason="claimed job has no submitted run to refresh",
+                reason="claimed job has no submitted pod_id to refresh",
                 now=now,
             )
             return
-        if not dstack_backend.dstack_has_run(dstack_bin, job.submitted_run_name):
+        poll_status, _exit_code = runpod_backend.poll_job_status(pod_id)
+        if poll_status == "terminated":
             if job.state == SeekerJobState.LAUNCHING.value:
                 job.submit_retries += 1
-                reason = "launch lease expired before dstack exposed the run"
+                reason = "launch lease expired before pod reached running state"
                 self.record_attempt(job, status="failed_to_start", reason=reason)
                 if job.submit_retries >= job.max_submit_retries:
                     self.record_attempt(job, status="cancelled", reason="max_submit_retries exceeded")
@@ -1190,47 +1217,22 @@ class SeekerOrchestrator:
                     return
                 self.store.move_to_retry_wait(job, status="failed_to_start", reason=reason, now=now)
                 return
-            self.record_attempt(job, status="completed", reason="run finished and is no longer visible in dstack ps")
+            self.record_attempt(job, status="completed", reason="pod reached terminated state")
             self.store.mark_completed(
                 job,
                 status=SeekerJobState.COMPLETED.value,
-                reason="run finished and is no longer visible in dstack ps",
+                reason="pod reached terminated state",
                 now=now,
             )
             return
-        run_status, job_status, termination_reason = dstack_backend.dstack_run_status_triplet(
-            dstack_bin, job.submitted_run_name
-        )
-        outcome = classify_finished_run(run_status, job_status, termination_reason)
-        if outcome == "failed_to_start":
-            job.submit_retries += 1
-            self.record_attempt(
-                job, status="failed_to_start", reason=termination_reason or "failed before steady state"
-            )
-            if job.submit_retries >= job.max_submit_retries:
-                self.record_attempt(job, status="cancelled", reason="max_submit_retries exceeded")
-                self.store.mark_cancelled(job, reason="max_submit_retries exceeded", now=now)
-                return
-            self.store.move_to_retry_wait(
-                job,
-                status="failed_to_start",
-                reason=termination_reason or "failed before steady state",
-                now=now,
-            )
+        if poll_status == "running":
+            self.store.touch_submitted_job(job, now, self.lease_seconds)
             return
-        if outcome in {"completed", "cancelled"}:
-            self.record_attempt(job, status=outcome, reason=termination_reason or job_status or run_status)
-            if outcome == "cancelled":
-                self.store.mark_cancelled(job, reason=termination_reason or job_status or run_status, now=now)
-            else:
-                self.store.mark_completed(
-                    job, status=outcome, reason=termination_reason or job_status or run_status, now=now
-                )
-            return
+        # poll_status == "submitted" — still pending/starting
         self.store.touch_submitted_job(job, now, self.lease_seconds)
 
     def probe_targets(
-        self, dstack_bin: str, targets: tuple[SeekerTarget, ...]
+        self, targets: tuple[SeekerTarget, ...]
     ) -> tuple[list[TargetProbeResult], list[SeekerOffer]]:
         if not targets:
             return [], []
@@ -1239,7 +1241,7 @@ class SeekerOrchestrator:
         max_workers = max(1, min(_MAX_TARGET_PROBE_WORKERS, len(targets)))
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="seeker-offer-probe") as executor:
             future_map = {
-                executor.submit(fetch_target_offers, dstack_bin, target): index for index, target in enumerate(targets)
+                executor.submit(fetch_target_offers, target): index for index, target in enumerate(targets)
             }
             for future in as_completed(future_map):
                 index = future_map[future]
@@ -1278,7 +1280,7 @@ class SeekerOrchestrator:
         return choose_targeted_offer(probe_results)
 
     def submit_lease_seconds(self, job: SeekerJob) -> int:
-        # Claim leases must outlive the slowest normal dstack launch path; the
+        # Claim leases must outlive the slowest normal remote launch path; the
         # frozen submit timeout keeps this deterministic even if the source TOML
         # changes after enqueue.
         return max(self.lease_seconds, job.submit_timeout_seconds)
@@ -1388,14 +1390,14 @@ class SeekerOrchestrator:
         if max_offer_age_seconds is not None and offers is not None:
             self.projector.project_offers(max_offer_age_seconds, offers)
 
-    def run_cycle(self, dstack_bin: str) -> None:
+    def run_cycle(self) -> None:
         now = datetime.now(UTC)
         self.store.ensure_schema()
         self.store.requeue_expired_claims(now, self.lease_seconds)
 
         job = self.store.claim_existing_submitted_job(self.worker_id, now, self.lease_seconds)
         if job is not None:
-            self.refresh_claimed_job(job, dstack_bin, now)
+            self.refresh_claimed_job(job, now)
             self.project_status_state(max_offer_age_seconds=None, offers=None)
             return
 
@@ -1404,13 +1406,13 @@ class SeekerOrchestrator:
             self.project_status_state(max_offer_age_seconds=None, offers=None)
             return
 
-        probe_results, snapshot_offers = self.probe_targets(dstack_bin, job.targets)
+        probe_results, snapshot_offers = self.probe_targets(job.targets)
         target, offer = self.select_target_offer(probe_results)
         probe_error = "; ".join(
             f"{result.target.backend}:{result.target.gpu}:{result.error}" for result in probe_results if result.error
         )
         if target is None or offer is None:
-            reason = "no configured target matched a live dstack offer"
+            reason = "no configured target matched a live offer"
             if probe_error:
                 reason = f"{reason}; probe diagnostics: {probe_error}"
             self.store.move_to_retry_wait(job, status="no_match", reason=reason, now=now)
@@ -1484,8 +1486,8 @@ def classify_finished_run(run_status: str, job_status: str, termination_reason: 
     return "active"
 
 
-def run_daemon_cycle(dstack_bin: str) -> None:
-    default_orchestrator().run_cycle(dstack_bin)
+def run_daemon_cycle() -> None:
+    default_orchestrator().run_cycle()
 
 
 def resolve_poll_seconds(queue: SeekerQueue) -> int:
@@ -1504,28 +1506,19 @@ def resolve_poll_seconds(queue: SeekerQueue) -> int:
     return max(1, min(_DEFAULT_IDLE_POLL_SECONDS, int((next_due - now).total_seconds())))
 
 
-def ensure_daemon_runtime(dstack_bin: str) -> None:
-    bash_script(repo_path(*_SETUP_CONFIG_SCRIPT))
-    remote = RemoteConfig()
-    dstack_backend.ensure_dstack_server(
-        dstack_bin,
-        health_url=remote.dstack_server_health_url,
-        health_timeout_seconds=remote.health_timeout_seconds,
-        start_timeout_seconds=remote.dstack_server_start_timeout_seconds,
-        dry_run=False,
-    )
+def ensure_daemon_runtime() -> None:
+    read_required_secret("runpod_api_key")
     default_queue_store()
 
 
 def daemon() -> None:
-    dstack_bin = dstack_backend.find_dstack_bin()
-    ensure_daemon_runtime(dstack_bin)
+    ensure_daemon_runtime()
     orchestrator = default_orchestrator()
     log.info("seeker daemon started worker_id=%s", orchestrator.worker_id)
     try:
         while True:
             try:
-                orchestrator.run_cycle(dstack_bin)
+                orchestrator.run_cycle()
             except Exception as exc:  # pragma: no cover - daemon resilience
                 log.error("seeker daemon cycle failed: %s", exc, exc_info=True)
             time.sleep(orchestrator.recommended_sleep_seconds())

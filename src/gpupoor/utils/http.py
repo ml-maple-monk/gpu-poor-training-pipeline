@@ -10,9 +10,7 @@ import urllib.request
 def http_ok(url: str, *, timeout_seconds: int = 5) -> bool:
     """Return True if a GET to *url* returns HTTP 200 within *timeout_seconds*.
 
-    Any network error, HTTP error, or timeout is treated as "not OK". Moved
-    verbatim from gpupoor.backends.dstack so every caller that only needs a
-    boolean health signal shares one implementation.
+    Any network error, HTTP error, or timeout is treated as "not OK".
     """
     try:
         with urllib.request.urlopen(url, timeout=timeout_seconds) as response:

@@ -9,7 +9,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from gpupoor import connector as connector_service
-from gpupoor.backends import dstack as dstack_backend
+from gpupoor.backends import runpod as runpod_backend
+from gpupoor.backends import verda as verda_backend
 from gpupoor.backends.local import run_remote_wrapper as run_local_emulator
 from gpupoor.config import (
     RemoteConfig,
@@ -20,7 +21,6 @@ from gpupoor.config import (
     load_run_config,
     normalize_backend_name,
     require_remote_settings,
-    validate_dstack_image_base,
 )
 from gpupoor.services import mlflow as mlflow_service
 from gpupoor.services import portable_mlflow
@@ -33,7 +33,6 @@ from gpupoor.utils.logging import get_logger
 # ---------------------------------------------------------------------------
 DEPLOY_TARGET_REMOTE = "remote"
 DEPLOY_TARGET_LOCAL = "local-debug"
-BACKEND_DSTACK = "dstack"
 BACKEND_LOCAL = "local"
 LANE_REMOTE = "remote"
 LANE_LOCAL_DEBUG = "local-debug"
@@ -96,8 +95,6 @@ class ConnectionBundle:
         }
         env.update(self.artifact_runtime_env)
         if self.artifact_transport_mode == ARTIFACT_MODE_DIRECT:
-            # dstack validates listed env names at apply time, so keep the
-            # optional session token present even for long-lived R2 keys.
             env.setdefault("AWS_SESSION_TOKEN", "")
         return env
 
@@ -289,8 +286,8 @@ class LaunchOrchestrator:
         if request.deployment_target != DEPLOY_TARGET_REMOTE:
             raise RuntimeError("deploy_remote_request only accepts deployment_target='remote'")
         config = _load_frozen_config(request)
-        if config.backend.kind != BACKEND_DSTACK:
-            raise RuntimeError("remote deployment requires backend.kind='dstack'")
+        if config.backend.kind not in {"runpod", "verda"}:
+            raise RuntimeError(f"remote deployment requires backend.kind='runpod' or 'verda', got '{config.backend.kind}'")
         launch_config = apply_remote_request(config, request)
         validate_remote_registry_auth(launch_config.remote)
         connector_request = ConnectionProfileRequest(
@@ -299,6 +296,7 @@ class LaunchOrchestrator:
             job_id=request.job_id,
             artifact_upload_requested=launch_config.mlflow.artifact_upload,
         )
+        backend = runpod_backend if launch_config.backend.kind == "runpod" else verda_backend
         if dry_run:
             bundle = self._connection_bundle_for_request(
                 connector_request,
@@ -306,7 +304,7 @@ class LaunchOrchestrator:
                 ensure_ready=False,
             )
             self._report_dry_run_connector_verdict(bundle)
-            dstack_backend.launch_remote(launch_config, skip_build=skip_build, dry_run=True)
+            backend.launch_remote(launch_config, skip_build=skip_build, dry_run=True)
             return
         bundle = self._connection_bundle_for_request(
             connector_request,
@@ -317,7 +315,7 @@ class LaunchOrchestrator:
             raise RuntimeError(f"connector health is {bundle.health_verdict}; refusing remote launch")
         _enforce_remote_artifact_guardrails(launch_config, bundle)
         launch_config = _rewrite_legacy_experiment_name(launch_config, bundle)
-        dstack_backend.launch_remote(
+        backend.launch_remote(
             launch_config,
             skip_build=skip_build,
             dry_run=False,
@@ -332,8 +330,8 @@ class LaunchOrchestrator:
         dry_run: bool = False,
     ) -> None:
         config = load_run_config(config_path_text)
-        if config.backend.kind != BACKEND_DSTACK:
-            raise RuntimeError("gpupoor deploy remote requires backend.kind='dstack'")
+        if config.backend.kind not in {"runpod", "verda"}:
+            raise RuntimeError(f"gpupoor deploy remote requires backend.kind='runpod' or 'verda', got '{config.backend.kind}'")
         self._warn_manual_target_truncation(config)
         request = DeploymentRequest(
             config_path=str(config.source),
@@ -350,8 +348,8 @@ class LaunchOrchestrator:
 
     def deploy_local_emulator(self, config_path_text: str) -> None:
         config = load_run_config(config_path_text)
-        if config.backend.kind not in {BACKEND_DSTACK, BACKEND_LOCAL}:
-            raise RuntimeError("gpupoor deploy local-emulator requires backend.kind='dstack' or 'local'")
+        if config.backend.kind not in {"runpod", "verda", BACKEND_LOCAL}:
+            raise RuntimeError(f"gpupoor deploy local-emulator requires backend.kind='runpod', 'verda', or 'local', got '{config.backend.kind}'")
         bundle = self._connection_bundle_for_request(
             ConnectionProfileRequest(
                 lane=LANE_REMOTE,
@@ -404,7 +402,6 @@ def default_launch_orchestrator() -> LaunchOrchestrator:
 def validate_remote_registry_auth(remote: RemoteConfig) -> None:
     settings = load_remote_settings(remote)
     image_base = settings["VCR_IMAGE_BASE"]
-    validate_dstack_image_base(image_base)
     if not image_base_requires_registry_auth(image_base):
         return
     registry = settings.get("VCR_LOGIN_REGISTRY", "").strip()

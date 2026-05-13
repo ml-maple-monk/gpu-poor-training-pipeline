@@ -5,8 +5,6 @@ from __future__ import annotations
 import base64
 import os
 import re
-import shutil
-import subprocess
 
 import tomli_w
 
@@ -137,11 +135,9 @@ DEFAULT_SMOKE_PRUNE_VOLUMES = _DEFAULTS["smoke"]["prune_volumes"]
 
 # Remote defaults (from defaults.toml)
 DEFAULT_VCR_IMAGE_BASE = _DEFAULTS["remote"]["vcr_image_base"]
-DEFAULT_DSTACK_SERVER_HEALTH_URL = _DEFAULTS["remote"]["dstack_server_health_url"]
 DEFAULT_MLFLOW_HEALTH_URL = _DEFAULTS["remote"]["mlflow_health_url"]
 DEFAULT_REMOTE_ENV_FILE = _DEFAULTS["remote"]["env_file"]
 DEFAULT_REMOTE_HEALTH_TIMEOUT_SECONDS = _DEFAULTS["remote"]["health_timeout_seconds"]
-DEFAULT_REMOTE_DSTACK_SERVER_START_TIMEOUT_SECONDS = _DEFAULTS["remote"]["dstack_server_start_timeout_seconds"]
 DEFAULT_REMOTE_RUN_START_TIMEOUT_SECONDS = _DEFAULTS["remote"]["run_start_timeout_seconds"]
 
 # Doctor defaults (from defaults.toml)
@@ -157,22 +153,6 @@ DEFAULT_SEEKER_MAX_SUBMIT_RETRIES = _DEFAULTS["seeker"]["max_submit_retries"]
 DEFAULT_CONTAINER_DATA_ROOT = _DEFAULTS["container"]["data_root"]
 DEFAULT_CONTAINER_RUNTIME_DATASET_PATH = _DEFAULTS["container"]["runtime_dataset_path"]
 DEFAULT_CONTAINER_RUNTIME_OUTPUT_DIR = _DEFAULTS["container"]["runtime_output_dir"]
-
-# Dstack operational defaults (from defaults.toml)
-DEFAULT_DSTACK_RENDERED_TASK_PATH = _DEFAULTS["dstack"]["rendered_task_path"]
-DEFAULT_DSTACK_TUNNEL_JOIN_TIMEOUT = _DEFAULTS["dstack"]["tunnel_join_timeout_seconds"]
-DEFAULT_DSTACK_MIN_RESTART_WAIT = _DEFAULTS["dstack"]["min_restart_wait_seconds"]
-DEFAULT_DSTACK_HEALTH_RECHECK_TIMEOUT = _DEFAULTS["dstack"]["health_recheck_timeout_seconds"]
-DEFAULT_DSTACK_TASK_SIGTERM_GRACE = _DEFAULTS["dstack"]["task_sigterm_grace_seconds"]
-DEFAULT_DSTACK_TASK_DURATION_BUFFER_MINUTES = _DEFAULTS["dstack"]["task_duration_buffer_minutes"]
-DEFAULT_DSTACK_OFFER_TIMEOUT = _DEFAULTS["dstack"]["offer_timeout_seconds"]
-DEFAULT_DSTACK_OFFER_QUERY_TIMEOUT = _DEFAULTS["dstack"]["offer_query_timeout_seconds"]
-DEFAULT_DSTACK_PROVIDER_MAX_OFFERS = _DEFAULTS["dstack"]["provider_max_offers"]
-DEFAULT_DSTACK_TARGETED_MAX_OFFERS = _DEFAULTS["dstack"]["targeted_max_offers"]
-DEFAULT_DSTACK_RUN_START_POLL_INTERVAL = _DEFAULTS["dstack"]["run_start_poll_interval_seconds"]
-DEFAULT_DSTACK_APPLY_TIMEOUT_BUFFER = _DEFAULTS["dstack"]["apply_timeout_buffer_seconds"]
-DEFAULT_DSTACK_FINAL_TUNNEL_JOIN_TIMEOUT = _DEFAULTS["dstack"]["final_tunnel_join_timeout_seconds"]
-DEFAULT_DSTACK_DRY_RUN_MLFLOW_URL = _DEFAULTS["dstack"]["dry_run_mlflow_url"]
 
 # Remote additional defaults (from defaults.toml)
 DEFAULT_REMOTE_IMAGE_TAG = _DEFAULTS["remote"]["remote_image_tag"]
@@ -194,17 +174,8 @@ DEFAULT_EMULATOR_LOG_TAIL_LINES = _DEFAULTS["emulator"]["log_tail_lines"]
 _BACKEND_ALIASES = {
     "runpod": "runpod",
     "runpodio": "runpod",
-    "vast": "vastai",
-    "vastai": "vastai",
     "verda": "verda",
 }
-
-# dstack's resource-name regex; config.name is used as the run/TASK_NAME
-# and any violation fails late at `dstack apply` time, after image build
-# and tunnel bring-up. Mirror the regex here so load_run_config rejects
-# bad names up front.
-DSTACK_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,40}$")
-
 
 class ConfigError(ValueError):
     """Raised for invalid config files."""
@@ -219,18 +190,6 @@ def explicit_image_registry(image_base: str) -> str | None:
     if "." in first_component or ":" in first_component or first_component == "localhost":
         return first_component
     return None
-
-
-def validate_dstack_image_base(image_base: str) -> None:
-    """Reject image names known to break dstack's python-dxf manifest lookup."""
-    registry = explicit_image_registry(image_base)
-    if registry == "docker.io":
-        raise ConfigError(
-            "remote.vcr_image_base must not start with docker.io/. "
-            "dstack 0.20.x resolves image manifests through python-dxf, and docker.io redirects "
-            "to Docker's website instead of the registry API. Use an unprefixed Docker Hub image "
-            "such as 'alextay96/gpupoor' or a registry API host such as 'index.docker.io'."
-        )
 
 
 def image_base_requires_registry_auth(image_base: str) -> bool:
@@ -378,12 +337,9 @@ class RemoteConfig:
     env_file: str = DEFAULT_REMOTE_ENV_FILE
     vcr_image_base: str = DEFAULT_VCR_IMAGE_BASE
     vcr_login_registry: str | None = None
-    dstack_server_health_url: str = DEFAULT_DSTACK_SERVER_HEALTH_URL
     mlflow_health_url: str = DEFAULT_MLFLOW_HEALTH_URL
     health_timeout_seconds: int = DEFAULT_REMOTE_HEALTH_TIMEOUT_SECONDS
-    dstack_server_start_timeout_seconds: int = DEFAULT_REMOTE_DSTACK_SERVER_START_TIMEOUT_SECONDS
     run_start_timeout_seconds: int = DEFAULT_REMOTE_RUN_START_TIMEOUT_SECONDS
-    # dstack task overrides; unset fields fall back to render-pretrain-task.sh defaults.
     backends: tuple[str, ...] = ()
     regions: tuple[str, ...] = ()
     gpu_names: tuple[str, ...] = ()
@@ -396,32 +352,6 @@ class RemoteConfig:
     r2_tokenizer_uri: str = DEFAULT_R2_TOKENIZER_URI
     r2_tokenizer_dir: str = DEFAULT_R2_TOKENIZER_DIR
 
-    def to_env(self) -> dict[str, str]:
-        """Return TASK_* env vars for render-pretrain-task.sh.
-
-        Only fields the user set materialize as entries; unset fields
-        stay out of the dict so the shell defaults in
-        render-pretrain-task.sh keep their authority.
-        """
-        env: dict[str, str] = {}
-        if self.backends:
-            env["TASK_BACKENDS"] = "[" + ", ".join(self.backends) + "]"
-        if self.regions:
-            env["TASK_REGIONS"] = "[" + ", ".join(self.regions) + "]"
-        if self.gpu_names:
-            env["TASK_GPU_NAMES"] = "[" + ", ".join(self.gpu_names) + "]"
-        if self.gpu_count is not None:
-            env["TASK_GPU_COUNT"] = str(self.gpu_count)
-        if self.spot_policy:
-            env["TASK_SPOT_POLICY"] = self.spot_policy
-        if self.max_price is not None:
-            env["TASK_MAX_PRICE"] = str(self.max_price)
-        env["R2_TOKENIZED_DATASET_URI"] = self.r2_tokenized_dataset_uri
-        env["R2_TOKENIZED_DATASET_MAX_FILES"] = str(self.r2_tokenized_dataset_max_files)
-        env["R2_TOKENIZED_DATASET_DIR"] = self.r2_tokenized_dataset_dir
-        env["R2_TOKENIZER_URI"] = self.r2_tokenizer_uri
-        env["R2_TOKENIZER_DIR"] = self.r2_tokenizer_dir
-        return env
 
 
 @dataclass(slots=True)
@@ -656,33 +586,6 @@ def require_remote_settings(settings: dict[str, str]) -> None:
         )
 
 
-def find_dstack_bin() -> str:
-    candidates = [
-        os.environ.get("DSTACK_BIN"),
-        str(Path.home() / ".dstack-cli-venv" / "bin" / "dstack"),
-        shutil.which("dstack"),
-    ]
-    for candidate in candidates:
-        if not candidate:
-            continue
-        if not os.access(candidate, os.X_OK):
-            continue
-        try:
-            result = subprocess.run(
-                [candidate, "--version"],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                # A hung `dstack --version` must not freeze CLI startup; skip
-                # and try the next candidate on timeout.
-                timeout=5,
-            )
-        except subprocess.TimeoutExpired:
-            continue
-        if result.returncode == 0:
-            return candidate
-    raise RuntimeError("No working dstack CLI found")
-
 
 _KNOWN_TOP_LEVEL = {
     "name",
@@ -699,7 +602,6 @@ _KNOWN_TOP_LEVEL = {
     "gpu_profiles",
     "dataset",
     "container",
-    "dstack",
     "emulator",
 }
 _KNOWN_RECIPE = {
@@ -814,10 +716,8 @@ _KNOWN_REMOTE = {
     "env_file",
     "vcr_image_base",
     "vcr_login_registry",
-    "dstack_server_health_url",
     "mlflow_health_url",
     "health_timeout_seconds",
-    "dstack_server_start_timeout_seconds",
     "run_start_timeout_seconds",
     "backends",
     "regions",
@@ -875,22 +775,6 @@ _KNOWN_DATASET = {
     "system_prompts",
 }
 _KNOWN_CONTAINER = {"data_root", "runtime_dataset_path", "runtime_output_dir"}
-_KNOWN_DSTACK = {
-    "rendered_task_path",
-    "tunnel_join_timeout_seconds",
-    "min_restart_wait_seconds",
-    "health_recheck_timeout_seconds",
-    "task_sigterm_grace_seconds",
-    "task_duration_buffer_minutes",
-    "offer_timeout_seconds",
-    "offer_query_timeout_seconds",
-    "provider_max_offers",
-    "targeted_max_offers",
-    "run_start_poll_interval_seconds",
-    "apply_timeout_buffer_seconds",
-    "final_tunnel_join_timeout_seconds",
-    "dry_run_mlflow_url",
-}
 _KNOWN_EMULATOR = {"health_port", "health_timeout_seconds", "per_check_health_timeout_seconds", "log_tail_lines"}
 _KNOWN_GPU_PROFILE = {"pattern", "canonical_name", "training_tflops", "fp8_tflops"}
 
@@ -924,13 +808,6 @@ def load_run_config(path: str | Path) -> RunConfig:
     _reject_unknown(training_data, _KNOWN_TRAINING, "training")
     backend_data = _require_table(data, "backend")
     _reject_unknown(backend_data, _KNOWN_BACKEND, "backend")
-    # dstack rejects resource names that don't match its regex; local backend
-    # has no such constraint, so we only gate the dstack path here.
-    if backend_data.get("kind") == "dstack" and not DSTACK_NAME_RE.match(name):
-        raise ConfigError(
-            f"name {name!r} is invalid for backend.kind='dstack'; must match "
-            f"{DSTACK_NAME_RE.pattern} (lowercase, hyphens only, no underscores)"
-        )
     mlflow_data = _require_table(data, "mlflow")
     _reject_unknown(mlflow_data, _KNOWN_MLFLOW, "mlflow")
     doctor_data = _require_table(data, "doctor")
@@ -966,10 +843,6 @@ def load_run_config(path: str | Path) -> RunConfig:
     container_data = _optional_table(data, "container")
     if container_data:
         _reject_unknown(container_data, _KNOWN_CONTAINER, "container")
-
-    dstack_data = _optional_table(data, "dstack")
-    if dstack_data:
-        _reject_unknown(dstack_data, _KNOWN_DSTACK, "dstack")
 
     emulator_data = _optional_table(data, "emulator")
     if emulator_data:
@@ -1378,21 +1251,11 @@ def load_run_config(path: str | Path) -> RunConfig:
         env_file=_require_str(remote_data, "env_file", default=DEFAULT_REMOTE_ENV_FILE),
         vcr_image_base=_require_str(remote_data, "vcr_image_base", default=DEFAULT_VCR_IMAGE_BASE),
         vcr_login_registry=_optional_str(remote_data, "vcr_login_registry"),
-        dstack_server_health_url=_require_str(
-            remote_data,
-            "dstack_server_health_url",
-            default=DEFAULT_DSTACK_SERVER_HEALTH_URL,
-        ),
         mlflow_health_url=_require_str(remote_data, "mlflow_health_url", default=DEFAULT_MLFLOW_HEALTH_URL),
         health_timeout_seconds=_require_int(
             remote_data,
             "health_timeout_seconds",
             default=DEFAULT_REMOTE_HEALTH_TIMEOUT_SECONDS,
-        ),
-        dstack_server_start_timeout_seconds=_require_int(
-            remote_data,
-            "dstack_server_start_timeout_seconds",
-            default=DEFAULT_REMOTE_DSTACK_SERVER_START_TIMEOUT_SECONDS,
         ),
         run_start_timeout_seconds=_require_int(
             remote_data,
@@ -1423,8 +1286,6 @@ def load_run_config(path: str | Path) -> RunConfig:
         r2_tokenizer_uri=_require_str(remote_data, "r2_tokenizer_uri", default=DEFAULT_R2_TOKENIZER_URI),
         r2_tokenizer_dir=_require_str(remote_data, "r2_tokenizer_dir", default=DEFAULT_R2_TOKENIZER_DIR),
     )
-    if backend.kind == "dstack":
-        validate_dstack_image_base(remote.vcr_image_base)
     targets_raw = seeker_data.get("targets", [])
     if not isinstance(targets_raw, list):
         raise ConfigError("seeker.targets must be an array of tables when provided")
